@@ -10,10 +10,12 @@ static HalGpioExtiCallback s_exti_callbacks[16] = {0};
 void hal_gpio_init(void)
 {
     /* Keep the 3V3 rail on. !3V3_EN! is active-LOW — CubeMX's own GPIO init
-     * defaults it HIGH (rail off) as a safe boot state; drive it LOW here. */
+     * defaults it HIGH (rail off) as a safe boot state; drive it LOW here.
+     * (Also asserted pre-HAL_Init() in main.c via raw LL calls — this is a
+     * defensive re-assertion, not the first time the rail comes up.) */
     LL_GPIO_ResetOutputPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN);
 
-    /* 5V rail: the display (and, later, buzzer/temp sensors) needs this.
+    /* 5V rail: the display, buzzer, and both temp sensors need this.
      * No power-sequencing module exists yet — asserted unconditionally at
      * boot alongside 3V3 as a stopgap, not a real reference-counted design. */
     LL_GPIO_SetOutputPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN);
@@ -32,6 +34,15 @@ void hal_gpio_init(void)
     /* LEDs off */
     LL_GPIO_ResetOutputPin(LED_PWR_PORT, LED_PWR_PIN);
     LL_GPIO_ResetOutputPin(LED_STS_PORT, LED_STS_PIN);
+
+    /* VBUS_SENSE (PA2) is configured as SYS_WKUP4 in CubeMX, which gets no
+     * MX_GPIO_Init() call — the pin is left in POR-default Analog mode
+     * (input buffer disabled) since Standby wake isn't wired up yet (no
+     * HAL_PWR_EnableWakeUpPin() call exists). Reconfigure it as a plain
+     * digital input here so hal_gpio_get() reads a real value in Run mode;
+     * this doesn't conflict with its future use as a wake source. */
+    LL_GPIO_SetPinMode(VBUS_SENSE_PORT, VBUS_SENSE_PIN, LL_GPIO_MODE_INPUT);
+    LL_GPIO_SetPinPull(VBUS_SENSE_PORT, VBUS_SENSE_PIN, LL_GPIO_PULL_NO);
 }
 
 void hal_gpio_set(GPIO_TypeDef *port, uint16_t pin, bool state)

@@ -33,9 +33,17 @@
 #include "hal_systick.h"
 #include "hal_spi.h"
 #include "hal_tim.h"
+#include "hal_i2c.h"
+#include "hal_adc.h"
+#include "drv_lm35.h"
+#include "drv_24lc256.h"
+#include "svc_storage.h"
+#include "svc_battery.h"
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
+#include "stm32g0xx_ll_gpio.h"
+#include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -78,7 +86,22 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-
+  /* !3V3_EN! (PC6) must be LOW before HAL_Init() touches peripherals — REV B
+   * inverted this signal's polarity vs. the old board's active-high LDO_EN
+   * (PC0): !3V3_EN! is active LOW (Low = on, High = off). On reset the MCU
+   * runs from VBAT directly (LP5907 is gated by this pin) — assert it ASAP
+   * so the 3.3 V rail comes up before SysTick needs it. We use LL inline
+   * functions here because nothing else has been initialised yet. */
+  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOC);
+  LL_GPIO_SetPinMode(GPIOC, LL_GPIO_PIN_6, LL_GPIO_MODE_OUTPUT);
+  LL_GPIO_SetPinSpeed(GPIOC, LL_GPIO_PIN_6, LL_GPIO_SPEED_FREQ_LOW);
+  LL_GPIO_SetPinOutputType(GPIOC, LL_GPIO_PIN_6, LL_GPIO_OUTPUT_PUSHPULL);
+  LL_GPIO_SetPinPull(GPIOC, LL_GPIO_PIN_6, LL_GPIO_PULL_NO);
+  LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_6);
+  /* ~5 ms at default 16 MHz HSI for LDO to stabilise. The loop runs at
+   * a few cycles per iteration; 80,000 is conservative. This is HSI (always
+   * ~16 MHz), not HSE — unaffected by REV B's HSE 8 MHz crystal. */
+  for (volatile uint32_t i = 0; i < 80000U; ++i) { __asm__("nop"); }
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -115,10 +138,23 @@ int main(void)
   hal_gpio_init();
   hal_systick_init();
   hal_spi_init(HAL_SPI_DISPLAY);
+  hal_i2c_init(HAL_I2C_MAIN);
+  hal_adc_init();
   hal_tim_init();
+
+  /* Storage must come before scheduler init — it populates
+   * g_device_settings (and g_calibration) which the scheduler reads
+   * for its task periods. */
+  svc_storage_init();
+  svc_battery_init();
+  drv_lm35_init();
+  drv_24lc256_init();          /* idempotent — svc_storage_init already calls this */
+
   app_scheduler_init();
   app_leds_init();
   app_display_init();
+
+  hal_adc_start();             /* kick off the first ADC scan */
   /* USER CODE END 2 */
 
   /* Infinite loop */

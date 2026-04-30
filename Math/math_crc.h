@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
-uint16_t math_crc16(const uint8_t *data, uint32_t len);
+/* CRC16-CCITT (poly 0x1021, init 0xFFFF, no reflection, no XOR-out) */
+uint16_t math_crc16(const uint8_t *data, uint16_t len);
 
 #endif /* MATH_CRC_H */

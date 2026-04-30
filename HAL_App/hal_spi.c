@@ -11,7 +11,12 @@ static HalSpiDmaCallback  s_cb[2]     = { 0, 0 };
 void hal_spi_init(HalSpiInstance instance)
 {
     if (instance == HAL_SPI_DISPLAY) {
-        /* hspi2 already initialised by MX_SPI2_Init() */
+        /* hspi2 already initialised by MX_SPI2_Init(). Display moved from
+         * SPI1 to SPI2 in the REV B pinout (SPI1 is now the external ADC
+         * front-end bus). SPI2's NSS is SPI_NSS_SOFT (see
+         * hal_spi_cs_assert/deassert below): the display's active-HIGH CS
+         * can't use this SPI IP's hardware NSS, fixed active-low with no
+         * polarity-invert bit. */
         s_busy[HAL_SPI_DISPLAY] = false;
         s_cb[HAL_SPI_DISPLAY]   = 0;
     }
