@@ -1,7 +1,11 @@
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
+#include "drv_lm35.h"
+#include "hal_adc.h"
 #include "hal_systick.h"
+#include "svc_battery.h"
+#include "svc_storage.h"
 #include "config.h"
 #include "system_state.h"
 #include <stddef.h>
@@ -14,22 +18,73 @@ typedef struct {
     uint32_t last_run_ms;
 } SchedulerEntry;
 
+/* ---- task wrappers ---- */
+
+static void task_adc(void)
+{
+    /* Restart the scan as soon as the previous one is consumed. The
+     * three downstream readers (drv_lm35, svc_battery, optional VREFINT
+     * cross-check) run on their own slower periods and just sample the
+     * latest hal_adc results. */
+    if (hal_adc_is_ready()) {
+        hal_adc_start();
+    }
+}
+
+static void task_temperature(void)
+{
+    Lm35Data data;
+    if (drv_lm35_get_result(&data) == DRV_OK) {
+        g_system_state.temperature_cdeg = data.temp_cdeg;
+    }
+    /* drv_lm35_start_read just calls hal_adc_start; safe to call even if
+     * a scan is already running — hal_adc_start no-ops in that case. */
+    (void)drv_lm35_start_read();
+}
+
+static void task_battery(void)
+{
+    svc_battery_update();
+}
+
+static void task_storage(void)
+{
+    svc_storage_update();
+}
+
+static void task_display(void)
+{
+    app_display_update();
+}
+
+static void task_leds(void)
+{
+    app_leds_task();
+}
+
+/* ---- task table ---- */
+
 static SchedulerEntry s_tasks[] = {
-    { app_display_update, DEFAULT_TASK_DISPLAY_MS, 0 },
-    { app_leds_task,      DEFAULT_TASK_LED_MS,     0 },
+    { task_adc,         0,                   0 },
+    { task_temperature, 0,                   0 },
+    { task_battery,     0,                   0 },
+    { task_storage,     0,                   0 },
+    { task_display,     0,                   0 },
+    { task_leds,        DEFAULT_TASK_LED_MS, 0 },
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 
 void app_scheduler_init(void)
 {
-    g_device_settings.task_display_ms     = DEFAULT_TASK_DISPLAY_MS;
-    g_device_settings.task_sensors_ms     = DEFAULT_TASK_SENSORS_MS;
-    g_device_settings.task_processing_ms  = DEFAULT_TASK_PROCESSING_MS;
-    g_device_settings.task_ble_ms         = DEFAULT_TASK_BLE_MS;
-    g_device_settings.task_usb_ms         = DEFAULT_TASK_USB_MS;
-    g_device_settings.task_battery_ms     = DEFAULT_TASK_BATTERY_MS;
-    g_device_settings.task_temperature_ms = DEFAULT_TASK_TEMPERATURE_MS;
-    g_device_settings.stream_interval_ms  = DEFAULT_STREAM_INTERVAL_MS;
+    /* Periods are loaded from g_device_settings, which svc_storage_init
+     * has already populated (or seeded with defaults from config.h). */
+    s_tasks[0].period_ms = g_device_settings.task_sensors_ms;
+    s_tasks[1].period_ms = g_device_settings.task_temperature_ms;
+    s_tasks[2].period_ms = g_device_settings.task_battery_ms;
+    s_tasks[3].period_ms = SYSTICK_PERIOD_MS;     /* every tick */
+    s_tasks[4].period_ms = g_device_settings.task_display_ms;
+    /* s_tasks[5] (LEDs) period is the fixed literal set in the table above —
+     * not user/BLE-configurable like the others. */
 
     uint32_t now = hal_systick_get_ms();
     for (size_t i = 0; i < TASK_COUNT; ++i) {

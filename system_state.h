@@ -50,7 +50,24 @@ typedef struct {
     bool     calibration_valid;
 } SystemState;
 
+typedef struct {
+    /* Scale constants — set at manufacturing */
+    int32_t  pcap04_scale_af_per_umpm;
+    int32_t  scl3300_scale_cdeg_per_umpm;
+
+    /* Zero offsets — set by operator */
+    int32_t  pcap04_zero_af;
+    int16_t  scl3300_x_zero_cdeg;
+    int16_t  scl3300_y_zero_cdeg;
+    int16_t  scl3300_z_zero_cdeg;
+
+    uint32_t calibration_timestamp;
+    bool     scale_valid;
+    bool     zero_valid;
+} CalibrationData;
+
 extern SystemState    g_system_state;
 extern DeviceSettings g_device_settings;
+extern CalibrationData g_calibration;
 
 #endif /* SYSTEM_STATE_H */
