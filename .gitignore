@@ -1,0 +1,41 @@
+# Build output
+build/
+build-*/
+out/
+Debug/
+Release/
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+
+# Object/binary files
+*.o
+*.d
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.lst
+
+# IDE / editor
+.vscode/ipch/
+.vscode/.cortex-debug.*.json
+.settings/
+.idea/
+*.swp
+*~
+
+# Internal project notes (not published)
+.workpackages/
+CLAUDE.md
+firmware_architecture.md
+WP*_prompt.md
+
+# CubeMX backups
+*.ioc.bak
+.mxproject.bak
