@@ -69,4 +69,6 @@ CubeMX-generated code lives in `Core/` and `Drivers/`. Application code never go
 
 ## License
 
-TBD.
+GNU General Public License v3.0 — see [LICENSE](LICENSE).
+
+Companion desktop application: [soldernerd/LevelApp](https://github.com/soldernerd/LevelApp) (also GPL v3).
