@@ -2,10 +2,12 @@
 #include "app_display.h"
 #include "app_leds.h"
 #include "drv_tmp236.h"
+#include "drv_buzzer.h"
 #include "hal_adc.h"
 #include "hal_systick.h"
 #include "svc_battery.h"
 #include "svc_storage.h"
+#include "svc_input.h"
 #include "config.h"
 #include "system_state.h"
 #include <stddef.h>
@@ -52,6 +54,20 @@ static void task_storage(void)
     svc_storage_update();
 }
 
+static void task_input(void)
+{
+    /* Encoder turns are EXTI-driven (see Drivers_App/drv_encoder.c) and
+     * need no polling themselves, but button state (ENC_1SW/ENC_2SW are
+     * not EXTI-capable on this pinout — see pin_config.h) and the
+     * "did anything change since last tick" edge/beep logic do. */
+    svc_input_update();
+}
+
+static void task_buzzer(void)
+{
+    drv_buzzer_update();
+}
+
 static void task_display(void)
 {
     app_display_update();
@@ -69,6 +85,8 @@ static SchedulerEntry s_tasks[] = {
     { task_temperature, 0,                   0 },
     { task_battery,     0,                   0 },
     { task_storage,     0,                   0 },
+    { task_input,       0,                   0 },
+    { task_buzzer,      0,                   0 },
     { task_display,     0,                   0 },
     { task_leds,        DEFAULT_TASK_LED_MS, 0 },
 };
@@ -82,8 +100,10 @@ void app_scheduler_init(void)
     s_tasks[1].period_ms = g_device_settings.task_temperature_ms;
     s_tasks[2].period_ms = g_device_settings.task_battery_ms;
     s_tasks[3].period_ms = SYSTICK_PERIOD_MS;     /* every tick */
-    s_tasks[4].period_ms = g_device_settings.task_display_ms;
-    /* s_tasks[5] (LEDs) period is the fixed literal set in the table above —
+    s_tasks[4].period_ms = SYSTICK_PERIOD_MS;     /* input — every tick */
+    s_tasks[5].period_ms = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
+    s_tasks[6].period_ms = g_device_settings.task_display_ms;
+    /* s_tasks[7] (LEDs) period is the fixed literal set in the table above —
      * not user/BLE-configurable like the others. */
 
     uint32_t now = hal_systick_get_ms();

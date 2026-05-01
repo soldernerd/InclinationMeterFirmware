@@ -39,11 +39,14 @@
 #include "system_state.h"
 #include "drv_tmp236.h"
 #include "drv_24lc256.h"
+#include "drv_encoder.h"
+#include "drv_buzzer.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
+#include "svc_input.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
@@ -160,6 +163,10 @@ int main(void)
   svc_battery_init();
   drv_tmp236_init();
   drv_24lc256_init();          /* idempotent — svc_storage_init already calls this */
+  drv_buzzer_init();
+  drv_encoder_init(ENCODER_1);
+  drv_encoder_init(ENCODER_2);
+  svc_input_init();
 
   app_scheduler_init();
   app_leds_init();

@@ -75,8 +75,27 @@ bool hal_gpio_get(GPIO_TypeDef *port, uint16_t pin)
 
 void hal_gpio_exti_register(uint8_t pin, HalGpioExtiCallback cb)
 {
-    /* WP1 stub — EXTI sources hooked up in WPx */
     if (pin < 16U) {
         s_exti_callbacks[pin] = cb;
     }
 }
+
+/* HAL_GPIO_EXTI_IRQHandler (called from CubeMX-generated EXTIn_m_IRQHandler
+ * in stm32g0xx_it.c) dispatches to these weak callbacks based on which
+ * edge fired. We register the same callback for both — the encoder driver
+ * reads pin state inside its own callback to determine direction. */
+static void exti_dispatch(uint16_t pin_mask)
+{
+    /* Single bit set per HAL invocation — convert mask to pin number. */
+    for (uint8_t i = 0; i < 16U; ++i) {
+        if (pin_mask & (uint16_t)(1U << i)) {
+            if (s_exti_callbacks[i]) {
+                s_exti_callbacks[i]();
+            }
+            return;
+        }
+    }
+}
+
+void HAL_GPIO_EXTI_Rising_Callback(uint16_t pin)  { exti_dispatch(pin); }
+void HAL_GPIO_EXTI_Falling_Callback(uint16_t pin) { exti_dispatch(pin); }
