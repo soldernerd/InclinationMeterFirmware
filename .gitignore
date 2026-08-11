@@ -39,3 +39,6 @@ WP*_prompt.md
 # CubeMX backups
 *.ioc.bak
 .mxproject.bak
+
+# Claude Code local tooling (worktrees, etc.) - not project source
+.claude/
