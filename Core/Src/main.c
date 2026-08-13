@@ -109,6 +109,7 @@ int main(void)
   MX_USART3_UART_Init();
   MX_USART6_UART_Init();
   MX_USB_DRD_FS_PCD_Init();
+  MX_I2C3_Init();
   /* USER CODE BEGIN 2 */
   hal_gpio_init();
   hal_systick_init();

@@ -439,14 +439,12 @@ flagging back here before generating code.
       `PB11=ADC1_IN15`, `PB12=ADC1_IN16` — all three show real ADC1 channel assignments, not
       just selectable "Analog" mode. The class of mistake that caused the prototype board
       rework does not recur here.
-- [~] **SPI chip-select policy — see §6 for what CubeMX actually did, one open conflict.**
-      SPI3/DAC fell back to software GPIO CS as anticipated (`PC13` can't do `SPI3_NSS`).
-      SPI1 unaffected. **SPI2/display is not resolved as planned** — the generated project
-      has `PD0` set to hardware `SPI2_NSS` (`NSS_Signal_Hard_Output`), which contradicts this
-      section's own verified conclusion two paragraphs up (hardware NSS on this SPI IP is
-      fixed active-low, verified by inspecting `stm32g0xx_hal_spi.h`, incompatible with the
-      display's active-HIGH CS). Needs to be changed back to plain `GPIO_Output` before this
-      is trusted — see §6.
+- [x] **SPI chip-select policy — RESOLVED, see §6/§7.** SPI3/DAC fell back to software GPIO
+      CS as anticipated (`PC13` can't do `SPI3_NSS`). SPI1 unaffected. SPI2/display initially
+      shipped with `PD0` on hardware `SPI2_NSS`, contradicting this section's own active-low
+      vs. active-HIGH analysis — since fixed in CubeMX (`PD0` is now `GPIO_Output`,
+      `hspi2.Init.NSS=SPI_NSS_SOFT`) and in the CSV (row 50 now reads `GPIO Output`). All
+      three SPI peripherals' chip-select config is confirmed consistent with the policy now.
 - [ ] **Toolchain / IDE:** set to **CMake** (`ProjectManager.TargetToolchain=CMake`) —
       matches `master`'s current `.ioc`.
 - [ ] **Library copy mode:** "Copy only the necessary library files"
@@ -496,12 +494,10 @@ sources — resolved items and one open conflict.
   as `SPI3_NSS` in CubeMX; it's `GPIO_Output` (software CS) instead. This is exactly the
   fallback §2/§5 already allowed for ("fall back to software GPIO only if testing shows
   hardware NSS won't work") — now a confirmed fact rather than a contingency.
-- **SPI2/display chip-select — OPEN CONFLICT, not resolved.** `PD0` is configured as
-  `SPI2_NSS` with `NSS_Signal_Hard_Output`. §2/§5 already established hardware NSS on this
-  SPI IP is fixed active-low (no polarity-invert bit in `stm32g0xx_hal_spi.h`), which cannot
-  drive the display's active-HIGH `DISP_CS`. **This needs to change back to a plain
-  `GPIO_Output` on PD0** (matching pin table row 50 in §1) before the display driver is
-  ported — deferred for now per user decision, revisit before relying on this SPI2 config.
+- **SPI2/display chip-select — RESOLVED, see §7.** `PD0` was initially generated as
+  `SPI2_NSS`/`NSS_Signal_Hard_Output`, contradicting §2/§5's own conclusion that hardware NSS
+  on this SPI IP is fixed active-low and incompatible with the display's active-HIGH
+  `DISP_CS`. Fixed in CubeMX and the CSV — see §7 for the full resolution.
 - **SPI2 direction — confirmed Transmit-Only.** `PD1`/`PD4` (`SPI2_SCK`/`SPI2_MOSI`) are
   `TX_Only_Simplex_Unidirect_Master`; no MISO pin is used, consistent with the display having
   no MISO signal in the CSV. (Note: the `.ioc`'s `SPI2.Direction` IP parameter still reads
@@ -509,10 +505,64 @@ sources — resolved items and one open conflict.
   not verified further.)
 - **ADC1 channels — CONFIRMED, resolves §5's top-priority item.** `PA3=ADC1_IN3`,
   `PB11=ADC1_IN15`, `PB12=ADC1_IN16` all show real ADC1 channel assignments in CubeMX, not
-  just selectable "Analog" mode. Closes out the exact risk flagged in §0/§5.
+  just selectable "Analog" mode. Closes out the exact risk flagged in §0/§5. **Which signal
+  name goes with which of these two pins was revised in §7 below** — the channel/pin mapping
+  here is still correct, only the `BATTERY_SENSE`/`TEMP_SENSE_EXT` labels swapped.
 - **On-board temperature sensor — part changed to Texas Instruments TMP236**, not the LM35
   assumed throughout this checklist and the migration doc's WP2 table. No CubeMX-level
   action needed (still just an ADC1 input, `PB12`/`TEMP_SENSE`), but `Drivers_App/drv_lm35.c`
   and its `LM35_SCALE` conversion math (referenced in `docs/pinout_migration_wp2-5.md`) will
   need re-deriving against the TMP236 datasheet, and likely a rename, whenever WP2 firmware
   is ported to this pinout. Flagged here for that future work, not acted on now.
+
+---
+
+## 7. Hardware Pinout Finalized — Revision B (2026-08-14)
+
+`STM32G0B1RET6_Pinout.csv` is now finalized as **Revision B, the sole hardware pinout going
+forward.** User confirmed Revision A prototype boards will be manually reworked to match
+Rev B rather than being treated as a separate, still-valid target — this checklist's pin
+table (§1) and the migration survey (`docs/pinout_migration_wp2-5.md`) should be read against
+Rev B only from this point on. Four points were checked against the finalized CSV and
+resolved by user confirmation:
+
+- **`BATTERY_SENSE` / `TEMP_SENSE_EXT` — pins are swapped from earlier drafts of this
+  checklist, confirmed correct as of Rev B:**
+  - `BATTERY_SENSE` = **PA3** = `ADC1_IN3` (100k/68k divider, ratio ≈0.4047)
+  - `TEMP_SENSE_EXT` = **PB11** = `ADC1_IN15`
+  - (`TEMP_SENSE`, on-board, is unchanged: **PB12** = `ADC1_IN16`.)
+  - This reverses §0/§1/§2's earlier `BATTERY_SENSE`=PB11 / `TEMP_SENSE_EXT`=PA3 mapping.
+    The `.ioc`'s channel-to-pin wiring (`PA3=IN3`, `PB11=IN15`) was already correct and
+    doesn't need to change — only the *label* attached to each pin does. This matters once
+    `svc_battery.c`/`drv_lm35.c`-equivalent firmware reads ADC1's DMA buffer by rank and
+    needs to know which array index is which physical measurement.
+- **`LED_PWR` / `LED_STATUS` — pins are swapped from earlier drafts too, confirmed correct:**
+  - `LED_PWR` = **PB13**
+  - `LED_STATUS` = **PB14**
+  - Reverses §0/§1's earlier PB13=`LED_STATUS` / PB14=`LED_PWR` mapping. Both are plain
+    `GPIO_Output`, active-HIGH, unaffected at the `.ioc` level (no CubeMX signal/mode change
+    needed) — this is purely a firmware-side pin-define correction for whenever the LED
+    driver is ported.
+- **`CHARGE_EN` polarity — confirmed active-LOW, not active-HIGH as §1/migration-doc item 8
+  assumed.** Signal renamed `!CHARGE_EN!` in the CSV: **Low = charge, High = don't charge.**
+  §1 row 56's "ASSUMED initial HIGH (charging enabled)" is now known wrong — the correct
+  boot-safe default (charging enabled) is initial **LOW**, the opposite of what was written.
+  Flagged for whenever WP2's charge-control code is ported; no `.ioc`-level change needed
+  (still plain `GPIO_Output` on PD6), this is a firmware polarity fact to get right.
+- **`DISP_CS`/PD0 hardware-NSS conflict (§6) — RESOLVED.** The LS027B7DH01's `SCS` pin is
+  active-HIGH (host drives it high to select the display before clocking a frame, low to
+  deselect) — the reverse of the near-universal active-low SPI chip-select convention. This
+  MCU's SPI hardware NSS output, when enabled (`SSOE`/`NSS_Signal_Hard_Output`), drives the
+  pin low while the peripheral is enabled/transferring and releases it high when disabled —
+  standard active-low behavior, hard-wired, with no polarity-invert bit on this SPI IP
+  (`stm32g0xx_hal_spi.h`, confirmed no `SSIOP`-equivalent, unlike the G4/H7/L5 SPI IP that has
+  one). With PD0 as hardware NSS the pin would go low exactly when the display needs it high
+  (mid-transfer) and high exactly when it needs it low (idle) — inverted at the moment it
+  matters, not just relabeled. **Fixed in CubeMX and confirmed in the generated code:** PD0
+  is now plain `GPIO_Output` (`GPIO_MODE_OUTPUT_PP`, no pull, initial level `GPIO_PIN_RESET`
+  = LOW = deselected), and `hspi2.Init.NSS` is `SPI_NSS_SOFT` in `Core/Src/spi.c` — firmware
+  will need to manually drive PD0 HIGH before the SPI2 transfer and LOW after, mirroring the
+  old `hal_spi_cs_assert/deassert` pattern, whenever the display driver is ported. The CSV
+  (`STM32G0B1RET6_Pinout.csv` row 50) has also been corrected to `GPIO Output` with the
+  reasoning noted inline ("Display uses active high CS signal. Hence SPI2_NSS cannot be
+  used.") — CSV, `.ioc`, and generated code all agree now.
