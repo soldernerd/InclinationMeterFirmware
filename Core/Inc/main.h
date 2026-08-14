@@ -57,6 +57,22 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define CHARGE_SENSE_Pin GPIO_PIN_2
+#define CHARGE_SENSE_GPIO_Port GPIOC
+#define ENC_1A_Pin GPIO_PIN_4
+#define ENC_1A_GPIO_Port GPIOC
+#define ENC_1B_Pin GPIO_PIN_0
+#define ENC_1B_GPIO_Port GPIOB
+#define ENC_2A_Pin GPIO_PIN_1
+#define ENC_2A_GPIO_Port GPIOB
+#define ENC_2B_Pin GPIO_PIN_2
+#define ENC_2B_GPIO_Port GPIOB
+#define _3V3_ENABLE__Pin GPIO_PIN_6
+#define _3V3_ENABLE__GPIO_Port GPIOC
+#define STANDBY_SENSE_Pin GPIO_PIN_5
+#define STANDBY_SENSE_GPIO_Port GPIOD
+#define BLE_RESET_Pin GPIO_PIN_5
+#define BLE_RESET_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 

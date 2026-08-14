@@ -566,3 +566,42 @@ resolved by user confirmation:
   (`STM32G0B1RET6_Pinout.csv` row 50) has also been corrected to `GPIO Output` with the
   reasoning noted inline ("Display uses active high CS signal. Hence SPI2_NSS cannot be
   used.") — CSV, `.ioc`, and generated code all agree now.
+
+---
+
+## 8. CubeMX Post-Generation Audit (2026-08-14+)
+
+Two rounds of "regenerate then audit against this checklist" happened after §6/§7. Round 1
+found 8 gaps (encoder EXTI trigger, `BLE_RESET`/`3V3_EN` boot levels, `CHARGE_SENSE`/
+`STANDBY_SENSE` pulls, TIM6 prescaler/period, ADC1 oversampling/sampling-time/DMA/NVIC,
+USART3/USART6 TX DMA) — all confirmed fixed except one, which round 2 made worse before two
+more fixes landed. Current status:
+
+- **RESOLVED:** encoder EXTI both-edge trigger, `BLE_RESET`/`3V3_EN` initial levels,
+  `CHARGE_SENSE`/`STANDBY_SENSE` internal pull-ups, TIM6 `Prescaler=63999`/`Period=33`,
+  ADC1 oversampling (`ENABLE`, ratio 16×, `ADC_RIGHTBITSHIFT_4`) + `SamplingTimeCommon1`
+  160.5 cycles + DMA (`DMA1_Channel7`, half-word) + NVIC (`ADC1_COMP_IRQn`), USART3 TX DMA,
+  USART6 TX DMA (`DMA2_Channel3`).
+- **RESOLVED — all four ADC1 channels configured, with one hardware constraint to design
+  around.** `Core/Src/adc.c` now has all four `HAL_ADC_ConfigChannel()` calls
+  (`ADC_CHANNEL_3`/`BATTERY_SENSE`, `ADC_CHANNEL_VREFINT`, `ADC_CHANNEL_15`/`TEMP_SENSE_EXT`,
+  `ADC_CHANNEL_16`/`TEMP_SENSE`), oversampling/sampling-time/DMA/NVIC all intact. Getting
+  there required reverting the sequencer from `FULLY_CONFIGURABLE` back to
+  `NOT_FULLY_CONFIGURABLE` — **CubeMX does not offer channels 15/16 as selectable ranks in
+  fully-configurable mode on this part**, confirmed by testing in the tool, not just a
+  workaround preference. That's a hard constraint to design firmware around, not a setting to
+  keep fighting.
+
+  **Consequence for firmware:** on `NOT_FULLY_CONFIGURABLE` (`ADC_SCAN_SEQ_FIXED`), every
+  channel gets `sConfig.Rank = ADC_RANK_CHANNEL_NUMBER` — the GUI's rank table order is
+  cosmetic. The real hardware always converts in **ascending channel-number order**.
+  `ADC_CHANNEL_VREFINT` resolves to channel 13 (confirmed in this repo's
+  `Drivers/STM32G0xx_HAL_Driver/Inc/stm32g0xx_ll_adc.h`), so the true, fixed conversion/DMA
+  order — and therefore the index order `hal_adc.c`'s DMA-completion handler must use — is:
+  1. `ADC_CHANNEL_3` = `PA3` = `BATTERY_SENSE`
+  2. `ADC_CHANNEL_13` = `VREFINT`
+  3. `ADC_CHANNEL_15` = `PB11` = `TEMP_SENSE_EXT`
+  4. `ADC_CHANNEL_16` = `PB12` = `TEMP_SENSE`
+
+  Not the "VREFINT first" order originally assumed in §2. Not something to re-litigate in
+  CubeMX — just the fact firmware needs to encode when reading the ADC1 DMA buffer.
