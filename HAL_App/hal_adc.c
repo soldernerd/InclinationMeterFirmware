@@ -57,6 +57,22 @@ const adc_results_t *hal_adc_get_results(void)
     return &s_results;
 }
 
+uint32_t hal_adc_raw_to_mv(uint16_t channel_raw)
+{
+    if (s_results.vrefint_raw == 0U) {
+        return 0U;   /* no valid scan yet — avoid divide-by-zero */
+    }
+    /* Standard STM32 VREFINT-ratiometric conversion: the factory-calibrated
+     * VREFINT_CAL value tells us what a 3.000 V reference reads as on this
+     * exact chip; comparing that to what VREFINT actually reads *this scan*
+     * gives the true current VDDA, which every other channel in the same
+     * scan is relative to. Oversampling (16x, right-shift 4, see ADC1 init)
+     * keeps every channel on the same 12-bit numeric scale as VREFINT_CAL
+     * itself, so no rescaling is needed beyond this. */
+    uint32_t vdda_mv = ((uint32_t)VREFINT_CAL_VREF * (*VREFINT_CAL_ADDR)) / s_results.vrefint_raw;
+    return ((uint32_t)channel_raw * vdda_mv) / 4095U;
+}
+
 uint16_t hal_adc_read_vrefint_raw(void)  { return s_results.vrefint_raw; }
 uint16_t hal_adc_read_vbat_raw(void)     { return s_results.vbat_raw; }
 uint16_t hal_adc_read_temp_raw(void)     { return s_results.temp_raw; }

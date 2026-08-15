@@ -54,17 +54,29 @@
 #define BATTERY_SENSE_PIN   GPIO_PIN_3      /* PA3, ADC1_IN3 (was PB0/IN8) */
 #define TEMP_SENSE_PORT     GPIOB
 #define TEMP_SENSE_PIN      GPIO_PIN_12     /* PB12, ADC1_IN16 (was PB1/IN9).
-                                              * On-board sensor is now a TI TMP236,
-                                              * not an LM35 — LM35_SCALE below is
-                                              * the old LM35 formula and has NOT
-                                              * been re-derived for TMP236; verify
-                                              * against the TMP236 datasheet before
-                                              * trusting temperature readings. */
+                                              * On-board sensor is a TI TMP236
+                                              * (not an LM35 — REV B changed
+                                              * parts). Powered from the 5V
+                                              * rail (PWR_5V_EN above), same as
+                                              * TEMP_SENSE_EXT — do not read
+                                              * before that rail is up and
+                                              * settled. Driven by
+                                              * Drivers_App/drv_tmp236.c, which
+                                              * implements TI's published
+                                              * piecewise-linear transfer
+                                              * function (datasheet SBOS857E). */
 #define TEMP_SENSE_EXT_PORT GPIOB
 #define TEMP_SENSE_EXT_PIN  GPIO_PIN_11     /* PB11, ADC1_IN15 — new external
                                               * temperature sensor input, no
-                                              * REV-A equivalent, not yet consumed
-                                              * by any driver. */
+                                              * REV-A equivalent. Expected to
+                                              * be an LM35 (10 mV/°C, 0 V at
+                                              * 0°C) — also powered from the 5V
+                                              * rail (PWR_5V_EN above; classic
+                                              * LM35 needs >=4V, won't run off
+                                              * 3.3V). Not yet consumed by any
+                                              * driver — see LM35_SCALE below
+                                              * for the intended conversion
+                                              * once that driver is written. */
 
 /* Battery monitoring */
 #define CHARGE_SENSE_PORT   GPIOC
@@ -104,12 +116,16 @@
 #define VBAT_SCALE_NUM      21
 #define VBAT_SCALE_DEN      17
 
-/* LM35 conversion: 10 mV/°C, VREFBUF 2048 mV, 12-bit ADC
- *   V_mV       = adc_raw × 2048 / 4096 = adc_raw / 2
- *   Temp_cdeg  = V_mV / 10 × 100       = adc_raw × 5
- * NOTE: on-board sensor is now a TMP236 (see TEMP_SENSE_PIN above) — this
- * formula is carried over unverified, not re-derived for TMP236. */
-#define LM35_SCALE          5
+/* LM35 conversion for the future TEMP_SENSE_EXT driver: 10 mV/°C, 0 V at
+ * 0°C, no offset. Use hal_adc_raw_to_mv() (HAL_App/hal_adc.h) to get actual
+ * millivolts first — REV B ties VREF+ directly to the 3V3_STANDBY rail, not
+ * a fixed-voltage VREFBUF, so a raw-code shortcut assuming a constant
+ * reference (as this file used to have) is wrong. Once converted to mV:
+ *   Temp_cdeg = V_mV × 10
+ * Not yet consumed by any driver — TEMP_SENSE_EXT has no driver yet (see
+ * TEMP_SENSE_EXT_PIN above). LM35_SCALE kept as documentation of the
+ * intended formula, not currently referenced by code. */
+#define LM35_SCALE          10
 
 /* VREFINT factory calibration: use stm32g0xx_ll_adc.h's own
  * VREFINT_CAL_ADDR/VREFINT_CAL_VREF (same address/value) — do not redefine
