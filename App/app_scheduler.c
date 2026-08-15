@@ -1,7 +1,7 @@
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
-#include "drv_lm35.h"
+#include "drv_tmp236.h"
 #include "hal_adc.h"
 #include "hal_systick.h"
 #include "svc_battery.h"
@@ -23,7 +23,7 @@ typedef struct {
 static void task_adc(void)
 {
     /* Restart the scan as soon as the previous one is consumed. The
-     * three downstream readers (drv_lm35, svc_battery, optional VREFINT
+     * three downstream readers (drv_tmp236, svc_battery, optional VREFINT
      * cross-check) run on their own slower periods and just sample the
      * latest hal_adc results. */
     if (hal_adc_is_ready()) {
@@ -33,13 +33,13 @@ static void task_adc(void)
 
 static void task_temperature(void)
 {
-    lm35_data_t data;
-    if (drv_lm35_get_result(&data) == DRV_OK) {
+    tmp236_data_t data;
+    if (drv_tmp236_get_result(&data) == DRV_OK) {
         g_system_state.temperature_cdeg = data.temp_cdeg;
     }
-    /* drv_lm35_start_read just calls hal_adc_start; safe to call even if
+    /* drv_tmp236_start_read just calls hal_adc_start; safe to call even if
      * a scan is already running — hal_adc_start no-ops in that case. */
-    (void)drv_lm35_start_read();
+    (void)drv_tmp236_start_read();
 }
 
 static void task_battery(void)

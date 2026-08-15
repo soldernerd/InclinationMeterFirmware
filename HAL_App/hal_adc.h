@@ -19,6 +19,14 @@ void                  hal_adc_start(void);      /* trigger one DMA scan */
 bool                  hal_adc_is_ready(void);   /* true when DMA scan complete */
 const adc_results_t *hal_adc_get_results(void);
 
+/* Converts a raw 12-bit-equivalent ADC code from this scan into millivolts,
+ * ratiometric against VREFINT's factory calibration. REV B ties VREF+
+ * directly to the 3V3_STANDBY rail rather than a fixed-voltage internal
+ * VREFBUF, so VDDA can't be assumed constant — this compensates for the
+ * actual supply voltage using the VREFINT channel from the same scan.
+ * Returns 0 if no valid scan (with a nonzero VREFINT reading) exists yet. */
+uint32_t              hal_adc_raw_to_mv(uint16_t channel_raw);
+
 uint16_t          hal_adc_read_vbat_raw(void);
 uint16_t          hal_adc_read_temp_raw(void);
 uint16_t          hal_adc_read_temp_ext_raw(void);

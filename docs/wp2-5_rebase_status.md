@@ -93,10 +93,18 @@ Check each explicitly for every branch — don't assume a clean cherry-pick:
   and the display pins were already being rewritten): `hal_spi.c` was still wired to
   `hspi1`/`SPI1` for the display. REV B moved the display to SPI2 (SPI1 is now the external
   ADC front-end).
-- **TMP236 vs. LM35** — REV B's on-board temp sensor changed parts. `LM35_SCALE`'s formula
-  was left in place (no datasheet available to re-derive it correctly) but flagged loudly in
-  `pin_config.h` and `drv_lm35.c` as unverified. Do not trust absolute temperature readings
-  until this is re-derived.
+- **TMP236 vs. LM35 — RESOLVED (2026-08-17).** REV B's on-board temp sensor (`TEMP_SENSE`)
+  changed parts to a TI TMP236; `drv_lm35.c`/`drv_lm35.h` renamed to `drv_tmp236.c`/`.h` and
+  reimplemented against TI's published piecewise-linear transfer function (datasheet
+  SBOS857E, Table 2). Also added `HAL_App/hal_adc.c`'s `hal_adc_raw_to_mv()`, a
+  VREFINT-ratiometric raw-code-to-millivolts conversion — REV B ties VREF+ directly to the
+  3V3_STANDBY rail rather than a fixed-voltage VREFBUF, so the old fixed-2.048V-reference
+  shortcut this formula used to rely on was wrong regardless of which sensor part is fitted.
+  `TEMP_SENSE_EXT` (the new external channel) is still expected to be a classic LM35 —
+  documented in `pin_config.h` (`LM35_SCALE`, now 10 mV/°C with no offset, corrected for the
+  same VREFINT-ratiometric approach) but **no driver exists for it yet**, that's separate
+  future work. Both temp sensors are powered from the 5V rail (`PWR_5V_EN`) — also now
+  documented at each pin's definition in `pin_config.h`.
 
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 

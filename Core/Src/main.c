@@ -35,7 +35,7 @@
 #include "hal_tim.h"
 #include "hal_i2c.h"
 #include "hal_adc.h"
-#include "drv_lm35.h"
+#include "drv_tmp236.h"
 #include "drv_24lc256.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
@@ -149,7 +149,7 @@ int main(void)
    * for its task periods. */
   svc_storage_init();
   svc_battery_init();
-  drv_lm35_init();
+  drv_tmp236_init();
   drv_24lc256_init();          /* idempotent — svc_storage_init already calls this */
 
   app_scheduler_init();
