@@ -9,8 +9,19 @@ static HalGpioExtiCallback s_exti_callbacks[16] = {0};
  * here in case the MX init order changes in future. */
 void hal_gpio_init(void)
 {
-    /* Keep the LDO rail on (PC0 HIGH) — CubeMX also sets this, but enforce */
-    LL_GPIO_SetOutputPin(LDO_EN_PORT, LDO_EN_PIN);
+    /* Keep the 3V3 rail on. !3V3_EN! is active-LOW — CubeMX's own GPIO init
+     * defaults it HIGH (rail off) as a safe boot state; drive it LOW here. */
+    LL_GPIO_ResetOutputPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN);
+
+    /* 5V rail: the display (and, later, buzzer/temp sensors) needs this.
+     * No power-sequencing module exists yet — asserted unconditionally at
+     * boot alongside 3V3 as a stopgap, not a real reference-counted design. */
+    LL_GPIO_SetOutputPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN);
+
+    /* Let both rails settle before anything downstream (SPI, display) uses
+     * them — comfortable margin over typical LDO start-up time, imperceptible
+     * at boot. */
+    HAL_Delay(20);
 
     /* Display CS idle LOW (Sharp LCD: CS active HIGH) */
     LL_GPIO_ResetOutputPin(DISP_CS_PORT, DISP_CS_PIN);

@@ -35,6 +35,7 @@
 #include "hal_tim.h"
 #include "app_scheduler.h"
 #include "app_display.h"
+#include "app_leds.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -116,6 +117,7 @@ int main(void)
   hal_spi_init(HAL_SPI_DISPLAY);
   hal_tim_init();
   app_scheduler_init();
+  app_leds_init();
   app_display_init();
   /* USER CODE END 2 */
 

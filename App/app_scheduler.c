@@ -1,5 +1,6 @@
 #include "app_scheduler.h"
 #include "app_display.h"
+#include "app_leds.h"
 #include "hal_systick.h"
 #include "config.h"
 #include "system_state.h"
@@ -15,6 +16,7 @@ typedef struct {
 
 static SchedulerEntry s_tasks[] = {
     { app_display_update, DEFAULT_TASK_DISPLAY_MS, 0 },
+    { app_leds_task,      DEFAULT_TASK_LED_MS,     0 },
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 

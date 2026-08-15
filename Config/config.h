@@ -9,6 +9,7 @@
 #define DEFAULT_TASK_SENSORS_MS         100
 #define DEFAULT_TASK_PROCESSING_MS      100
 #define DEFAULT_TASK_DISPLAY_MS         100
+#define DEFAULT_TASK_LED_MS             250     /* status LED toggle period -> 2 Hz blink */
 #define DEFAULT_TASK_BLE_MS             100
 #define DEFAULT_TASK_USB_MS             100
 #define DEFAULT_TASK_BATTERY_MS         1000

@@ -62,7 +62,9 @@ void drv_sharp_lcd_init(void)
     hal_spi_init(HAL_SPI_DISPLAY);
     hal_spi_register_dma_callback(HAL_SPI_DISPLAY, on_dma_complete);
 
-    /* 30 Hz VCOM square wave on PA6 — hardware PWM, no CPU involvement */
+    /* PD3 VCOM square wave (5 Hz, within the datasheet's 1-10 Hz window) —
+     * no hardware PWM channel on REV B, toggled manually in the TIM6
+     * period-elapsed ISR (hal_tim.c). */
     hal_tim_vcom_start();
 
     /* Power up the display */
