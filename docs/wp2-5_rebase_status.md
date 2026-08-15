@@ -98,16 +98,32 @@ Check each explicitly for every branch — don't assume a clean cherry-pick:
   `pin_config.h` and `drv_lm35.c` as unverified. Do not trust absolute temperature readings
   until this is re-derived.
 
-## Known critical bug found, NOT fixed (out of scope for this rebase)
+## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 
-**`HAL_App/hal_tim.c`'s `hal_tim_vcom_start()` still drives `TIM3_CH1` hardware PWM for the
-display VCOM signal.** REV B removed VCOM's hardware timer channel entirely — `PD3` is a
-plain `GPIO_Output`, and `TIM3_CH4` is committed to the buzzer. This compiles fine but does
-**nothing** to the actual VCOM pin. Per `CLAUDE.md`, an un-toggled VCOM **permanently damages
-the LS027B7DH01**. This is WP1 code (predates all of wp2–5, already on `master`), so it
-wasn't folded into this rebase — but it must be fixed (a TIM6-ISR-driven manual toggle,
-already spec'd in `docs/cubemx_configuration_checklist.md` §2) before any REV B hardware is
-powered on with this firmware, regardless of how the wp2–5 rebase proceeds.
+**Previously:** `HAL_App/hal_tim.c`'s `hal_tim_vcom_start()` still drove `TIM3_CH1` hardware
+PWM for the display VCOM signal. REV B removed VCOM's hardware timer channel entirely —
+`PD3` is a plain `GPIO_Output`, and `TIM3_CH4` is committed to the buzzer. This compiled fine
+but did **nothing** to the actual VCOM pin. Per `CLAUDE.md`, an un-toggled VCOM **permanently
+damages the LS027B7DH01**. This was WP1 code (predates all of wp2–5, already on `master`), so
+it wasn't folded into the wp2–5 rebase itself — but was fixed directly on `master` in a
+separate pass, alongside the rest of WP1's REV B port:
+
+- VCOM now toggled manually in a TIM6 period-elapsed ISR (the approach already spec'd in
+  `docs/cubemx_configuration_checklist.md` §2), tuned to 5 Hz (`TIM6.Period` 33→99) — the
+  original value landed at ~14.7 Hz, above the display datasheet's 1–10 Hz VCOM spec.
+- Display SPI moved from `hspi1`/SPI1 (REV A pin, wrong peripheral on REV B) to `hspi2`/SPI2
+  (PD1/PD4), matching REV B's actual wiring.
+- `3V3_EN` polarity fixed (REV B is active-LOW on PC6, `hal_gpio_init()` had it inverted and
+  would have left the rail permanently off) and the previously-unasserted `5V_EN` (PC7) rail
+  — which the display depends on — is now enabled at boot, with a 20 ms settle delay before
+  any downstream peripheral use.
+- `Config/pin_config.h` fully repointed to REV B pin numbers (display CS/ON/SCK/MOSI/VCOM,
+  LEDs on PB13/PB14).
+
+**Build-verified only** (clean compile, zero warnings under `-Wall -Wextra -Werror`, linker
+map confirms all HAL callback overrides resolve correctly) — **not yet flashed to hardware.**
+Still outstanding: scope PD3 to confirm the 5 Hz toggle, confirm rail sequencing, and visually
+confirm "Hello World" + LED heartbeat render on real REV B hardware.
 
 ---
 
