@@ -33,7 +33,7 @@ static void task_adc(void)
 
 static void task_temperature(void)
 {
-    Lm35Data data;
+    lm35_data_t data;
     if (drv_lm35_get_result(&data) == DRV_OK) {
         g_system_state.temperature_cdeg = data.temp_cdeg;
     }

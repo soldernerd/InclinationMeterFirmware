@@ -20,16 +20,18 @@ static volatile uint16_t s_dma_buf[SCAN_LEN];
 
 static volatile bool s_ready = false;
 static volatile bool s_started = false;
-static AdcResults    s_results = {0};
+static adc_results_t s_results = {0};
 
-void hal_adc_init(void)
+bool hal_adc_init(void)
 {
     /* hadc1 already initialised by MX_ADC1_Init (CubeMX). Calibration is
-     * required before the first conversion on STM32G0 — silent no-op if
-     * calibration has already been run. */
-    HAL_ADCEx_Calibration_Start(&hadc1);
+     * required before the first conversion on STM32G0 — a failure here
+     * means every subsequent reading (battery voltage, both temperature
+     * channels) would be silently wrong, so the caller must check this. */
+    bool ok = (HAL_ADCEx_Calibration_Start(&hadc1) == HAL_OK);
     s_ready   = false;
     s_started = false;
+    return ok;
 }
 
 void hal_adc_start(void)
@@ -50,7 +52,7 @@ bool hal_adc_is_ready(void)
     return s_ready;
 }
 
-const AdcResults *hal_adc_get_results(void)
+const adc_results_t *hal_adc_get_results(void)
 {
     return &s_results;
 }

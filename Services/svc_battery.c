@@ -13,16 +13,25 @@ static const uint16_t s_soc_voltage_mv[] = {
 };
 #define SOC_TABLE_LEN  ((sizeof s_soc_voltage_mv) / sizeof s_soc_voltage_mv[0])
 
-static BatteryState s_state         = BATTERY_NORMAL;
-static uint16_t     s_vbat_mv       = 0;
-static uint8_t      s_soc_pct       = 0;
-static bool         s_usb_connected = false;
-static bool         s_charging      = false;
+static battery_state_t s_state         = BATTERY_NORMAL;
+static uint16_t         s_vbat_mv       = 0;
+static uint8_t          s_soc_pct       = 0;
+static bool             s_usb_connected = false;
+static bool             s_charging      = false;
 
 /* Critical-shutdown latch — once tripped we run the shutdown sequence
  * and never recover. */
 static bool         s_shutdown_armed   = false;
 static uint32_t     s_shutdown_start_ms = 0;
+
+/* Startup grace period: don't trust any battery classification until we've
+ * actually seen this many valid ADC scans. s_soc_pct/s_vbat_mv start at 0,
+ * which reads as "critical" — without this gate a slow-to-calibrate or
+ * momentarily-failing ADC would trip the shutdown latch on a fully charged
+ * battery. At the default 100 ms sensor-task period this is ~1 s, well
+ * within what's imperceptible to the user at boot. */
+#define BATTERY_STARTUP_MIN_SAMPLES  10U
+static uint8_t s_valid_sample_count = 0;
 
 static uint16_t adc_to_vbat_mv(uint16_t adc_raw)
 {
@@ -51,12 +60,13 @@ static uint8_t vbat_to_soc(uint16_t vbat_mv)
 
 void svc_battery_init(void)
 {
-    s_state          = BATTERY_NORMAL;
-    s_vbat_mv        = 0;
-    s_soc_pct        = 0;
-    s_usb_connected  = false;
-    s_charging       = false;
-    s_shutdown_armed = false;
+    s_state              = BATTERY_NORMAL;
+    s_vbat_mv            = 0;
+    s_soc_pct            = 0;
+    s_usb_connected      = false;
+    s_charging           = false;
+    s_shutdown_armed     = false;
+    s_valid_sample_count = 0;
 }
 
 void svc_battery_update(void)
@@ -66,14 +76,22 @@ void svc_battery_update(void)
     s_charging      = !hal_gpio_get(CHARGE_SENSE_PORT, CHARGE_SENSE_PIN); /* TP4056 active LOW */
 
     /* Voltage read — only if ADC has produced fresh data this tick */
-    const AdcResults *r = hal_adc_get_results();
+    const adc_results_t *r = hal_adc_get_results();
     if (r->valid) {
         s_vbat_mv = adc_to_vbat_mv(r->vbat_raw);
         s_soc_pct = vbat_to_soc(s_vbat_mv);
+        if (s_valid_sample_count < BATTERY_STARTUP_MIN_SAMPLES) {
+            s_valid_sample_count++;
+        }
     }
 
     /* State classification — order matters: charging beats low/critical */
-    if (s_usb_connected && s_charging) {
+    if (s_valid_sample_count < BATTERY_STARTUP_MIN_SAMPLES) {
+        /* Not enough confirmed-real samples yet — s_soc_pct/s_vbat_mv may
+         * still be zero-initialized defaults, not real data. Assume NORMAL
+         * rather than risk tripping the shutdown latch during startup. */
+        s_state = BATTERY_NORMAL;
+    } else if (s_usb_connected && s_charging) {
         s_state = BATTERY_CHARGING;
     } else if (s_usb_connected && !s_charging && s_soc_pct >= 95U) {
         s_state = BATTERY_FULL;
@@ -105,7 +123,7 @@ void svc_battery_update(void)
             /* !3V3_EN! is active LOW — driving it HIGH cuts the rail. The
              * old active-high LDO_EN cut power on `false`; this is the
              * inverted equivalent, not a straight rename. */
-            hal_gpio_set(_3V3_ENABLE__PORT, _3V3_ENABLE__PIN, true);
+            hal_gpio_set(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, true);
             /* MCU loses power within microseconds — code below never
              * runs in practice, but spin to avoid undefined fall-through */
             for (;;) { }
@@ -113,7 +131,7 @@ void svc_battery_update(void)
     }
 }
 
-BatteryState svc_battery_get_state(void)         { return s_state; }
+battery_state_t svc_battery_get_state(void)      { return s_state; }
 uint8_t      svc_battery_get_soc_pct(void)       { return s_soc_pct; }
 uint16_t     svc_battery_get_vbat_mv(void)       { return s_vbat_mv; }
 bool         svc_battery_is_usb_connected(void)  { return s_usb_connected; }

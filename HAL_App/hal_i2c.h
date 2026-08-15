@@ -15,14 +15,14 @@ typedef void (*HalI2cDmaCallback)(HalI2cInstance instance, bool success);
 
 void hal_i2c_init(HalI2cInstance instance);
 
-/* Blocking primitives — return true on success */
-bool hal_i2c_write(HalI2cInstance instance, uint8_t addr,
-                   const uint8_t *data, uint16_t len);
-bool hal_i2c_read(HalI2cInstance instance, uint8_t addr,
-                  uint8_t *data, uint16_t len);
-bool hal_i2c_write_read(HalI2cInstance instance, uint8_t addr,
-                        const uint8_t *tx, uint16_t tx_len,
-                        uint8_t *rx, uint16_t rx_len);
+/* Blocking primitives */
+DrvStatus hal_i2c_write(HalI2cInstance instance, uint8_t addr,
+                        const uint8_t *data, uint16_t len);
+DrvStatus hal_i2c_read(HalI2cInstance instance, uint8_t addr,
+                       uint8_t *data, uint16_t len);
+DrvStatus hal_i2c_write_read(HalI2cInstance instance, uint8_t addr,
+                             const uint8_t *tx, uint16_t tx_len,
+                             uint8_t *rx, uint16_t rx_len);
 
 /* Non-blocking DMA primitives — completion fires registered callback */
 void hal_i2c_read_dma(HalI2cInstance instance, uint8_t addr,

@@ -139,7 +139,9 @@ int main(void)
   hal_systick_init();
   hal_spi_init(HAL_SPI_DISPLAY);
   hal_i2c_init(HAL_I2C_MAIN);
-  hal_adc_init();
+  if (!hal_adc_init()) {
+    Error_Handler();
+  }
   hal_tim_init();
 
   /* Storage must come before scheduler init — it populates

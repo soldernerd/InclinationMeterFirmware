@@ -3,6 +3,7 @@
 #include "math_crc.h"
 #include "config.h"
 #include "system_state.h"
+#include "hal_systick.h"
 #include <string.h>
 
 /* EEPROM layout (per WP2 spec):
@@ -28,21 +29,27 @@
 #define SETTINGS_BASE     EEPROM_SETTINGS_ADDR        /* 0x0000 from config.h */
 #define CALIBRATION_BASE  EEPROM_CALIBRATION_ADDR     /* 0x0100 */
 
-/* Pending-write state machine */
-typedef enum {
-    WS_IDLE = 0,
-    WS_WRITING_PAGE,
-} WriteStage;
+/* Blocking-helper timeout: generous margin over any single I2C
+ * transaction (each bounded by hal_i2c's own 100 ms HAL timeout) plus the
+ * EEPROM's up-to-5 ms write cycle and the driver's 50 ms give-up poll. */
+#define STORAGE_BLOCKING_TIMEOUT_MS  200U
 
+/* How many times to retry a single failed page write before giving up on
+ * the whole pending save. A stale/incomplete result is caught by the CRC
+ * check on the next boot's load path and reseeded — not silently trusted. */
+#define STORAGE_WRITE_MAX_RETRIES  3U
+
+/* Pending-write state machine */
 typedef struct {
     bool        active;
-    WriteStage  stage;
-    uint16_t    base_addr;     /* EEPROM address of first byte (header) */
+    uint16_t    base_addr;      /* EEPROM address of first byte (header) */
     uint8_t     buf[HDR_SIZE + sizeof(DeviceSettings) > HDR_SIZE + sizeof(CalibrationData)
                     ? HDR_SIZE + sizeof(DeviceSettings)
                     : HDR_SIZE + sizeof(CalibrationData)];
     uint16_t    total_len;
-    uint16_t    written;
+    uint16_t    written;        /* confirmed-written byte count */
+    uint16_t    inflight_len;   /* length of the chunk currently in flight, 0 = none */
+    uint8_t     retry_count;    /* retries attempted for the in-flight chunk */
 } PendingWrite;
 
 static PendingWrite s_pending = {0};
@@ -111,10 +118,10 @@ static bool blocking_read(uint16_t addr, uint8_t *buf, uint16_t len)
         return false;
     }
     /* Single-shot: poll the driver state machine ourselves */
-    uint32_t guard = 0;
+    uint32_t start_ms = hal_systick_get_ms();
     while (drv_24lc256_is_busy()) {
         drv_24lc256_update();
-        if (++guard > 1000000UL) {
+        if ((uint32_t)(hal_systick_get_ms() - start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
             return false;     /* hardware fault */
         }
     }
@@ -127,14 +134,14 @@ static bool blocking_write_page(uint16_t addr, const uint8_t *buf, uint16_t len)
     if (drv_24lc256_start_write_page(addr, buf, len) != DRV_OK) {
         return false;
     }
-    uint32_t guard = 0;
+    uint32_t start_ms = hal_systick_get_ms();
     while (drv_24lc256_is_busy()) {
         drv_24lc256_update();
-        if (++guard > 10000000UL) {
-            return false;
+        if ((uint32_t)(hal_systick_get_ms() - start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
+            return false;     /* hardware fault */
         }
     }
-    return true;
+    return drv_24lc256_write_complete();
 }
 
 static bool blocking_write_block(uint16_t addr, const uint8_t *buf, uint16_t len)
@@ -225,11 +232,12 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *settings)
     build_header(s_pending.buf, EEPROM_SETTINGS_VERSION, crc);
     memcpy(&s_pending.buf[HDR_SIZE], settings, sizeof(DeviceSettings));
 
-    s_pending.base_addr = SETTINGS_BASE;
-    s_pending.total_len = HDR_SIZE + sizeof(DeviceSettings);
-    s_pending.written   = 0;
-    s_pending.stage     = WS_WRITING_PAGE;
-    s_pending.active    = true;
+    s_pending.base_addr    = SETTINGS_BASE;
+    s_pending.total_len    = HDR_SIZE + sizeof(DeviceSettings);
+    s_pending.written      = 0;
+    s_pending.inflight_len = 0;
+    s_pending.retry_count  = 0;
+    s_pending.active       = true;
     return DRV_OK;
 }
 
@@ -242,11 +250,12 @@ DrvStatus svc_storage_save_calibration(const CalibrationData *cal)
     build_header(s_pending.buf, EEPROM_CALIBRATION_VERSION, crc);
     memcpy(&s_pending.buf[HDR_SIZE], cal, sizeof(CalibrationData));
 
-    s_pending.base_addr = CALIBRATION_BASE;
-    s_pending.total_len = HDR_SIZE + sizeof(CalibrationData);
-    s_pending.written   = 0;
-    s_pending.stage     = WS_WRITING_PAGE;
-    s_pending.active    = true;
+    s_pending.base_addr    = CALIBRATION_BASE;
+    s_pending.total_len    = HDR_SIZE + sizeof(CalibrationData);
+    s_pending.written      = 0;
+    s_pending.inflight_len = 0;
+    s_pending.retry_count  = 0;
+    s_pending.active       = true;
     return DRV_OK;
 }
 
@@ -267,19 +276,46 @@ void svc_storage_update(void)
     if (drv_24lc256_is_busy()) {
         return;     /* DMA or write-cycle poll still in flight */
     }
+
+    if (s_pending.inflight_len != 0U) {
+        /* A chunk write just finished — check the outcome before trusting
+         * it and moving on. */
+        if (drv_24lc256_write_complete()) {
+            s_pending.written      = (uint16_t)(s_pending.written + s_pending.inflight_len);
+            s_pending.inflight_len = 0U;
+            s_pending.retry_count  = 0U;
+        } else if (s_pending.retry_count < STORAGE_WRITE_MAX_RETRIES) {
+            /* Re-issue the same chunk rather than silently treating a
+             * failed write as done. */
+            s_pending.retry_count++;
+            (void)drv_24lc256_start_write_page(
+                (uint16_t)(s_pending.base_addr + s_pending.written),
+                &s_pending.buf[s_pending.written], s_pending.inflight_len);
+            return;
+        } else {
+            /* Retries exhausted — abandon this save rather than wedge
+             * forever. The header/CRC written so far (if any) will fail
+             * the CRC check on next boot's load and get reseeded. */
+            s_pending.active       = false;
+            s_pending.inflight_len = 0U;
+            s_pending.retry_count  = 0U;
+            return;
+        }
+    }
+
     if (s_pending.written >= s_pending.total_len) {
         s_pending.active = false;
-        s_pending.stage  = WS_IDLE;
         return;
     }
-    /* Write the next chunk, respecting the 64-byte page boundary */
+
+    /* Kick off the next chunk, respecting the 64-byte page boundary */
     uint16_t addr      = (uint16_t)(s_pending.base_addr + s_pending.written);
     uint16_t remaining = (uint16_t)(s_pending.total_len - s_pending.written);
     uint16_t page_off  = addr & (EEPROM_PAGE_SIZE - 1U);
     uint16_t page_left = (uint16_t)(EEPROM_PAGE_SIZE - page_off);
     uint16_t chunk     = remaining < page_left ? remaining : page_left;
     if (drv_24lc256_start_write_page(addr, &s_pending.buf[s_pending.written], chunk) == DRV_OK) {
-        s_pending.written = (uint16_t)(s_pending.written + chunk);
+        s_pending.inflight_len = chunk;
     }
 }
 
