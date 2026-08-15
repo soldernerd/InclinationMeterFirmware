@@ -10,11 +10,11 @@ typedef enum {
     BATTERY_CRITICAL,       /* < battery_critical_pct  */
     BATTERY_CHARGING,
     BATTERY_FULL,           /* charge complete (CHRG HIGH while USB present) */
-} BatteryState;
+} battery_state_t;
 
-void         svc_battery_init(void);
-void         svc_battery_update(void);
-BatteryState svc_battery_get_state(void);
+void             svc_battery_init(void);
+void             svc_battery_update(void);
+battery_state_t  svc_battery_get_state(void);
 uint8_t      svc_battery_get_soc_pct(void);
 uint16_t     svc_battery_get_vbat_mv(void);
 bool         svc_battery_is_usb_connected(void);

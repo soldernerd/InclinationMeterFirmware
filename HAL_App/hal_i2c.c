@@ -27,37 +27,37 @@ void hal_i2c_init(HalI2cInstance instance)
     }
 }
 
-bool hal_i2c_write(HalI2cInstance instance, uint8_t addr,
-                   const uint8_t *data, uint16_t len)
+DrvStatus hal_i2c_write(HalI2cInstance instance, uint8_t addr,
+                        const uint8_t *data, uint16_t len)
 {
     I2C_HandleTypeDef *h = handle_for(instance);
-    if (h == 0 || data == 0) return false;
+    if (h == 0 || data == 0) return DRV_ERR_INVALID;
     /* I2C addresses passed as 7-bit → HAL expects them shifted left by 1 */
-    return HAL_I2C_Master_Transmit(h, (uint16_t)(addr << 1), (uint8_t *)data,
-                                   len, I2C_TIMEOUT_MS) == HAL_OK;
+    return (HAL_I2C_Master_Transmit(h, (uint16_t)(addr << 1), (uint8_t *)data,
+                                    len, I2C_TIMEOUT_MS) == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
 }
 
-bool hal_i2c_read(HalI2cInstance instance, uint8_t addr,
-                  uint8_t *data, uint16_t len)
+DrvStatus hal_i2c_read(HalI2cInstance instance, uint8_t addr,
+                       uint8_t *data, uint16_t len)
 {
     I2C_HandleTypeDef *h = handle_for(instance);
-    if (h == 0 || data == 0) return false;
-    return HAL_I2C_Master_Receive(h, (uint16_t)(addr << 1), data,
-                                  len, I2C_TIMEOUT_MS) == HAL_OK;
+    if (h == 0 || data == 0) return DRV_ERR_INVALID;
+    return (HAL_I2C_Master_Receive(h, (uint16_t)(addr << 1), data,
+                                   len, I2C_TIMEOUT_MS) == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
 }
 
-bool hal_i2c_write_read(HalI2cInstance instance, uint8_t addr,
-                        const uint8_t *tx, uint16_t tx_len,
-                        uint8_t *rx, uint16_t rx_len)
+DrvStatus hal_i2c_write_read(HalI2cInstance instance, uint8_t addr,
+                             const uint8_t *tx, uint16_t tx_len,
+                             uint8_t *rx, uint16_t rx_len)
 {
     I2C_HandleTypeDef *h = handle_for(instance);
-    if (h == 0 || tx == 0 || rx == 0) return false;
+    if (h == 0 || tx == 0 || rx == 0) return DRV_ERR_INVALID;
     if (HAL_I2C_Master_Transmit(h, (uint16_t)(addr << 1), (uint8_t *)tx,
                                 tx_len, I2C_TIMEOUT_MS) != HAL_OK) {
-        return false;
+        return DRV_ERR_COMM;
     }
-    return HAL_I2C_Master_Receive(h, (uint16_t)(addr << 1), rx,
-                                  rx_len, I2C_TIMEOUT_MS) == HAL_OK;
+    return (HAL_I2C_Master_Receive(h, (uint16_t)(addr << 1), rx,
+                                   rx_len, I2C_TIMEOUT_MS) == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
 }
 
 void hal_i2c_read_dma(HalI2cInstance instance, uint8_t addr,

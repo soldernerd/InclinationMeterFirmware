@@ -111,10 +111,9 @@
  * formula is carried over unverified, not re-derived for TMP236. */
 #define LM35_SCALE          5
 
-/* VREFINT factory calibration (STM32G0 specific — chip, not board, so
- * unaffected by the REV B pinout change) */
-#define VREFINT_CAL_ADDR    ((uint16_t *)0x1FFF75AAU)
-#define VREFINT_CAL_MV      3000UL
+/* VREFINT factory calibration: use stm32g0xx_ll_adc.h's own
+ * VREFINT_CAL_ADDR/VREFINT_CAL_VREF (same address/value) — do not redefine
+ * here, it collides with the LL driver's macro of the same name. */
 
 /* Crystal: PF0 OSC_IN, PF1 OSC_OUT, 8 MHz HSE — configured by CubeMX */
 /* SWD: PA13 SWDIO, PA14 SWCLK — configured by CubeMX. NRST is the dedicated

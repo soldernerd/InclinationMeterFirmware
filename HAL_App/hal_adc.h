@@ -12,12 +12,12 @@ typedef struct {
     uint16_t temp_ext_raw;  /* CH15 / PB11 / TEMP_SENSE_EXT */
     uint16_t temp_raw;      /* CH16 / PB12 / TEMP_SENSE */
     bool     valid;         /* true after first DMA scan completes */
-} AdcResults;
+} adc_results_t;
 
-void              hal_adc_init(void);
-void              hal_adc_start(void);          /* trigger one DMA scan */
-bool              hal_adc_is_ready(void);       /* true when DMA scan complete */
-const AdcResults *hal_adc_get_results(void);
+bool                  hal_adc_init(void);       /* false if ADC calibration failed */
+void                  hal_adc_start(void);      /* trigger one DMA scan */
+bool                  hal_adc_is_ready(void);   /* true when DMA scan complete */
+const adc_results_t *hal_adc_get_results(void);
 
 uint16_t          hal_adc_read_vbat_raw(void);
 uint16_t          hal_adc_read_temp_raw(void);
