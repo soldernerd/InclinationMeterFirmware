@@ -35,6 +35,8 @@
 #include "hal_tim.h"
 #include "hal_i2c.h"
 #include "hal_adc.h"
+#include "hal_power.h"
+#include "system_state.h"
 #include "drv_tmp236.h"
 #include "drv_24lc256.h"
 #include "svc_storage.h"
@@ -137,6 +139,13 @@ int main(void)
   /* USER CODE BEGIN 2 */
   hal_gpio_init();
   hal_systick_init();
+  /* Record whether this boot resumed from Standby mode (all RAM/state was
+   * lost either way — this is a fresh boot regardless) and clear the PWR
+   * wake flags. No branching needed here: svc_battery_update() re-derives
+   * battery/USB state fresh every tick, so a critical-battery-but-VBUS-
+   * present wake naturally starts charging instead of re-entering low
+   * power without any special-cased logic — see svc_battery.c. */
+  g_system_state.woke_from_standby = hal_power_woke_from_standby();
   hal_spi_init(HAL_SPI_DISPLAY);
   hal_i2c_init(HAL_I2C_MAIN);
   if (!hal_adc_init()) {

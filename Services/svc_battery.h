@@ -9,7 +9,7 @@ typedef enum {
     BATTERY_LOW,            /* < battery_low_pct */
     BATTERY_CRITICAL,       /* < battery_critical_pct  */
     BATTERY_CHARGING,
-    BATTERY_FULL,           /* charge complete (CHRG HIGH while USB present) */
+    BATTERY_FULL,           /* charge complete — STANDBY_SENSE asserted while USB present */
 } battery_state_t;
 
 void             svc_battery_init(void);
@@ -19,5 +19,11 @@ uint8_t      svc_battery_get_soc_pct(void);
 uint16_t     svc_battery_get_vbat_mv(void);
 bool         svc_battery_is_usb_connected(void);
 bool         svc_battery_is_charging(void);
+
+/* Disables the LEDs and the 3.3V/5V rails, then enters STM32 Standby mode.
+ * Does not return — Standby mode resets the MCU on wake (see
+ * HAL_App/hal_power.h). Public so a later work package's user-initiated
+ * power-off can call this too, not just the critical-battery path. */
+void             svc_battery_enter_low_power(void);
 
 #endif /* SVC_BATTERY_H */
