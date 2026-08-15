@@ -35,14 +35,19 @@ void hal_gpio_init(void)
     LL_GPIO_ResetOutputPin(LED_PWR_PORT, LED_PWR_PIN);
     LL_GPIO_ResetOutputPin(LED_STS_PORT, LED_STS_PIN);
 
-    /* VBUS_SENSE (PA2) is configured as SYS_WKUP4 in CubeMX, which gets no
-     * MX_GPIO_Init() call — the pin is left in POR-default Analog mode
-     * (input buffer disabled) since Standby wake isn't wired up yet (no
-     * HAL_PWR_EnableWakeUpPin() call exists). Reconfigure it as a plain
-     * digital input here so hal_gpio_get() reads a real value in Run mode;
-     * this doesn't conflict with its future use as a wake source. */
+    /* VBUS_SENSE (PA2), ENC_1SW (PA0), and ENC_2SW (PC5) are all configured
+     * as SYS_WKUPx in CubeMX, which gets no MX_GPIO_Init() call — left in
+     * POR-default Analog mode (input buffer disabled). The PWR peripheral's
+     * wake-up detection (hal_power.c) samples these independently of GPIO
+     * mode, but reconfiguring them as plain digital inputs here means
+     * hal_gpio_get() also reads a real value in Run mode — doesn't conflict
+     * with their WKUPx role. */
     LL_GPIO_SetPinMode(VBUS_SENSE_PORT, VBUS_SENSE_PIN, LL_GPIO_MODE_INPUT);
     LL_GPIO_SetPinPull(VBUS_SENSE_PORT, VBUS_SENSE_PIN, LL_GPIO_PULL_NO);
+    LL_GPIO_SetPinMode(ENC_1SW_PORT, ENC_1SW_PIN, LL_GPIO_MODE_INPUT);
+    LL_GPIO_SetPinPull(ENC_1SW_PORT, ENC_1SW_PIN, LL_GPIO_PULL_NO);
+    LL_GPIO_SetPinMode(ENC_2SW_PORT, ENC_2SW_PIN, LL_GPIO_MODE_INPUT);
+    LL_GPIO_SetPinPull(ENC_2SW_PORT, ENC_2SW_PIN, LL_GPIO_PULL_NO);
 }
 
 void hal_gpio_set(GPIO_TypeDef *port, uint16_t pin, bool state)

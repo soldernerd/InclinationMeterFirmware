@@ -51,7 +51,14 @@
  * channel-number order regardless of scan-list order, so the real/fixed
  * DMA scan order is CH3, CH13(VREFINT), CH15, CH16 — see hal_adc.c. */
 #define BATTERY_SENSE_PORT  GPIOA
-#define BATTERY_SENSE_PIN   GPIO_PIN_3      /* PA3, ADC1_IN3 (was PB0/IN8) */
+#define BATTERY_SENSE_PIN   GPIO_PIN_3      /* PA3, ADC1_IN3 (was PB0/IN8).
+                                              * Needs the 3.3V rail
+                                              * (PWR_3V3_EN above) — unlike
+                                              * the temp sensors this is the
+                                              * always-on switched rail, so
+                                              * no settle-delay gating is
+                                              * needed beyond boot's existing
+                                              * one (see hal_gpio_init()). */
 #define TEMP_SENSE_PORT     GPIOB
 #define TEMP_SENSE_PIN      GPIO_PIN_12     /* PB12, ADC1_IN16 (was PB1/IN9).
                                               * On-board sensor is a TI TMP236
@@ -78,26 +85,104 @@
                                               * for the intended conversion
                                               * once that driver is written. */
 
-/* Battery monitoring */
+/* Battery monitoring — all four signals talk to the TP4056 charger IC.
+ * CHARGE_SENSE and STANDBY_SENSE are TP4056 *outputs* (things we read);
+ * CHARGE_EN is our *output* into the TP4056's CE input (things we drive).
+ * VBUS_SENSE is independent of the TP4056 — it's our own USB-present
+ * detector and the thing that makes charging possible at all. */
 #define CHARGE_SENSE_PORT   GPIOC
-#define CHARGE_SENSE_PIN    GPIO_PIN_2      /* PC2, TP4056 CHRG, active LOW,
-                                              * pull-up (was PA9) */
+#define CHARGE_SENSE_PIN    GPIO_PIN_2      /* PC2, TP4056 CHRG output, active
+                                              * LOW, pull-up (was PA9). LOW =
+                                              * actively charging right now. */
 #define VBUS_SENSE_PORT     GPIOA
 #define VBUS_SENSE_PIN      GPIO_PIN_2      /* PA2, USB VBUS detect, active HIGH
-                                              * (was PA10). Configured as SYS_WKUP4
-                                              * in CubeMX with no GPIO_Init call —
-                                              * hal_gpio_init() re-configures it as
-                                              * a digital input so reads work in
-                                              * Run mode; see hal_gpio.c. */
+                                              * (was PA10) — our own power-input-
+                                              * present signal, not a TP4056
+                                              * pin. Without this HIGH we have no
+                                              * charge source, regardless of
+                                              * CHARGE_EN. Configured as
+                                              * SYS_WKUP4 in CubeMX with no
+                                              * GPIO_Init call — hal_gpio_init()
+                                              * re-configures it as a digital
+                                              * input so reads work in Run mode;
+                                              * see hal_gpio.c. Also one of the
+                                              * three Standby wake-up sources —
+                                              * see the "Low-power / Standby"
+                                              * block below. */
 #define STANDBY_SENSE_PORT  GPIOD
-#define STANDBY_SENSE_PIN   GPIO_PIN_5      /* PD5, TP4056 STANDBY, active LOW,
-                                              * pull-up. New — no REV-A equivalent. */
+#define STANDBY_SENSE_PIN   GPIO_PIN_5      /* PD5, TP4056 STANDBY output,
+                                              * active LOW, pull-up. New — no
+                                              * REV-A equivalent. LOW = charge
+                                              * cycle complete (battery full);
+                                              * used instead of an SOC-percent
+                                              * heuristic to detect BATTERY_FULL
+                                              * (svc_battery.c). */
 #define CHARGE_EN_PORT      GPIOD
 #define CHARGE_EN_PIN       GPIO_PIN_6      /* PD6, !CHARGE_EN!, active LOW
-                                              * (Low = charge, High = don't charge).
-                                              * New — no REV-A equivalent, old
-                                              * hardware had no charge-enable
-                                              * control, only CHG sense. */
+                                              * (Low = charge, High = don't
+                                              * charge) — our *output* into the
+                                              * TP4056's CE input, via a level-
+                                              * translation buffer (that's why
+                                              * the polarity is inverted versus
+                                              * a direct connection). Policy
+                                              * (svc_battery.c): enable
+                                              * whenever VBUS_SENSE is present,
+                                              * disable otherwise — the TP4056
+                                              * itself autonomously stops
+                                              * actively charging once full
+                                              * (reflected in STANDBY_SENSE),
+                                              * we don't need to toggle CE for
+                                              * that. New — no REV-A
+                                              * equivalent, old hardware had no
+                                              * charge-enable control, only CHG
+                                              * sense. */
+
+/* Low-power / Standby wake-up pins.
+ *
+ * Design (svc_battery.c owns the decision, HAL_App/hal_power.c wraps the
+ * ST HAL PWR calls):
+ *   - The MCU's own supply (3V3_STANDBY) is a separate, always-on rail from
+ *     PWR_3V3_EN/PWR_5V_EN — the MCU itself is never powered off. "Low
+ *     power" here means putting the MCU into STM32 Standby mode
+ *     (~0.28 uA, CLAUDE.md §8.4) after first disabling both switched
+ *     rails (PWR_3V3_EN, PWR_5V_EN) and both LEDs.
+ *   - Entry trigger (current, WP2): battery reaches BATTERY_CRITICAL AND
+ *     VBUS_SENSE is not present (if VBUS is present we charge instead of
+ *     shutting down — see CHARGE_EN above). A later WP may also trigger
+ *     entry from a user-initiated power-off.
+ *   - Standby mode resets the MCU on wake (all RAM/state is lost) —
+ *     execution resumes at the reset vector, same as a power-on reset.
+ *     hal_gpio_init()'s existing boot sequence already re-enables both
+ *     rails, so "waking up" needs no special re-init code beyond a normal
+ *     boot; svc_battery_update() re-evaluates battery/USB state fresh on
+ *     every boot regardless of how it started.
+ *   - Wake sources (all high-level detection — see ENC_1SW/ENC_2SW below
+ *     for why "active-low" mechanical switches produce a HIGH wake
+ *     signal): ENC_1SW (WKUP1), VBUS_SENSE (WKUP4), ENC_2SW (WKUP5). If
+ *     wake was caused by VBUS_SENSE and the battery is still critical,
+ *     we do NOT re-enter low power — the !s_usb_connected gate on the
+ *     shutdown trigger already ensures this without any extra "how did
+ *     we wake up" bookkeeping.
+ */
+#define ENC_1SW_PORT        GPIOA
+#define ENC_1SW_PIN         GPIO_PIN_0      /* PA0, SYS_WKUP1. Encoder 1
+                                              * push switch. The raw
+                                              * mechanical switch is active-
+                                              * LOW (CLAUDE.md §5.11), but it
+                                              * passes through an RC filter +
+                                              * 74HC14 Schmitt-trigger
+                                              * *inverter* before reaching the
+                                              * MCU (same §5.11 hardware) — so
+                                              * the pin the MCU/PWR peripheral
+                                              * actually sees goes HIGH on
+                                              * press. Defined here only for
+                                              * its WKUP1 role; full encoder
+                                              * A/B quadrature reading is
+                                              * WP3 scope. */
+#define ENC_2SW_PORT        GPIOC
+#define ENC_2SW_PIN         GPIO_PIN_5      /* PC5, SYS_WKUP5. Same as
+                                              * ENC_1SW above (encoder 2's
+                                              * push switch). */
 
 /* I2C1 — EEPROM (and BME280 in future WPs) */
 #define I2C1_SCL_PORT       GPIOB
@@ -105,16 +190,19 @@
 #define I2C1_SDA_PORT       GPIOB
 #define I2C1_SDA_PIN        GPIO_PIN_7      /* PB7, I2C1_SDA AF6 — unchanged */
 
-/* Vbat divider — unchanged between REV A and REV B (100k/68k on both):
+/* Vbat divider (confirmed against REV B schematic, 2026-08-17 — corrects
+ * an earlier 100k/68k assumption carried over from REV A):
  *   R_VBAT1 = 100 kΩ  (high side)
- *   R_VBAT2 =  68 kΩ  (low side)
- *   V_ADC   = Vbat × 68 / 168
- *   Vbat_mv = adc_raw × 21 / 17     (max 4095×21 = 85,995 fits in uint32_t)
- */
+ *   R_VBAT2 =  33 kΩ  (low side)
+ *   V_ADC   = Vbat × 33 / 133
+ *   Vbat_mv = V_ADC_mv × 133 / 33
+ * V_ADC_mv must come from hal_adc_raw_to_mv() (VREFINT-ratiometric — see
+ * HAL_App/hal_adc.h), not a raw-code shortcut; see the LM35_SCALE comment
+ * below for why a fixed-reference assumption is wrong on this board. */
 #define VBAT_DIV_HIGH_K     100
-#define VBAT_DIV_LOW_K      68
-#define VBAT_SCALE_NUM      21
-#define VBAT_SCALE_DEN      17
+#define VBAT_DIV_LOW_K      33
+#define VBAT_SCALE_NUM      133
+#define VBAT_SCALE_DEN      33
 
 /* LM35 conversion for the future TEMP_SENSE_EXT driver: 10 mV/°C, 0 V at
  * 0°C, no offset. Use hal_adc_raw_to_mv() (HAL_App/hal_adc.h) to get actual
@@ -138,7 +226,9 @@
 /* Reserved for later work packages:
  *   SCL3300 / PCAP04            — removed from REV B hardware, no longer applicable
  *   RN4871 UART                 — WP5 (USART6 now, was USART2)
- *   Encoders                    — WP3 (PA0/PC4/PB0/PB1/PB2/PC5)
+ *   Encoder A/B quadrature       — WP3 (PC4/PB0/PB1/PB2). Push switches
+ *                                  ENC_1SW/ENC_2SW are already defined above
+ *                                  for their WKUP1/WKUP5 role.
  *   Buzzer TIM3_CH4              — WP3 (PC9, was TIM1)
  *   USB DP/DM                   — WP4 (PA11/PA12, unchanged, standard pins)
  *   External ADC/DAC front end (SPI1/SPI3) — unidentified, future WP

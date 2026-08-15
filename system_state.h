@@ -42,6 +42,9 @@ typedef struct {
 
     bool     ble_connected;
     bool     usb_connected;
+    bool     woke_from_standby;   /* true if this boot resumed from Standby
+                                    * mode rather than a power-on/other reset —
+                                    * see HAL_App/hal_power.h */
 
     bool     sensor_scl3300_ok;
     bool     sensor_pcap04_1_ok;
