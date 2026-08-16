@@ -28,7 +28,29 @@
                                               * at 5 Hz (datasheet: 1-10 Hz) — no
                                               * hardware PWM channel on REV B. */
 
-/* Power */
+/* Power
+ *
+ * KNOWN HARDWARE MISTAKE (confirmed against the schematic, 2026-08-17):
+ * neither of these two pins has a board-level pull resistor, but both
+ * drive circuits that explicitly must not be left floating:
+ *   - PWR_3V3_EN (PC6) drives a P-MOSFET gate DIRECTLY (no external
+ *     pull-up). A floating P-MOSFET gate is an undefined/partially-on
+ *     state, not a safe "off".
+ *   - PWR_5V_EN (PC7) feeds a regulator's "Active Low Shutdown Input" (no
+ *     external pull-down); that chip's own datasheet says "this pin must
+ *     not be allowed to float."
+ * This matters because STM32 Standby mode powers down the whole GPIO
+ * configuration domain — once Standby actually engages, these pins stop
+ * being actively driven regardless of what level firmware last set, and
+ * with no board-level pull, they float. Mitigated in firmware via STM32's
+ * Standby-mode I/O retention (PWR_PUCRx/PDCRx + APC) —
+ * HAL_App/hal_power.c's hal_power_configure_rail_retention() holds PC6
+ * pulled up (MOSFET off) and PC7 pulled down (shutdown asserted) using
+ * the MCU's own weak internal pulls, which — unlike normal GPIO output
+ * drive — persist through Standby. Not a substitute for fixing this on
+ * the next hardware rev with real pull resistors, but sufficient given
+ * REV B boards already exist.
+ */
 #define PWR_3V3_EN_PORT     GPIOC
 #define PWR_3V3_EN_PIN      GPIO_PIN_6      /* PC6, !3V3_EN!, active LOW (Low = on,
                                               * High = off) — inverted vs. the old
