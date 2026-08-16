@@ -198,18 +198,47 @@
  *   Vbat_mv = V_ADC_mv × 133 / 33
  * V_ADC_mv must come from hal_adc_raw_to_mv() (VREFINT-ratiometric — see
  * HAL_App/hal_adc.h), not a raw-code shortcut; see the LM35_SCALE comment
- * below for why a fixed-reference assumption is wrong on this board. */
+ * below for why a fixed-reference assumption is wrong on this board.
+ *
+ * KNOWN HARDWARE MISTAKE (2026-08-17, acknowledged, not being reworked):
+ * this divider is backwards from optimal. With the high side (100k) on top
+ * and low side (33k) on bottom, a full 4.2V battery only reaches
+ * V_ADC = 4200x33/133 ~ 1042 mV — using under a third of the ADC's 0-VDDA
+ * (~3.3V) range. Swapped (33k top / 100k bottom), the same 4.2V would
+ * reach V_ADC = 4200x100/133 ~ 3158 mV, using nearly the full range for
+ * much better resolution. No safety issue either way (well under VDDA,
+ * no overvoltage risk) and the resolution we do get is still adequate —
+ * roughly 3.3 mV of Vbat per ADC LSB (vs. ~1.1 mV/LSB if swapped) with
+ * 12-bit + 16x oversampled ADC1, plenty fine for SOC estimation — so this
+ * is a "note for next hardware rev" rather than something worth reworking
+ * on already-built boards. */
 #define VBAT_DIV_HIGH_K     100
 #define VBAT_DIV_LOW_K      33
 #define VBAT_SCALE_NUM      133
 #define VBAT_SCALE_DEN      33
 
-/* LM35 conversion for the future TEMP_SENSE_EXT driver: 10 mV/°C, 0 V at
- * 0°C, no offset. Use hal_adc_raw_to_mv() (HAL_App/hal_adc.h) to get actual
- * millivolts first — REV B ties VREF+ directly to the 3V3_STANDBY rail, not
- * a fixed-voltage VREFBUF, so a raw-code shortcut assuming a constant
- * reference (as this file used to have) is wrong. Once converted to mV:
- *   Temp_cdeg = V_mV × 10
+/* LM35 conversion for the future TEMP_SENSE_EXT driver — verified against
+ * the actual datasheet (TI SNIS159H, "LM35 Precision Centigrade Temperature
+ * Sensors"; local copy: .../InclinationMeter/_archive/Datasheets/LM35.pdf),
+ * not assumed from memory:
+ *   VOUT = 10 mV/°C x T, 0 mV at 0°C, single linear equation (no piecewise
+ *   segments like TMP236 — plain LM35 doesn't need one).
+ *   Temp_cdeg = V_mV x 10
+ * Use hal_adc_raw_to_mv() (HAL_App/hal_adc.h) to get actual millivolts
+ * first — REV B ties VREF+ directly to the 3V3_STANDBY rail, not a
+ * fixed-voltage VREFBUF, so a raw-code shortcut assuming a constant
+ * reference (as this file used to have) is wrong.
+ * Supply: datasheet specifies 4V-30V — our 5V rail is comfortably inside
+ * that range (confirms why TEMP_SENSE_EXT needs 5V_EN, not just 3.3V).
+ * CAVEAT — negative temperatures: the basic single-supply hookup (VOUT
+ * straight into an ADC pin, no negative bias) cannot output a negative
+ * voltage, so it can't indicate temperatures below ~0°C at all in that
+ * configuration — the datasheet's full -55°C to +150°C range needs an
+ * extra pull-down resistor to a small negative bias (its "Figure 18"
+ * circuit). NOT verified against the actual REV B schematic whether that
+ * bias network exists around TEMP_SENSE_EXT or whether it's a bare
+ * single-supply hookup — check before assuming this sensor can read
+ * freezing/sub-zero temperatures once its driver is written.
  * Not yet consumed by any driver — TEMP_SENSE_EXT has no driver yet (see
  * TEMP_SENSE_EXT_PIN above). LM35_SCALE kept as documentation of the
  * intended formula, not currently referenced by code. */

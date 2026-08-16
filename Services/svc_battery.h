@@ -6,8 +6,8 @@
 
 typedef enum {
     BATTERY_NORMAL = 0,
-    BATTERY_LOW,            /* < battery_low_pct */
-    BATTERY_CRITICAL,       /* < battery_critical_pct  */
+    BATTERY_LOW,            /* < battery_low_mv (and >= battery_critical_mv) */
+    BATTERY_CRITICAL,       /* < battery_critical_mv */
     BATTERY_CHARGING,
     BATTERY_FULL,           /* charge complete — STANDBY_SENSE asserted while USB present */
 } battery_state_t;

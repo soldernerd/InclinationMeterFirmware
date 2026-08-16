@@ -128,11 +128,9 @@ void svc_battery_update(void)
         s_state = BATTERY_FULL;
     } else if (s_usb_connected && s_charging) {
         s_state = BATTERY_CHARGING;
-    } else if (s_vbat_mv > 0 && s_vbat_mv < g_device_settings.battery_cutoff_mv) {
+    } else if (s_vbat_mv > 0 && s_vbat_mv < g_device_settings.battery_critical_mv) {
         s_state = BATTERY_CRITICAL;
-    } else if (s_soc_pct < g_device_settings.battery_critical_pct) {
-        s_state = BATTERY_CRITICAL;
-    } else if (s_soc_pct < g_device_settings.battery_low_pct) {
+    } else if (s_vbat_mv > 0 && s_vbat_mv < g_device_settings.battery_low_mv) {
         s_state = BATTERY_LOW;
     } else {
         s_state = BATTERY_NORMAL;

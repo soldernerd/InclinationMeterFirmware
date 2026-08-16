@@ -27,14 +27,26 @@
 #define DEFAULT_FILTER_CUTOFF_HZ_NUM    1
 #define DEFAULT_FILTER_CUTOFF_HZ_DEN    2
 
-/* --- Battery --- */
-#define DEFAULT_BATTERY_CUTOFF_MV       3600
-#define DEFAULT_BATTERY_LOW_PCT         20
-#define DEFAULT_BATTERY_CRITICAL_PCT    5
+/* --- Battery ---
+ * Voltage-based thresholds (2026-08-17, user-specified): >=3.80V normal,
+ * 3.65V-3.80V low, <3.65V critical. Replaced the previous SOC%-based
+ * low/critical thresholds — those and the raw voltage check were two
+ * different views of the same underlying measurement (battery voltage),
+ * which was redundant; voltage is the more direct, sensor-agnostic
+ * quantity so it's now the sole classification input (see
+ * Services/svc_battery.c). SOC% is still computed/exposed for display,
+ * just no longer used for state classification. */
+#define DEFAULT_BATTERY_CRITICAL_MV     3650
+#define DEFAULT_BATTERY_LOW_MV          3800
 
 /* --- EEPROM --- */
 #define EEPROM_MAGIC                    0xA55A
-#define EEPROM_SETTINGS_VERSION         0x0001
+#define EEPROM_SETTINGS_VERSION         0x0002  /* bumped: battery_cutoff_mv/
+                                                   * battery_low_pct/
+                                                   * battery_critical_pct
+                                                   * replaced by
+                                                   * battery_critical_mv/
+                                                   * battery_low_mv */
 #define EEPROM_CALIBRATION_VERSION      0x0001
 #define EEPROM_SETTINGS_ADDR            0x0000
 #define EEPROM_CALIBRATION_ADDR         0x0100
