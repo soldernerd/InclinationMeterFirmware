@@ -45,4 +45,13 @@ bool      drv_24lc256_is_busy(void);    /* true while DMA active or write cycle 
  * Polls EEPROM ACK to detect end of internal write cycle. */
 void      drv_24lc256_update(void);
 
+/* Abandons whatever operation is in flight: aborts the underlying I2C
+ * transfer and forces the state machine back to idle. Use when a caller
+ * (e.g. svc_storage.c's blocking helpers) has given up waiting on its own
+ * timeout and can no longer guarantee the buffer it passed to
+ * drv_24lc256_start_read()/start_write_page() stays valid — without this,
+ * a late DMA completion could still write into memory the caller has
+ * since reused (e.g. a stack buffer that's gone out of scope). */
+void      drv_24lc256_abort(void);
+
 #endif /* DRV_24LC256_H */

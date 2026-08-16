@@ -46,12 +46,12 @@ DrvStatus drv_tmp236_get_result(tmp236_data_t *out)
      * "ready" flag — see hal_adc.c / App/app_scheduler.c for why: "ready"
      * gets cleared the instant any faster-running consumer restarts a scan,
      * starving slower consumers of ever observing it true. */
-    const adc_results_t *r = hal_adc_get_results();
-    if (!r->valid) {
+    adc_results_t r = hal_adc_get_results();
+    if (!r.valid) {
         return DRV_ERR_NOT_READY;
     }
 
-    uint32_t v_mv = hal_adc_raw_to_mv(r->temp_raw);
+    uint32_t v_mv = hal_adc_raw_to_mv(r.temp_raw, r.vrefint_raw);
     int32_t  temp_cdeg;
     if (v_mv <= g_device_settings.tmp236_seg_boundary_mv) {
         temp_cdeg = ((int32_t)v_mv - g_device_settings.tmp236_seg1_voffs_mv)

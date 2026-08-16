@@ -132,6 +132,11 @@ static bool blocking_read(uint16_t addr, uint8_t *buf, uint16_t len)
     while (drv_24lc256_is_busy()) {
         drv_24lc256_update();
         if ((uint32_t)(hal_systick_get_ms() - start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
+            /* Give up — abort rather than leaving the DMA target armed at
+             * `buf`, which may be a caller's stack buffer that's about to
+             * go out of scope. Also resets the driver's own state machine
+             * so a stuck bus doesn't wedge every future EEPROM access. */
+            drv_24lc256_abort();
             return false;     /* hardware fault */
         }
     }
@@ -148,6 +153,7 @@ static bool blocking_write_page(uint16_t addr, const uint8_t *buf, uint16_t len)
     while (drv_24lc256_is_busy()) {
         drv_24lc256_update();
         if ((uint32_t)(hal_systick_get_ms() - start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
+            drv_24lc256_abort();   /* see blocking_read()'s comment */
             return false;     /* hardware fault */
         }
     }

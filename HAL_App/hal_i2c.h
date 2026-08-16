@@ -37,4 +37,12 @@ bool hal_i2c_is_busy(HalI2cInstance instance);
  * write-cycle completion, t_WC up to 5 ms). */
 bool hal_i2c_device_ready(HalI2cInstance instance, uint8_t addr);
 
+/* Aborts an in-flight DMA transfer (best-effort — issues a NACK+STOP via
+ * the HAL). Use when a caller has given up waiting (e.g. a blocking
+ * helper's own timeout) and can no longer guarantee its DMA target buffer
+ * stays valid; without this a late completion callback could still write
+ * into memory the caller has since reused (e.g. a stack buffer that's
+ * gone out of scope). */
+void hal_i2c_abort(HalI2cInstance instance, uint8_t addr);
+
 #endif /* HAL_I2C_H */

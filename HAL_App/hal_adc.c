@@ -52,14 +52,23 @@ bool hal_adc_is_ready(void)
     return s_ready;
 }
 
-const adc_results_t *hal_adc_get_results(void)
+adc_results_t hal_adc_get_results(void)
 {
-    return &s_results;
+    /* Snapshot atomically w.r.t. HAL_ADC_ConvCpltCallback — s_results is
+     * four fields updated together by the ISR; without this, a caller
+     * could read one field, get preempted by a new scan completing, then
+     * read another field from the new scan, silently mixing two different
+     * scans' data. */
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    adc_results_t snapshot = s_results;
+    __set_PRIMASK(primask);
+    return snapshot;
 }
 
-uint32_t hal_adc_raw_to_mv(uint16_t channel_raw)
+uint32_t hal_adc_raw_to_mv(uint16_t channel_raw, uint16_t vrefint_raw)
 {
-    if (s_results.vrefint_raw == 0U) {
+    if (vrefint_raw == 0U) {
         return 0U;   /* no valid scan yet — avoid divide-by-zero */
     }
     /* Standard STM32 VREFINT-ratiometric conversion: the factory-calibrated
@@ -69,7 +78,7 @@ uint32_t hal_adc_raw_to_mv(uint16_t channel_raw)
      * scan is relative to. Oversampling (16x, right-shift 4, see ADC1 init)
      * keeps every channel on the same 12-bit numeric scale as VREFINT_CAL
      * itself, so no rescaling is needed beyond this. */
-    uint32_t vdda_mv = ((uint32_t)VREFINT_CAL_VREF * (*VREFINT_CAL_ADDR)) / s_results.vrefint_raw;
+    uint32_t vdda_mv = ((uint32_t)VREFINT_CAL_VREF * (*VREFINT_CAL_ADDR)) / vrefint_raw;
     return ((uint32_t)channel_raw * vdda_mv) / 4095U;
 }
 
@@ -101,7 +110,12 @@ void HAL_ADC_ErrorCallback(ADC_HandleTypeDef *hadc)
     if (hadc->Instance != hadc1.Instance) {
         return;
     }
-    s_started = false;
-    s_ready   = false;
+    s_started        = false;
+    s_ready          = false;
+    /* Without this, consumers gating on .valid (svc_battery.c,
+     * drv_tmp236.c) would keep trusting the last-good reading forever —
+     * .valid is only ever set true in HAL_ADC_ConvCpltCallback and had
+     * nothing clearing it back to false on a persistent fault. */
+    s_results.valid  = false;
     HAL_ADC_Stop_DMA(hadc);
 }
