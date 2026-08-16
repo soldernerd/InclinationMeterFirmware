@@ -24,18 +24,18 @@ GC runs; nothing is deleted immediately.
 
 ## Status
 
-| Branch | State | Base | Feature commits kept | Regen commit dropped |
-|---|---|---|---|---|
-| `wp2` | **Rebased, committed, force-pushed to origin** | `master@e6a756d` | `2ef77cf` → new `f996ff9` | `cf855c6` |
-| `wp3` | Not started | `wp2` (rebased) | `f2646e4` | `880c218` |
+| Branch | State | Base | Notes |
+|---|---|---|---|
+| `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
+| `wp3` | Not started | `wp2@ba2aa2c` (once pushed — **not** the old `f996ff9` this doc originally referenced) | `f2646e4` | `880c218` |
 | `wp4` | Not started | `wp3` (rebased) | `d1423b5`, `48e8562` | `ff054fb` |
 | `wp5` | Not started | `wp4` (rebased) | `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping) | `4bc4f16` |
 
-**Build verification:** no ARM toolchain (`arm-none-eabi-gcc` / `cmake` / `ninja`) was
-reachable in the environment this rebase was done in. `wp2` was checked by manual/static
-review only — every changed macro traced from definition to call site, `grep` swept for
-leftover references to old pin names. **Not actually compiled.** Run a real build before
-trusting any rebased branch.
+**Build verification:** an ARM toolchain (`arm-none-eabi-gcc` 14.2.1, CMake 4.4.2, Ninja
+1.13.2, installed via `winget`) is now available and has been used throughout — `wp2` has
+been built successfully many times over this work, most recently after every fix in both
+review passes. All builds clean under `-Wall -Wextra -Werror`. **Still not flashed to real
+hardware** — see the outstanding items in "wp2 — post-rebase work" below.
 
 ---
 
@@ -106,6 +106,65 @@ Check each explicitly for every branch — don't assume a clean cherry-pick:
   future work. Both temp sensors are powered from the 5V rail (`PWR_5V_EN`) — also now
   documented at each pin's definition in `pin_config.h`.
 
+## wp2 — post-rebase work (2026-08-16 to 2026-08-17), well beyond the original checklist
+
+After the mechanical rebase above, `wp2` was rebased a *second* time onto the post-WP1-
+REV-B-port `master` (`f402d2b`, which includes the VCOM/SPI2/rail-sequencing fixes from
+the "Known critical bug" section below) so it would inherit those fixes instead of
+duplicating them under different macro names. `wp2` then grew substantially past what the
+original rebase task scoped, driven by direct user requirements:
+
+- **TMP236 on-board temp sensor implemented** (`ace2f11`) — `drv_lm35.c` renamed to
+  `drv_tmp236.c`, reimplemented against TI's actual datasheet (SBOS857E) piecewise-linear
+  transfer function, not a guess. Added `hal_adc_raw_to_mv()`, a VREFINT-ratiometric
+  raw-code-to-mV conversion needed because REV B ties VREF+ to the 3V3_STANDBY rail rather
+  than a fixed reference.
+- **Full power management implemented** (`be97f0a`) — TP4056 charge control
+  (`CHARGE_SENSE`/`STANDBY_SENSE` read, `CHARGE_EN` driven), a critical-battery →
+  STM32 Standby-mode shutdown sequence (`HAL_App/hal_power.c`, new), 3 Standby wake-up
+  pins (`ENC_1SW`/`VBUS_SENSE`/`ENC_2SW`, all high-level triggered).
+- **Battery thresholds switched from SOC% to direct voltage** (`a63ecf0`) — user-specified
+  `battery_critical_mv`=3650, `battery_low_mv`=3800. Also corrected the Vbat divider ratio
+  (100k/33k, not the previously-assumed 100k/68k) and flagged that the divider is wired
+  backwards from optimal (safe, but wastes ~2/3 of the ADC's usable range — noted for the
+  next hardware rev, not reworked on existing boards).
+- **All calibration constants moved to EEPROM** (`1155765`) — project rule, stated
+  explicitly by the user: "no such calibration in flash." `vbat_scale_num/den`, all 8
+  TMP236 piecewise-formula constants, and `lm35_scale_mv_per_c` are now `DeviceSettings`
+  fields (EEPROM-backed) with `DEFAULT_*` seeds in `config.h`, not bare `#define`s.
+  `EEPROM_SETTINGS_VERSION` bumped twice in this stretch of work (0x0001→0x0002→0x0003).
+- **TP4056 charge policy refined against the actual datasheet** (`1155765`) — charging
+  only starts once Vbat drops to `battery_low_mv` (avoids topping off an already-near-full
+  LiPo, which degrades it), `CHARGE_EN` now turns off on charge-complete (not just on USB
+  loss), and `CHARGE_SENSE`/`STANDBY_SENSE` are only trusted while `VBUS_SENSE` is present
+  (the TP4056 is powered from VBUS — its outputs are undriven without it).
+- **Two full code-review passes** (`/code-review`, high effort, 8-angle) — first pass (10
+  findings, all fixed in `31381f7`) covered the original mechanical-rebase content; second
+  pass (10 more findings, after all the work above) caught real bugs: an ADC race mixing
+  raw values across scans, an EEPROM I2C timeout that could corrupt a caller's stack via a
+  late DMA completion, a dropped fail-safe (0mV reading silently became "normal" instead
+  of "critical"), an ADC error path that never invalidated stale data, `CHARGE_EN`
+  inheriting an unsafe boot-time default, and more — all fixed in `cc024a1`.
+- **Standby-mode GPIO/rail-retention gap — confirmed as a real REV B hardware mistake,
+  not a firmware guess** (`ba2aa2c`). The second review flagged that `HAL_PWR_EnterSTANDBYMode()`
+  doesn't preserve GPIO output state through actual Standby entry. User checked the
+  schematic and confirmed: `PWR_3V3_EN` (PC6) drives a P-MOSFET gate directly with no
+  external pull-up, and `PWR_5V_EN` (PC7) feeds a regulator's active-low shutdown input
+  ("must not be allowed to float" per its datasheet) with no external pull-down — a real
+  design gap on already-built boards. Mitigated in firmware using STM32's Standby I/O
+  retention (`PWR_PUCRx`/`PDCRx` + APC): `hal_power_configure_rail_retention()` holds PC6
+  pulled up and PC7 pulled down through Standby using the MCU's own weak internal pulls.
+  Flagged in `pin_config.h` for a real fix (board-level pull resistors) on the next rev.
+
+**Still outstanding — nothing here has touched real hardware yet:**
+- Standby entry/wake cycle itself (does it actually reach ~0.28 µA with the rail-retention
+  pulls active; do all 3 wake sources actually wake the device; does I/O retention behave
+  as expected on real silicon).
+- TP4056 charge-hysteresis behavior (start-at-low-threshold, latch-until-complete).
+- Corrected Vbat divider ratio and TMP236 formula against a real battery/thermometer.
+- The EEPROM version-bump migration path (0x0001→0x0003) on an EEPROM that actually has
+  old data written to it.
+
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 
 **Previously:** `HAL_App/hal_tim.c`'s `hal_tim_vcom_start()` still drove `TIM3_CH1` hardware
@@ -138,7 +197,12 @@ confirm "Hello World" + LED heartbeat render on real REV B hardware.
 ## Resuming this work
 
 1. Read this file and the two docs linked at the top.
-2. `git checkout wp3 && git reset --hard wp2 && git cherry-pick f2646e4` (drop `880c218`).
+2. `git checkout wp3 && git reset --hard wp2 && git cherry-pick f2646e4` (drop `880c218`) —
+   `wp2` here means its current tip (`ba2aa2c` as of this writing), **not** the `f996ff9`
+   this doc originally pointed at. If `wp3` was ever attempted against the old tip, redo it
+   against the new one — `wp2`'s macro names (`PWR_3V3_EN_*`, `PWR_5V_EN_*`, `LED_STS_*`,
+   `battery_critical_mv`/`battery_low_mv`, etc.) and its whole EEPROM layout changed
+   significantly in the post-rebase work above.
 3. Resolve conflicts, apply the same 6-item checklist, grep for stale pin names.
 4. Build and verify before moving to `wp4`. Update this file's status table and add a
    `wp3` section mirroring the `wp2` one above.
