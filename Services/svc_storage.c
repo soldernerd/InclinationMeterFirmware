@@ -71,9 +71,8 @@ static void fill_default_settings(DeviceSettings *s)
     s->settling_timeout_ms      = DEFAULT_SETTLING_TIMEOUT_MS;
     s->filter_cutoff_hz_num     = DEFAULT_FILTER_CUTOFF_HZ_NUM;
     s->filter_cutoff_hz_den     = DEFAULT_FILTER_CUTOFF_HZ_DEN;
-    s->battery_cutoff_mv        = DEFAULT_BATTERY_CUTOFF_MV;
-    s->battery_low_pct          = DEFAULT_BATTERY_LOW_PCT;
-    s->battery_critical_pct     = DEFAULT_BATTERY_CRITICAL_PCT;
+    s->battery_critical_mv      = DEFAULT_BATTERY_CRITICAL_MV;
+    s->battery_low_mv           = DEFAULT_BATTERY_LOW_MV;
     s->checksum                 = 0;
 }
 

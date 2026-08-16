@@ -17,9 +17,8 @@ typedef struct {
     uint32_t settling_timeout_ms;
     uint16_t filter_cutoff_hz_num;
     uint16_t filter_cutoff_hz_den;
-    uint16_t battery_cutoff_mv;
-    uint8_t  battery_low_pct;
-    uint8_t  battery_critical_pct;
+    uint16_t battery_critical_mv;   /* below this: BATTERY_CRITICAL */
+    uint16_t battery_low_mv;        /* below this (and >= critical): BATTERY_LOW */
     uint16_t checksum;
 } DeviceSettings;
 
