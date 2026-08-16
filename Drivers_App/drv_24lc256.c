@@ -111,6 +111,17 @@ bool drv_24lc256_is_busy(void)
     return s_op != OP_IDLE;
 }
 
+void drv_24lc256_abort(void)
+{
+    hal_i2c_abort(HAL_I2C_MAIN, EEPROM_I2C_ADDR);
+    s_op            = OP_IDLE;
+    s_dma_done      = false;
+    s_dma_success   = false;
+    s_read_buf      = 0;
+    s_read_len      = 0;
+    s_write_success = false;
+}
+
 void drv_24lc256_update(void)
 {
     switch (s_op) {

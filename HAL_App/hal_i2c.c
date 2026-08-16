@@ -108,6 +108,14 @@ bool hal_i2c_device_ready(HalI2cInstance instance, uint8_t addr)
     return HAL_I2C_IsDeviceReady(h, (uint16_t)(addr << 1), 1, 2) == HAL_OK;
 }
 
+void hal_i2c_abort(HalI2cInstance instance, uint8_t addr)
+{
+    I2C_HandleTypeDef *h = handle_for(instance);
+    if (h == 0) return;
+    (void)HAL_I2C_Master_Abort_IT(h, (uint16_t)(addr << 1));
+    s_busy[instance] = false;
+}
+
 /* HAL weak overrides — fire on DMA complete */
 void HAL_I2C_MasterTxCpltCallback(I2C_HandleTypeDef *hi2c)
 {

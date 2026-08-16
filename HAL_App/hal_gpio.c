@@ -35,6 +35,15 @@ void hal_gpio_init(void)
     LL_GPIO_ResetOutputPin(LED_PWR_PORT, LED_PWR_PIN);
     LL_GPIO_ResetOutputPin(LED_STS_PORT, LED_STS_PIN);
 
+    /* CHARGE_EN safe default: disabled (active-LOW, so HIGH = don't
+     * charge). CubeMX's own reset-state default happens to leave this pin
+     * LOW (charge enabled) — svc_battery_update() doesn't run and set the
+     * real policy until its first scheduler tick (task_battery_ms, 1s
+     * default), later still if EEPROM I/O is slow. Without this, every
+     * boot — including a Standby wake, which is a full MCU reset — would
+     * briefly enable charging regardless of battery state. */
+    LL_GPIO_SetOutputPin(CHARGE_EN_PORT, CHARGE_EN_PIN);
+
     /* VBUS_SENSE (PA2), ENC_1SW (PA0), and ENC_2SW (PC5) are all configured
      * as SYS_WKUPx in CubeMX, which gets no MX_GPIO_Init() call — left in
      * POR-default Analog mode (input buffer disabled). The PWR peripheral's

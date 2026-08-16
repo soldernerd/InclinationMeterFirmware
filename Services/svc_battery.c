@@ -3,6 +3,7 @@
 #include "hal_gpio.h"
 #include "hal_power.h"
 #include "hal_systick.h"
+#include "svc_storage.h"
 #include "system_state.h"
 #include "config.h"
 #include "pin_config.h"
@@ -21,12 +22,12 @@ static bool             s_usb_connected   = false;
 static bool             s_charging        = false;
 static bool             s_charge_complete = false;
 
-/* Charge-enable latch — see the policy comment in svc_battery_update(). */
+/* Charge-enable latch — see the policy comment in update_charge_enable(). */
 static bool             s_charge_enabled  = false;
 
 /* Shutdown-arm latch — gives the display ~2 s to show a low-battery
  * warning before actually entering low power. Re-checked against USB
- * presence every tick (see svc_battery_update()), not just when armed. */
+ * presence every tick (see update_shutdown_arm()), not just when armed. */
 static bool         s_shutdown_armed   = false;
 static uint32_t     s_shutdown_start_ms = 0;
 
@@ -34,20 +35,24 @@ static uint32_t     s_shutdown_start_ms = 0;
  * actually seen this many valid ADC scans. s_soc_pct/s_vbat_mv start at 0,
  * which reads as "critical" — without this gate a slow-to-calibrate or
  * momentarily-failing ADC would trip the shutdown latch on a fully charged
- * battery. At the default 100 ms sensor-task period this is ~1 s, well
- * within what's imperceptible to the user at boot. */
+ * battery. NOTE: this gates on svc_battery_update() ticks, which run at
+ * task_battery_ms (1000 ms default, config.h) — 10 samples is therefore
+ * ~10 s in practice, not the ~1 s a faster task period would give. Still
+ * imperceptible as a startup delay; kept conservative (10 confirmed
+ * readings) rather than shortened, since this is a safety gate. */
 #define BATTERY_STARTUP_MIN_SAMPLES  10U
 static uint8_t s_valid_sample_count = 0;
 
-static uint16_t adc_to_vbat_mv(uint16_t adc_raw)
+static uint16_t adc_to_vbat_mv(uint16_t vbat_raw, uint16_t vrefint_raw)
 {
     /* Vbat_mv = V_ADC_mv × vbat_scale_num / vbat_scale_den (100k/33k
      * divider — see pin_config.h; the scale factor itself is EEPROM-backed,
      * not a #define, per project convention). V_ADC_mv comes from the
      * VREFINT-ratiometric conversion, not a raw-code shortcut: REV B ties
      * VREF+ directly to the 3V3_STANDBY rail rather than a fixed-voltage
-     * reference, so VDDA can't be assumed constant. */
-    uint32_t v_adc_mv = hal_adc_raw_to_mv(adc_raw);
+     * reference, so VDDA can't be assumed constant. Both raw values must
+     * come from the same hal_adc_get_results() snapshot — see hal_adc.h. */
+    uint32_t v_adc_mv = hal_adc_raw_to_mv(vbat_raw, vrefint_raw);
     return (uint16_t)((v_adc_mv * g_device_settings.vbat_scale_num) / g_device_settings.vbat_scale_den);
 }
 
@@ -70,6 +75,11 @@ static uint8_t vbat_to_soc(uint16_t vbat_mv)
     return 100;
 }
 
+static bool startup_grace_active(void)
+{
+    return s_valid_sample_count < BATTERY_STARTUP_MIN_SAMPLES;
+}
+
 void svc_battery_init(void)
 {
     s_state              = BATTERY_NORMAL;
@@ -85,6 +95,15 @@ void svc_battery_init(void)
 
 void svc_battery_enter_low_power(void)
 {
+    /* Let any in-flight EEPROM write finish rather than tearing it mid-
+     * cycle — bounded wait so a genuinely stuck I2C bus can't block
+     * shutdown forever. */
+    uint32_t wait_start_ms = hal_systick_get_ms();
+    while (svc_storage_is_busy() &&
+           (uint32_t)(hal_systick_get_ms() - wait_start_ms) < 250U) {
+        svc_storage_update();
+    }
+
     /* Both LEDs and both switched rails off. The MCU's own supply
      * (3V3_STANDBY) is a separate always-on rail, unaffected — this only
      * powers down peripherals. */
@@ -99,7 +118,9 @@ void svc_battery_enter_low_power(void)
      * returning here (see hal_power.c). */
 }
 
-void svc_battery_update(void)
+/* ---- svc_battery_update()'s sub-steps, in the order they run ---- */
+
+static void read_charger_inputs(void)
 {
     s_usb_connected = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN);   /* active HIGH */
 
@@ -112,32 +133,40 @@ void svc_battery_update(void)
         s_charging        = false;
         s_charge_complete = false;
     }
+}
 
-    /* Voltage read — only if ADC has produced fresh data this tick */
-    const adc_results_t *r = hal_adc_get_results();
-    if (r->valid) {
-        s_vbat_mv = adc_to_vbat_mv(r->vbat_raw);
+static void read_battery_voltage(void)
+{
+    /* Only if ADC has produced fresh data this tick */
+    adc_results_t r = hal_adc_get_results();
+    if (r.valid) {
+        s_vbat_mv = adc_to_vbat_mv(r.vbat_raw, r.vrefint_raw);
         s_soc_pct = vbat_to_soc(s_vbat_mv);
         if (s_valid_sample_count < BATTERY_STARTUP_MIN_SAMPLES) {
             s_valid_sample_count++;
         }
     }
+}
 
-    /* Charge-enable policy: only start charging once Vbat has actually
-     * dropped to battery_low_mv — avoids keeping an already-near-full LiPo
-     * topped off, which degrades its life over time. Once started, stay
-     * latched on (don't oscillate as Vbat rises back above the threshold
+static void update_charge_enable(void)
+{
+    /* Only start charging once Vbat has actually dropped to
+     * battery_low_mv — avoids keeping an already-near-full LiPo topped
+     * off, which degrades its life over time. Once started, stay latched
+     * on (don't oscillate as Vbat rises back above the threshold
      * mid-charge) until the TP4056 reports complete or USB disappears. */
     if (!s_usb_connected || s_charge_complete) {
         s_charge_enabled = false;
-    } else if (s_valid_sample_count >= BATTERY_STARTUP_MIN_SAMPLES &&
-               s_vbat_mv > 0 && s_vbat_mv <= g_device_settings.battery_low_mv) {
+    } else if (!startup_grace_active() && s_vbat_mv > 0 &&
+               s_vbat_mv < g_device_settings.battery_low_mv) {
         s_charge_enabled = true;
     }
     hal_gpio_set(CHARGE_EN_PORT, CHARGE_EN_PIN, !s_charge_enabled);
+}
 
-    /* State classification — order matters: charging/full beat low/critical */
-    if (s_valid_sample_count < BATTERY_STARTUP_MIN_SAMPLES) {
+static void classify_battery_state(void)
+{
+    if (startup_grace_active()) {
         /* Not enough confirmed-real samples yet — s_soc_pct/s_vbat_mv may
          * still be zero-initialized defaults, not real data. Assume NORMAL
          * rather than risk tripping the shutdown latch during startup. */
@@ -146,25 +175,27 @@ void svc_battery_update(void)
         s_state = BATTERY_FULL;
     } else if (s_usb_connected && s_charging) {
         s_state = BATTERY_CHARGING;
-    } else if (s_vbat_mv > 0 && s_vbat_mv < g_device_settings.battery_critical_mv) {
+    } else if (s_vbat_mv == 0) {
+        /* Zero past the startup grace period is a sense-line/ADC fault,
+         * not a real reading — treat as critical rather than silently
+         * reporting normal. */
         s_state = BATTERY_CRITICAL;
-    } else if (s_vbat_mv > 0 && s_vbat_mv < g_device_settings.battery_low_mv) {
+    } else if (s_vbat_mv < g_device_settings.battery_critical_mv) {
+        s_state = BATTERY_CRITICAL;
+    } else if (s_vbat_mv < g_device_settings.battery_low_mv) {
         s_state = BATTERY_LOW;
     } else {
         s_state = BATTERY_NORMAL;
     }
+}
 
-    /* Reflect into shared state */
-    g_system_state.battery_soc_pct = s_soc_pct;
-    g_system_state.battery_charging = s_charging;
-    g_system_state.battery_critical = (s_state == BATTERY_CRITICAL);
-    g_system_state.usb_connected    = s_usb_connected;
-
-    /* Low-power entry — give the display ~2 s to show a warning first.
-     * Only triggers when there's no USB power to charge from; if USB
-     * appears at any point (including mid-countdown, including right
-     * after waking from a previous low-power entry while still critical)
-     * we charge instead of shutting down. */
+static void update_shutdown_arm(void)
+{
+    /* Give the display ~2 s to show a low-battery warning first. Only
+     * triggers when there's no USB power to charge from; if USB appears
+     * at any point (including mid-countdown, including right after
+     * waking from a previous low-power entry while still critical) we
+     * charge instead of shutting down. */
     if (s_state == BATTERY_CRITICAL && !s_usb_connected) {
         if (!s_shutdown_armed) {
             s_shutdown_armed    = true;
@@ -175,6 +206,22 @@ void svc_battery_update(void)
     } else {
         s_shutdown_armed = false;
     }
+}
+
+void svc_battery_update(void)
+{
+    read_charger_inputs();
+    read_battery_voltage();
+    update_charge_enable();
+    classify_battery_state();
+
+    /* Reflect into shared state */
+    g_system_state.battery_soc_pct  = s_soc_pct;
+    g_system_state.battery_charging = s_charging;
+    g_system_state.battery_critical = (s_state == BATTERY_CRITICAL);
+    g_system_state.usb_connected    = s_usb_connected;
+
+    update_shutdown_arm();
 }
 
 battery_state_t svc_battery_get_state(void)      { return s_state; }
