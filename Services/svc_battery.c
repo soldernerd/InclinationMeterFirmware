@@ -106,13 +106,17 @@ void svc_battery_enter_low_power(void)
 
     /* Both LEDs and both switched rails off. The MCU's own supply
      * (3V3_STANDBY) is a separate always-on rail, unaffected — this only
-     * powers down peripherals. */
+     * powers down peripherals. These writes only hold while the GPIO
+     * peripheral is actually configured/driving — see
+     * hal_power_configure_rail_retention() below for what actually keeps
+     * the rails off once Standby mode itself engages. */
     hal_gpio_set(LED_PWR_PORT, LED_PWR_PIN, false);
     hal_gpio_set(LED_STS_PORT, LED_STS_PIN, false);
     hal_gpio_set(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, true);    /* active-LOW: HIGH = off */
     hal_gpio_set(PWR_5V_EN_PORT, PWR_5V_EN_PIN, false);     /* active-HIGH: LOW = off */
 
     hal_power_configure_wakeup_pins();
+    hal_power_configure_rail_retention();
     hal_power_enter_standby();
     /* Unreachable — Standby mode resets the MCU on wake rather than
      * returning here (see hal_power.c). */
