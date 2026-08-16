@@ -73,6 +73,17 @@ static void fill_default_settings(DeviceSettings *s)
     s->filter_cutoff_hz_den     = DEFAULT_FILTER_CUTOFF_HZ_DEN;
     s->battery_critical_mv      = DEFAULT_BATTERY_CRITICAL_MV;
     s->battery_low_mv           = DEFAULT_BATTERY_LOW_MV;
+    s->vbat_scale_num           = DEFAULT_VBAT_SCALE_NUM;
+    s->vbat_scale_den           = DEFAULT_VBAT_SCALE_DEN;
+    s->tmp236_seg1_voffs_mv     = DEFAULT_TMP236_SEG1_VOFFS_MV;
+    s->tmp236_seg1_num          = DEFAULT_TMP236_SEG1_NUM;
+    s->tmp236_seg1_den          = DEFAULT_TMP236_SEG1_DEN;
+    s->tmp236_seg_boundary_mv   = DEFAULT_TMP236_SEG_BOUNDARY_MV;
+    s->tmp236_seg2_voffs_mv     = DEFAULT_TMP236_SEG2_VOFFS_MV;
+    s->tmp236_seg2_num          = DEFAULT_TMP236_SEG2_NUM;
+    s->tmp236_seg2_den          = DEFAULT_TMP236_SEG2_DEN;
+    s->tmp236_seg2_tinfl_cdeg   = DEFAULT_TMP236_SEG2_TINFL_CDEG;
+    s->lm35_scale_mv_per_c      = DEFAULT_LM35_SCALE_MV_PER_C;
     s->checksum                 = 0;
 }
 

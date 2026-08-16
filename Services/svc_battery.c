@@ -21,6 +21,9 @@ static bool             s_usb_connected   = false;
 static bool             s_charging        = false;
 static bool             s_charge_complete = false;
 
+/* Charge-enable latch — see the policy comment in svc_battery_update(). */
+static bool             s_charge_enabled  = false;
+
 /* Shutdown-arm latch — gives the display ~2 s to show a low-battery
  * warning before actually entering low power. Re-checked against USB
  * presence every tick (see svc_battery_update()), not just when armed. */
@@ -38,13 +41,14 @@ static uint8_t s_valid_sample_count = 0;
 
 static uint16_t adc_to_vbat_mv(uint16_t adc_raw)
 {
-    /* Vbat_mv = V_ADC_mv × 133 / 33 (100k/33k divider — see pin_config.h).
-     * V_ADC_mv comes from the VREFINT-ratiometric conversion, not a raw-
-     * code shortcut: REV B ties VREF+ directly to the 3V3_STANDBY rail
-     * rather than a fixed-voltage reference, so VDDA can't be assumed
-     * constant. */
+    /* Vbat_mv = V_ADC_mv × vbat_scale_num / vbat_scale_den (100k/33k
+     * divider — see pin_config.h; the scale factor itself is EEPROM-backed,
+     * not a #define, per project convention). V_ADC_mv comes from the
+     * VREFINT-ratiometric conversion, not a raw-code shortcut: REV B ties
+     * VREF+ directly to the 3V3_STANDBY rail rather than a fixed-voltage
+     * reference, so VDDA can't be assumed constant. */
     uint32_t v_adc_mv = hal_adc_raw_to_mv(adc_raw);
-    return (uint16_t)((v_adc_mv * VBAT_SCALE_NUM) / VBAT_SCALE_DEN);
+    return (uint16_t)((v_adc_mv * g_device_settings.vbat_scale_num) / g_device_settings.vbat_scale_den);
 }
 
 static uint8_t vbat_to_soc(uint16_t vbat_mv)
@@ -74,6 +78,7 @@ void svc_battery_init(void)
     s_usb_connected      = false;
     s_charging           = false;
     s_charge_complete    = false;
+    s_charge_enabled     = false;
     s_shutdown_armed     = false;
     s_valid_sample_count = 0;
 }
@@ -96,17 +101,17 @@ void svc_battery_enter_low_power(void)
 
 void svc_battery_update(void)
 {
-    /* USB / charging / charge-complete detect first — pure GPIO reads,
-     * always cheap. */
-    s_usb_connected   = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN);        /* active HIGH */
-    s_charging        = !hal_gpio_get(CHARGE_SENSE_PORT, CHARGE_SENSE_PIN);  /* TP4056 CHRG, active LOW */
-    s_charge_complete = !hal_gpio_get(STANDBY_SENSE_PORT, STANDBY_SENSE_PIN); /* TP4056 STANDBY, active LOW */
+    s_usb_connected = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN);   /* active HIGH */
 
-    /* Charge-enable policy: allow charging whenever USB is present, inhibit
-     * otherwise. The TP4056 autonomously stops actively charging once full
-     * (reflected in s_charge_complete above) — we don't need to toggle CE
-     * for that, only for USB presence. */
-    hal_gpio_set(CHARGE_EN_PORT, CHARGE_EN_PIN, !s_usb_connected);
+    if (s_usb_connected) {
+        s_charging        = !hal_gpio_get(CHARGE_SENSE_PORT, CHARGE_SENSE_PIN);   /* TP4056 CHRG, active LOW */
+        s_charge_complete = !hal_gpio_get(STANDBY_SENSE_PORT, STANDBY_SENSE_PIN); /* TP4056 STANDBY, active LOW */
+    } else {
+        /* TP4056 is powered from VBUS — without it these outputs are
+         * undriven/meaningless, don't trust whatever they float to. */
+        s_charging        = false;
+        s_charge_complete = false;
+    }
 
     /* Voltage read — only if ADC has produced fresh data this tick */
     const adc_results_t *r = hal_adc_get_results();
@@ -117,6 +122,19 @@ void svc_battery_update(void)
             s_valid_sample_count++;
         }
     }
+
+    /* Charge-enable policy: only start charging once Vbat has actually
+     * dropped to battery_low_mv — avoids keeping an already-near-full LiPo
+     * topped off, which degrades its life over time. Once started, stay
+     * latched on (don't oscillate as Vbat rises back above the threshold
+     * mid-charge) until the TP4056 reports complete or USB disappears. */
+    if (!s_usb_connected || s_charge_complete) {
+        s_charge_enabled = false;
+    } else if (s_valid_sample_count >= BATTERY_STARTUP_MIN_SAMPLES &&
+               s_vbat_mv > 0 && s_vbat_mv <= g_device_settings.battery_low_mv) {
+        s_charge_enabled = true;
+    }
+    hal_gpio_set(CHARGE_EN_PORT, CHARGE_EN_PIN, !s_charge_enabled);
 
     /* State classification — order matters: charging/full beat low/critical */
     if (s_valid_sample_count < BATTERY_STARTUP_MIN_SAMPLES) {

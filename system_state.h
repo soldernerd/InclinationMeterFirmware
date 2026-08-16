@@ -19,6 +19,22 @@ typedef struct {
     uint16_t filter_cutoff_hz_den;
     uint16_t battery_critical_mv;   /* below this: BATTERY_CRITICAL */
     uint16_t battery_low_mv;        /* below this (and >= critical): BATTERY_LOW */
+
+    /* ADC/sensor scaling calibration — see config.h's DEFAULT_* for the
+     * seed values and what each feeds. No calibration constant lives
+     * only in flash; these are always read from here, not a #define,
+     * past first boot. */
+    uint16_t vbat_scale_num;
+    uint16_t vbat_scale_den;
+    uint16_t tmp236_seg1_voffs_mv;
+    uint16_t tmp236_seg1_num;
+    uint16_t tmp236_seg1_den;
+    uint16_t tmp236_seg_boundary_mv;
+    uint16_t tmp236_seg2_voffs_mv;
+    uint16_t tmp236_seg2_num;
+    uint16_t tmp236_seg2_den;
+    uint16_t tmp236_seg2_tinfl_cdeg;
+    uint16_t lm35_scale_mv_per_c;
     uint16_t checksum;
 } DeviceSettings;
 
