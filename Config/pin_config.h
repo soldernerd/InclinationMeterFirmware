@@ -81,19 +81,36 @@
                                               * rail (PWR_5V_EN above; classic
                                               * LM35 needs >=4V, won't run off
                                               * 3.3V). Not yet consumed by any
-                                              * driver — see LM35_SCALE below
-                                              * for the intended conversion
-                                              * once that driver is written. */
+                                              * driver — see the LM35 formula
+                                              * note below (DeviceSettings'
+                                              * lm35_scale_mv_per_c) for the
+                                              * intended conversion once that
+                                              * driver is written. */
 
-/* Battery monitoring — all four signals talk to the TP4056 charger IC.
+/* Battery monitoring — all four signals talk to the TP4056 charger IC
+ * (NanJing Top Power TP4056, local datasheet:
+ * .../InclinationMeter/_archive/Datasheets/TP4056.pdf).
  * CHARGE_SENSE and STANDBY_SENSE are TP4056 *outputs* (things we read);
  * CHARGE_EN is our *output* into the TP4056's CE input (things we drive).
  * VBUS_SENSE is independent of the TP4056 — it's our own USB-present
- * detector and the thing that makes charging possible at all. */
+ * detector and the thing that makes charging possible at all.
+ *
+ * IMPORTANT: the TP4056 itself is powered from VBUS (its VCC pin, datasheet
+ * 4.0-8.0V range), not from a rail that's up independent of USB. When
+ * VBUS_SENSE is LOW, the TP4056 has no power and CHARGE_SENSE/
+ * STANDBY_SENSE are undriven/meaningless — svc_battery.c forces both to
+ * "not asserted" in that case rather than trusting whatever they float to,
+ * it does not just read the pins directly. */
 #define CHARGE_SENSE_PORT   GPIOC
-#define CHARGE_SENSE_PIN    GPIO_PIN_2      /* PC2, TP4056 CHRG output, active
-                                              * LOW, pull-up (was PA9). LOW =
-                                              * actively charging right now. */
+#define CHARGE_SENSE_PIN    GPIO_PIN_2      /* PC2, TP4056 CHRG output
+                                              * (open-drain, external pull-up),
+                                              * active LOW (was PA9). Per
+                                              * datasheet: pulled low while
+                                              * actively charging, high-Z
+                                              * (reads high through the
+                                              * pull-up) once terminated. Only
+                                              * meaningful while VBUS_SENSE is
+                                              * present — see note above. */
 #define VBUS_SENSE_PORT     GPIOA
 #define VBUS_SENSE_PIN      GPIO_PIN_2      /* PA2, USB VBUS detect, active HIGH
                                               * (was PA10) — our own power-input-
@@ -110,13 +127,21 @@
                                               * see the "Low-power / Standby"
                                               * block below. */
 #define STANDBY_SENSE_PORT  GPIOD
-#define STANDBY_SENSE_PIN   GPIO_PIN_5      /* PD5, TP4056 STANDBY output,
-                                              * active LOW, pull-up. New — no
-                                              * REV-A equivalent. LOW = charge
-                                              * cycle complete (battery full);
-                                              * used instead of an SOC-percent
-                                              * heuristic to detect BATTERY_FULL
-                                              * (svc_battery.c). */
+#define STANDBY_SENSE_PIN   GPIO_PIN_5      /* PD5, TP4056 STANDBY output
+                                              * (open-drain, external pull-up),
+                                              * active LOW. New — no REV-A
+                                              * equivalent. Per datasheet:
+                                              * pulled low once the charge
+                                              * cycle terminates (C/10 current
+                                              * after reaching the 4.2V float
+                                              * voltage), high-Z otherwise.
+                                              * Used instead of an SOC-percent
+                                              * heuristic to detect
+                                              * BATTERY_FULL, and to turn
+                                              * CHARGE_EN back off
+                                              * (svc_battery.c). Only
+                                              * meaningful while VBUS_SENSE is
+                                              * present — see note above. */
 #define CHARGE_EN_PORT      GPIOD
 #define CHARGE_EN_PIN       GPIO_PIN_6      /* PD6, !CHARGE_EN!, active LOW
                                               * (Low = charge, High = don't
@@ -124,15 +149,23 @@
                                               * TP4056's CE input, via a level-
                                               * translation buffer (that's why
                                               * the polarity is inverted versus
-                                              * a direct connection). Policy
-                                              * (svc_battery.c): enable
-                                              * whenever VBUS_SENSE is present,
-                                              * disable otherwise — the TP4056
-                                              * itself autonomously stops
-                                              * actively charging once full
-                                              * (reflected in STANDBY_SENSE),
-                                              * we don't need to toggle CE for
-                                              * that. New — no REV-A
+                                              * a direct connection; the
+                                              * TP4056's own CE pin is active
+                                              * HIGH = normal operation, per
+                                              * datasheet). Policy
+                                              * (svc_battery.c), to avoid
+                                              * keeping an already-near-full
+                                              * LiPo topped off (degrades
+                                              * battery life over time):
+                                              * enable only once Vbat has
+                                              * actually dropped to
+                                              * battery_low_mv, keep enabled
+                                              * (latched — don't oscillate as
+                                              * Vbat rises back above that
+                                              * threshold mid-charge) until
+                                              * STANDBY_SENSE reports complete
+                                              * or VBUS disappears, whichever
+                                              * comes first. New — no REV-A
                                               * equivalent, old hardware had no
                                               * charge-enable control, only CHG
                                               * sense. */
@@ -197,8 +230,9 @@
  *   V_ADC   = Vbat × 33 / 133
  *   Vbat_mv = V_ADC_mv × 133 / 33
  * V_ADC_mv must come from hal_adc_raw_to_mv() (VREFINT-ratiometric — see
- * HAL_App/hal_adc.h), not a raw-code shortcut; see the LM35_SCALE comment
- * below for why a fixed-reference assumption is wrong on this board.
+ * HAL_App/hal_adc.h), not a raw-code shortcut — REV B ties VREF+ directly
+ * to the 3V3_STANDBY rail, not a fixed-voltage VREFBUF, so a constant-
+ * reference assumption is wrong on this board.
  *
  * KNOWN HARDWARE MISTAKE (2026-08-17, acknowledged, not being reworked):
  * this divider is backwards from optimal. With the high side (100k) on top
@@ -211,23 +245,27 @@
  * roughly 3.3 mV of Vbat per ADC LSB (vs. ~1.1 mV/LSB if swapped) with
  * 12-bit + 16x oversampled ADC1, plenty fine for SOC estimation — so this
  * is a "note for next hardware rev" rather than something worth reworking
- * on already-built boards. */
+ * on already-built boards.
+ *
+ * The actual scale factor consumed by the conversion math
+ * (g_device_settings.vbat_scale_num/den) is EEPROM-backed, not a #define
+ * here — see config.h's DEFAULT_VBAT_SCALE_NUM/DEN for the seed value and
+ * system_state.h for the field. VBAT_DIV_HIGH_K/LOW_K below are pure BOM
+ * documentation of the physical resistors, not consumed by any code. */
 #define VBAT_DIV_HIGH_K     100
 #define VBAT_DIV_LOW_K      33
-#define VBAT_SCALE_NUM      133
-#define VBAT_SCALE_DEN      33
 
-/* LM35 conversion for the future TEMP_SENSE_EXT driver — verified against
- * the actual datasheet (TI SNIS159H, "LM35 Precision Centigrade Temperature
- * Sensors"; local copy: .../InclinationMeter/_archive/Datasheets/LM35.pdf),
- * not assumed from memory:
- *   VOUT = 10 mV/°C x T, 0 mV at 0°C, single linear equation (no piecewise
- *   segments like TMP236 — plain LM35 doesn't need one).
- *   Temp_cdeg = V_mV x 10
- * Use hal_adc_raw_to_mv() (HAL_App/hal_adc.h) to get actual millivolts
- * first — REV B ties VREF+ directly to the 3V3_STANDBY rail, not a
- * fixed-voltage VREFBUF, so a raw-code shortcut assuming a constant
- * reference (as this file used to have) is wrong.
+/* LM35 (for the future TEMP_SENSE_EXT driver) and TMP236 (TEMP_SENSE,
+ * Drivers_App/drv_tmp236.c) conversion formulas are also EEPROM-backed —
+ * see config.h's DEFAULT_LM35_SCALE_MV_PER_C / DEFAULT_TMP236_* for the
+ * seed values and system_state.h for the fields. No calibration constant
+ * lives only in flash (project rule, 2026-08-17).
+ *
+ * LM35 formula, verified against the actual datasheet (TI SNIS159H,
+ * "LM35 Precision Centigrade Temperature Sensors"; local copy:
+ * .../InclinationMeter/_archive/Datasheets/LM35.pdf), not assumed from
+ * memory: VOUT = 10 mV/°C x T, 0 mV at 0°C, single linear equation (no
+ * piecewise segments like TMP236 — plain LM35 doesn't need one).
  * Supply: datasheet specifies 4V-30V — our 5V rail is comfortably inside
  * that range (confirms why TEMP_SENSE_EXT needs 5V_EN, not just 3.3V).
  * CAVEAT — negative temperatures: the basic single-supply hookup (VOUT
@@ -238,11 +276,7 @@
  * circuit). NOT verified against the actual REV B schematic whether that
  * bias network exists around TEMP_SENSE_EXT or whether it's a bare
  * single-supply hookup — check before assuming this sensor can read
- * freezing/sub-zero temperatures once its driver is written.
- * Not yet consumed by any driver — TEMP_SENSE_EXT has no driver yet (see
- * TEMP_SENSE_EXT_PIN above). LM35_SCALE kept as documentation of the
- * intended formula, not currently referenced by code. */
-#define LM35_SCALE          10
+ * freezing/sub-zero temperatures once its driver is written. */
 
 /* VREFINT factory calibration: use stm32g0xx_ll_adc.h's own
  * VREFINT_CAL_ADDR/VREFINT_CAL_VREF (same address/value) — do not redefine

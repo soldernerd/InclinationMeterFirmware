@@ -5,6 +5,23 @@
 #include <stdbool.h>
 #include "drv_common.h"
 
+/* Verified against the actual datasheet (Microchip 24AA256/24LC256/24FC256,
+ * local copy: .../InclinationMeter/_archive/Datasheets/24LC256.pdf), not
+ * assumed from memory:
+ *   - Control byte = 1010 + A2 A1 A0 (Section 5.0). A0/A1/A2 are all tied
+ *     to GND on this board, so the client address is 1010000b = 0x50U —
+ *     confirms EEPROM_I2C_ADDR below was already correct.
+ *   - WP pin is tied to GND (VSS) on this board -> write protection is
+ *     permanently disabled, writes are always possible (Section 6.3). Not
+ *     wired to any MCU pin, no firmware action needed or possible.
+ *   - TWC (self-timed write cycle time) = 5 ms max (Section timing specs) —
+ *     confirms drv_24lc256.c's OP_WRITE_CYCLE_POLL comment and its 50 ms
+ *     give-up timeout (10x margin).
+ *   - Page write buffer = 64 bytes, matches EEPROM_PAGE_SIZE below. A page
+ *     write that crosses a physical page boundary wraps within the page
+ *     instead of proceeding into the next one (Section 6.2) — this is why
+ *     drv_24lc256_start_write_page() rejects addr/len combinations that
+ *     would cross a boundary rather than trying to handle it. */
 #define EEPROM_I2C_ADDR     0x50U
 #define EEPROM_PAGE_SIZE    64U
 #define EEPROM_TOTAL_BYTES  32768U
