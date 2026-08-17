@@ -62,15 +62,24 @@
  * default is defined in the same place as everything else once it is. */
 #define DEFAULT_LM35_SCALE_MV_PER_C     10
 
+/* --- Encoder (WP3) ---
+ * Raw quadrature transitions per mechanical detent — NOT confirmed
+ * against this board's actual encoder part (2026-08-17 user note: "not
+ * even sure about the edges per dent"). Same category as the ADC/sensor
+ * calibration constants above (unconfirmed-against-real-hardware value),
+ * so it follows the same rule: EEPROM-backed DeviceSettings field, not a
+ * bare #define — see App/app_ui.c's consume_detents(). */
+#define DEFAULT_ENCODER_COUNTS_PER_DETENT  4
+
 /* --- EEPROM --- */
 #define EEPROM_MAGIC                    0xA55A
-#define EEPROM_SETTINGS_VERSION         0x0003  /* bumped: added
-                                                   * vbat_scale_num/den,
+#define EEPROM_SETTINGS_VERSION         0x0004  /* bumped: added
+                                                   * encoder_counts_per_detent —
+                                                   * see DEFAULT_ENCODER_COUNTS_PER_DETENT
+                                                   * above. Previous bump (0x0003)
+                                                   * added vbat_scale_num/den,
                                                    * tmp236_seg1/seg2_*,
-                                                   * lm35_scale_mv_per_c —
-                                                   * all calibration
-                                                   * constants moved out
-                                                   * of flash into EEPROM */
+                                                   * lm35_scale_mv_per_c. */
 #define EEPROM_CALIBRATION_VERSION      0x0001
 #define EEPROM_SETTINGS_ADDR            0x0000
 #define EEPROM_CALIBRATION_ADDR         0x0100

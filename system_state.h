@@ -35,6 +35,14 @@ typedef struct {
     uint16_t tmp236_seg2_den;
     uint16_t tmp236_seg2_tinfl_cdeg;
     uint16_t lm35_scale_mv_per_c;
+
+    /* Raw quadrature transitions per mechanical detent (WP3) — see
+     * config.h's DEFAULT_ENCODER_COUNTS_PER_DETENT and
+     * App/app_ui.c's consume_detents(). Same category as the ADC/sensor
+     * calibration fields above: unconfirmed against real hardware, so
+     * EEPROM-backed rather than a flash #define. */
+    uint16_t encoder_counts_per_detent;
+
     uint16_t checksum;
 } DeviceSettings;
 
@@ -86,6 +94,15 @@ typedef struct {
                                            * hand the consumer a real
                                            * one-shot interrupt event */
     bool     encoder2_sw_press_event;
+
+    /* Set true by App/app_ui.c's commit_edit() when
+     * svc_storage_save_settings() fails (EEPROM write couldn't be
+     * queued/completed), cleared on the next successful save. No
+     * DBG_PRINT infra exists in this codebase yet (WP1.5 was never
+     * wired up), so this is the escalation-to-system-state half of
+     * CLAUDE.md's "No Silent Failures" rule — a future UI indicator can
+     * surface it, and it's readable for debugging in the meantime. */
+    bool     settings_save_failed;
 } SystemState;
 
 typedef struct {

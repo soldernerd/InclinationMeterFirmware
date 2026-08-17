@@ -62,30 +62,53 @@ static uint8_t exti_line_of(uint16_t gpio_pin)
     return (uint8_t)__builtin_ctz(gpio_pin);
 }
 
+/* s_enc[] has exactly one entry per EncoderInstance value; anything
+ * outside that range is a caller bug, not a state this driver should
+ * silently index past (no MPU on this MCU — an out-of-bounds static
+ * array access is real undefined behavior, not a safe no-op). */
+#define ENCODER_INSTANCE_COUNT  ((unsigned)(sizeof(s_enc) / sizeof(s_enc[0])))
+
 DrvStatus drv_encoder_init(EncoderInstance instance)
 {
+    if ((unsigned)instance >= ENCODER_INSTANCE_COUNT) {
+        return DRV_ERR_INVALID;
+    }
+
     EncoderCtx *e = &s_enc[instance];
 
     if (instance == ENCODER_1) {
         e->a_port = ENC_1A_PORT; e->a_pin = ENC_1A_PIN;   /* PC4, EXTI4 */
         e->b_port = ENC_1B_PORT; e->b_pin = ENC_1B_PIN;   /* PB0, EXTI0 */
-        hal_gpio_exti_register(exti_line_of(ENC_1A_PIN), enc1_isr);
-        hal_gpio_exti_register(exti_line_of(ENC_1B_PIN), enc1_isr);
     } else {
         e->a_port = ENC_2A_PORT; e->a_pin = ENC_2A_PIN;   /* PB1, EXTI1 */
         e->b_port = ENC_2B_PORT; e->b_pin = ENC_2B_PIN;   /* PB2, EXTI2 */
+    }
+
+    /* Seed count/ab_state from the live pins BEFORE arming the EXTI
+     * callbacks below. NVIC/EXTI for these lines is already globally
+     * enabled by MX_GPIO_Init(), called well before this function runs
+     * in main()'s boot sequence — registering the callback first would
+     * let a real edge land while ab_state is still its zero-initialized
+     * default, corrupting the very first decoded transition. */
+    e->count    = 0;
+    e->ab_state = read_ab_state(e);
+
+    if (instance == ENCODER_1) {
+        hal_gpio_exti_register(exti_line_of(ENC_1A_PIN), enc1_isr);
+        hal_gpio_exti_register(exti_line_of(ENC_1B_PIN), enc1_isr);
+    } else {
         hal_gpio_exti_register(exti_line_of(ENC_2A_PIN), enc2_isr);
         hal_gpio_exti_register(exti_line_of(ENC_2B_PIN), enc2_isr);
     }
-
-    e->count    = 0;
-    e->ab_state = read_ab_state(e);
 
     return DRV_OK;
 }
 
 int32_t drv_encoder_get_count(EncoderInstance instance)
 {
+    if ((unsigned)instance >= ENCODER_INSTANCE_COUNT) {
+        return 0;
+    }
     /* Single aligned 32-bit load — atomic on Cortex-M0+, no critical
      * section needed against the ISR's read-modify-write of the same
      * field (that read-modify-write can't itself be preempted, since
@@ -95,5 +118,8 @@ int32_t drv_encoder_get_count(EncoderInstance instance)
 
 void drv_encoder_reset(EncoderInstance instance)
 {
+    if ((unsigned)instance >= ENCODER_INSTANCE_COUNT) {
+        return;
+    }
     s_enc[instance].count = 0;   /* single aligned 32-bit store — atomic */
 }

@@ -170,7 +170,7 @@ void drv_24lc256_update(void)
             if (hal_i2c_device_ready(HAL_I2C_MAIN, EEPROM_I2C_ADDR)) {
                 s_write_success = true;
                 s_op            = OP_IDLE;
-            } else if ((uint32_t)(hal_systick_get_ms() - s_poll_started_ms) > 50U) {
+            } else if (hal_systick_elapsed_ms(s_poll_started_ms) > 50U) {
                 /* Stuck — give up rather than wedging the scheduler */
                 s_write_success = false;
                 s_op            = OP_IDLE;

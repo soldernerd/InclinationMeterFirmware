@@ -10,8 +10,15 @@ static bool s_sw2_pressed;
 
 void svc_input_init(void)
 {
-    s_sw1_pressed = false;
-    s_sw2_pressed = false;
+    /* Seed from the actual pin level, not a hardcoded "not pressed" —
+     * ENC_1SW/ENC_2SW are this device's Standby wake-up sources
+     * (SYS_WKUP1/SYS_WKUP5, see pin_config.h), and waking via Standby is
+     * a full MCU reset that re-runs this init. If the button that woke
+     * the device is still physically held down at that point, seeding
+     * "not pressed" would make the very first svc_input_update() poll
+     * see a false rising edge and fire a spurious press event. */
+    s_sw1_pressed = hal_gpio_get(ENC_1SW_PORT, ENC_1SW_PIN);
+    s_sw2_pressed = hal_gpio_get(ENC_2SW_PORT, ENC_2SW_PIN);
 }
 
 void svc_input_update(void)

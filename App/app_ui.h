@@ -37,4 +37,10 @@ extern UiState g_ui_state;
 void app_ui_init(void);
 void app_ui_update(void);
 
+/* Reads the live value of one setting from g_device_settings. Exposed so
+ * App/app_display.c can show the same value it's driven by, rather than
+ * re-implementing the UiSettingIndex -> field switch itself (that
+ * duplication used to exist and could silently desync). */
+int32_t app_ui_setting_read(UiSettingIndex i);
+
 #endif /* APP_UI_H */

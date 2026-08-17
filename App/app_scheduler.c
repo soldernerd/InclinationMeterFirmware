@@ -102,10 +102,13 @@ static SchedulerEntry s_tasks[] = {
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 
-void app_scheduler_init(void)
+/* Periods are loaded from g_device_settings, which svc_storage_init has
+ * already populated (or seeded with defaults from config.h). Shared by
+ * app_scheduler_init() (boot) and app_scheduler_reload_periods() (a
+ * settings change at runtime) — deliberately does NOT touch
+ * last_run_ms, see that function's comment for why. */
+static void load_periods(void)
 {
-    /* Periods are loaded from g_device_settings, which svc_storage_init
-     * has already populated (or seeded with defaults from config.h). */
     s_tasks[0].period_ms = g_device_settings.task_sensors_ms;
     s_tasks[1].period_ms = g_device_settings.task_temperature_ms;
     s_tasks[2].period_ms = g_device_settings.task_battery_ms;
@@ -116,11 +119,33 @@ void app_scheduler_init(void)
     s_tasks[7].period_ms = g_device_settings.task_display_ms;
     /* s_tasks[8] (LEDs) period is the fixed literal set in the table above —
      * not user/BLE-configurable like the others. */
+}
+
+void app_scheduler_init(void)
+{
+    load_periods();
 
     uint32_t now = hal_systick_get_ms();
     for (size_t i = 0; i < TASK_COUNT; ++i) {
         s_tasks[i].last_run_ms = now;
     }
+}
+
+void app_scheduler_reload_periods(void)
+{
+    /* Picks up a changed g_device_settings period (e.g. the SETTINGS
+     * screen's display-rate edit) without resetting last_run_ms.
+     * app_ui.c's commit_edit() calls this instead of app_scheduler_init()
+     * because it runs re-entrantly from inside task_ui, itself mid-
+     * iteration of app_scheduler_run()'s own for-loop: stamping every
+     * task's last_run_ms with a freshly-sampled (later) tick there would
+     * make the outer loop's already-captured, now-stale `now` underflow
+     * against it for any task not yet reached that pass (unsigned
+     * wraparound makes the elapsed-time check always true), causing a
+     * spurious extra run this same tick and perturbing every task's next
+     * scheduled time as a side effect — a real bug this project's own
+     * code review caught. */
+    load_periods();
 }
 
 void app_scheduler_run(void)

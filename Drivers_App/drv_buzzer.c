@@ -3,8 +3,9 @@
 #include "hal_systick.h"
 #include <stdbool.h>
 
-static volatile bool     s_active       = false;
-static          uint32_t s_beep_end_ms  = 0;
+static volatile bool     s_active         = false;
+static          uint32_t s_beep_start_ms  = 0;
+static          uint16_t s_beep_duration_ms = 0;
 
 void drv_buzzer_init(void)
 {
@@ -27,7 +28,8 @@ void drv_buzzer_off(void)
 void drv_buzzer_beep(BuzzerTone tone, uint16_t duration_ms)
 {
     drv_buzzer_on(tone);
-    s_beep_end_ms = hal_systick_get_ms() + duration_ms;
+    s_beep_start_ms    = hal_systick_get_ms();
+    s_beep_duration_ms = duration_ms;
 }
 
 void drv_buzzer_update(void)
@@ -35,8 +37,7 @@ void drv_buzzer_update(void)
     if (!s_active) {
         return;
     }
-    /* Use signed difference to handle ms-counter wrap correctly. */
-    if ((int32_t)(hal_systick_get_ms() - s_beep_end_ms) >= 0) {
+    if (hal_systick_elapsed_ms(s_beep_start_ms) >= s_beep_duration_ms) {
         drv_buzzer_off();
     }
 }

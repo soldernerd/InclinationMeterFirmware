@@ -11,3 +11,10 @@ uint32_t hal_systick_get_ms(void)
 {
     return HAL_GetTick();
 }
+
+uint32_t hal_systick_elapsed_ms(uint32_t start_ms)
+{
+    /* Unsigned subtraction wraps correctly even across a hal_systick_get_ms()
+     * rollover, as long as the true elapsed time is under ~49.7 days. */
+    return (uint32_t)(hal_systick_get_ms() - start_ms);
+}

@@ -84,6 +84,7 @@ static void fill_default_settings(DeviceSettings *s)
     s->tmp236_seg2_den          = DEFAULT_TMP236_SEG2_DEN;
     s->tmp236_seg2_tinfl_cdeg   = DEFAULT_TMP236_SEG2_TINFL_CDEG;
     s->lm35_scale_mv_per_c      = DEFAULT_LM35_SCALE_MV_PER_C;
+    s->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
     s->checksum                 = 0;
 }
 
@@ -131,7 +132,7 @@ static bool blocking_read(uint16_t addr, uint8_t *buf, uint16_t len)
     uint32_t start_ms = hal_systick_get_ms();
     while (drv_24lc256_is_busy()) {
         drv_24lc256_update();
-        if ((uint32_t)(hal_systick_get_ms() - start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
+        if (hal_systick_elapsed_ms(start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
             /* Give up — abort rather than leaving the DMA target armed at
              * `buf`, which may be a caller's stack buffer that's about to
              * go out of scope. Also resets the driver's own state machine
@@ -152,7 +153,7 @@ static bool blocking_write_page(uint16_t addr, const uint8_t *buf, uint16_t len)
     uint32_t start_ms = hal_systick_get_ms();
     while (drv_24lc256_is_busy()) {
         drv_24lc256_update();
-        if ((uint32_t)(hal_systick_get_ms() - start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
+        if (hal_systick_elapsed_ms(start_ms) > STORAGE_BLOCKING_TIMEOUT_MS) {
             drv_24lc256_abort();   /* see blocking_read()'s comment */
             return false;     /* hardware fault */
         }

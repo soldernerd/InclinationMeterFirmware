@@ -3,6 +3,7 @@
 #include "svc_storage.h"
 #include "app_scheduler.h"
 #include "system_state.h"
+#include "config.h"
 
 UiState g_ui_state = {
     .current_screen   = UI_SCREEN_LIVE,
@@ -12,14 +13,6 @@ UiState g_ui_state = {
     .redraw_needed    = true,
     .edit_value       = 0,
 };
-
-/* Raw quadrature transitions per mechanical detent — NOT confirmed
- * against this board's actual encoder part (2026-08-17 user note: "not
- * even sure about the edges per dent"). 4 is the standard assumption for
- * a detented incremental encoder; revisit once real hardware is
- * available — if a click needs two nudges (or half a nudge triggers a
- * step), this is the one constant to change. */
-#define ENCODER_COUNTS_PER_DETENT  4
 
 static int32_t s_enc1_base;
 static int32_t s_enc2_base;
@@ -39,7 +32,7 @@ static const SettingRange s_ranges[UI_SETTING_COUNT] = {
     [UI_SETTING_SETTLING_TIMEOUT] = { 1000,  5000,  60000 },
 };
 
-static int32_t setting_read(UiSettingIndex i)
+int32_t app_ui_setting_read(UiSettingIndex i)
 {
     switch (i) {
         case UI_SETTING_DISPLAY_RATE:     return (int32_t)g_device_settings.task_display_ms;
@@ -74,12 +67,24 @@ static int32_t clamp(int32_t v, int32_t lo, int32_t hi)
 
 /* Converts a continuously-accumulating raw quadrature count into whole
  * mechanical detents since the last call, without losing a partial
- * detent between calls (the remainder stays banked in *base). */
+ * detent between calls (the remainder stays banked in *base).
+ *
+ * Divisor comes from g_device_settings.encoder_counts_per_detent
+ * (EEPROM-backed, DEFAULT_ENCODER_COUNTS_PER_DETENT seed in config.h) —
+ * NOT confirmed against this board's actual encoder part (2026-08-17
+ * user note: "not even sure about the edges per dent"), which is
+ * exactly why it's a settings field and not a flash constant: it can be
+ * corrected after hardware bring-up without a reflash. Guarded against
+ * 0 (corrupt/uninitialized EEPROM) to avoid a divide-by-zero fault. */
 static int16_t consume_detents(int32_t current_count, int32_t *base)
 {
+    int32_t per_detent = (int32_t)g_device_settings.encoder_counts_per_detent;
+    if (per_detent <= 0) {
+        per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
+    }
     int32_t delta = current_count - *base;
-    int32_t detents = delta / ENCODER_COUNTS_PER_DETENT;
-    *base += detents * ENCODER_COUNTS_PER_DETENT;
+    int32_t detents = delta / per_detent;
+    *base += detents * per_detent;
     return (int16_t)detents;
 }
 
@@ -106,7 +111,7 @@ static UiScreen prev_screen(UiScreen s)
 
 static void enter_edit_mode(void)
 {
-    g_ui_state.edit_value = setting_read((UiSettingIndex)g_ui_state.settings_cursor);
+    g_ui_state.edit_value = app_ui_setting_read((UiSettingIndex)g_ui_state.settings_cursor);
     g_ui_state.settings_editing = true;
     g_ui_state.redraw_needed = true;
 }
@@ -116,15 +121,22 @@ static void commit_edit(void)
     UiSettingIndex idx = (UiSettingIndex)g_ui_state.settings_cursor;
     setting_write(idx, g_ui_state.edit_value);
     if (svc_storage_save_settings(&g_device_settings) == DRV_OK) {
-        /* Reload task periods so e.g. display rate change takes effect now. */
-        app_scheduler_init();
+        /* Reload task periods so e.g. display rate change takes effect
+         * now. Must NOT call app_scheduler_init() here — this runs
+         * re-entrantly from inside task_ui, itself mid-iteration of
+         * app_scheduler_run()'s loop; see app_scheduler_reload_periods()'s
+         * comment for why that matters. */
+        app_scheduler_reload_periods();
         g_ui_state.settings_editing = false;
+        g_system_state.settings_save_failed = false;
     } else {
         /* Save failed — stay in edit mode rather than silently pretending
-         * it saved (CLAUDE.md 7.6: no silent failures). No debug-UART
-         * logging exists in this codebase yet (WP1.5 was never wired up)
-         * to report this any further. */
+         * it saved, and escalate into system_state (CLAUDE.md 7.6: no
+         * silent failures — "must be logged via DBG_PRINT at minimum and
+         * escalated to system state"). No debug-UART logging exists in
+         * this codebase yet (WP1.5 was never wired up) to also log it. */
         g_ui_state.settings_editing = true;
+        g_system_state.settings_save_failed = true;
     }
     g_ui_state.redraw_needed = true;
 }

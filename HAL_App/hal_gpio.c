@@ -86,14 +86,19 @@ void hal_gpio_exti_register(uint8_t pin, HalGpioExtiCallback cb)
  * reads pin state inside its own callback to determine direction. */
 static void exti_dispatch(uint16_t pin_mask)
 {
-    /* Single bit set per HAL invocation — convert mask to pin number. */
-    for (uint8_t i = 0; i < 16U; ++i) {
-        if (pin_mask & (uint16_t)(1U << i)) {
-            if (s_exti_callbacks[i]) {
-                s_exti_callbacks[i]();
-            }
-            return;
-        }
+    /* Single bit set per HAL invocation (GPIO_Pin is one-hot:
+     * GPIO_PIN_0=0x0001 .. GPIO_PIN_15=0x8000); __builtin_ctz gives the
+     * bit position directly instead of scanning for it. This runs in
+     * interrupt context on every encoder edge, so an O(1) lookup here
+     * matters more than in most of this codebase. pin_mask == 0 would be
+     * undefined behavior for __builtin_ctz — defensively guarded even
+     * though HAL never calls this with an empty mask. */
+    if (pin_mask == 0U) {
+        return;
+    }
+    uint8_t pin = (uint8_t)__builtin_ctz(pin_mask);
+    if (s_exti_callbacks[pin]) {
+        s_exti_callbacks[pin]();
     }
 }
 

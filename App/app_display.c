@@ -25,6 +25,11 @@ typedef struct {
     uint8_t  settings_cursor;
     bool     settings_editing;
     int32_t  edit_value;
+    uint32_t uptime_s;      /* only checked while UI_SCREEN_STATUS is
+                              * shown — its "Uptime: HH:MM:SS" line is
+                              * the only thing that changes purely from
+                              * time passing, with nothing else in this
+                              * struct tracking it otherwise. */
 } DisplaySnapshot;
 
 static DisplaySnapshot s_last = {0};
@@ -192,18 +197,13 @@ static const char *setting_unit(UiSettingIndex i)
 static int32_t setting_value_for_display(UiSettingIndex i)
 {
     /* If editing the row at cursor, show the working edit_value;
-     * otherwise show the live setting. */
+     * otherwise show the live setting via app_ui.c's own read function —
+     * not a re-implemented switch, so the two can't desync. */
     if (g_ui_state.settings_editing
         && (UiSettingIndex)g_ui_state.settings_cursor == i) {
         return g_ui_state.edit_value;
     }
-    switch (i) {
-        case UI_SETTING_DISPLAY_RATE:     return (int32_t)g_device_settings.task_display_ms;
-        case UI_SETTING_BATTERY_CRITICAL: return (int32_t)g_device_settings.battery_critical_mv;
-        case UI_SETTING_STREAM_INTERVAL:  return (int32_t)g_device_settings.stream_interval_ms;
-        case UI_SETTING_SETTLING_TIMEOUT: return (int32_t)g_device_settings.settling_timeout_ms;
-        default:                          return 0;
-    }
+    return app_ui_setting_read(i);
 }
 
 static void draw_settings_screen(void)
@@ -271,7 +271,9 @@ static bool snapshot_changed(void)
         || s_last.screen           != g_ui_state.current_screen
         || s_last.settings_cursor  != g_ui_state.settings_cursor
         || s_last.settings_editing != g_ui_state.settings_editing
-        || s_last.edit_value       != g_ui_state.edit_value;
+        || s_last.edit_value       != g_ui_state.edit_value
+        || (g_ui_state.current_screen == UI_SCREEN_STATUS
+            && s_last.uptime_s != hal_systick_get_ms() / 1000U);
 }
 
 static void snapshot_capture(void)
@@ -286,6 +288,7 @@ static void snapshot_capture(void)
     s_last.settings_cursor  = g_ui_state.settings_cursor;
     s_last.settings_editing = g_ui_state.settings_editing;
     s_last.edit_value       = g_ui_state.edit_value;
+    s_last.uptime_s         = hal_systick_get_ms() / 1000U;
     s_have_last = true;
 }
 
