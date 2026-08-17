@@ -495,14 +495,49 @@ caveat as every other WP in this document.
 - Sensors aren't fused into `g_system_state`'s tilt fields yet (pre-dates WP4 — same gap the
   old history had), so `svc_measurement`/`svc_api`'s STREAM/RAW_STREAM/SINGLE payloads carry
   real timestamp/battery/status data but zero tilt values until a future WP wires that up.
-- `InclinationMeterFirmware.ioc` was not updated to reflect the USB Device middleware
-  addition (same gap `wp2`/`wp3` already have for their own hand-edited generated files —
-  never documented before now). A real CubeMX regen against this `.ioc` would currently
-  **not** reproduce what's actually built; if CubeMX GUI access becomes available, the USB
-  Device configuration should be added there properly and the drift reconciled.
 - `[ENC2 push] Cancel` on the MEASURING overlay is a display-only hint — the old history
   never wired `svc_measurement_cancel()` into `App/app_ui.c`'s encoder-2-push handler, and
   this port didn't add it either (out of scope: no app_ui.c changes, see above).
+
+**Update (2026-08-17, later same day): reconciled against a real CubeMX regen.** The user
+had STM32CubeMX installed after all and walked through configuring `USB_DEVICE` (Custom
+HID class, VID/PID/strings, `USBD_CUSTOM_HID_REPORT_DESC_SIZE`=29,
+`USBD_CUSTOMHID_OUTREPORT_BUF_SIZE`=64) in the actual GUI, then regenerated — closing the
+"never updated" gap noted above. Findings from reconciling:
+- Most hand-written content in `USB_Device/App+Target/` survived the regen completely
+  untouched — CubeMX's merge respects USER CODE markers, and the report descriptor bytes,
+  `CUSTOM_HID_EPIN/EPOUT_SIZE` override, and `hal_usb_on_rx()` forwarding all lived inside
+  or adjacent to them.
+- `usbd_desc.c`'s VID/PID/manufacturer/product are now **CubeMX-owned hardcoded literals**
+  (correct values, matching `Config/config.h`'s `USB_VID`/`USB_PID`/etc.) rather than reading
+  from `config.h` — that indirection lived outside any USER CODE marker, so it didn't survive.
+  Accepted rather than re-applied: fighting CubeMX's own regen output on every future
+  regeneration isn't worth it for cosmetic string literals. **Not mechanically linked** to
+  `config.h` anymore — if VID/PID/strings ever change, both `usbd_desc.c` (via CubeMX's GUI)
+  and `config.h` need updating by hand, since `svc_api.c`'s `GET_IDENTITY` response still
+  reads the `config.h` macros.
+- CubeMX restructured `cmake/stm32cubemx/CMakeLists.txt` more cleanly than the hand-edit
+  had — a proper `USB_Device_Library` OBJECT target instead of appending into
+  `STM32_Drivers_Src`. Kept that structure; had to re-add `Config/` and `HAL_App/` to
+  `MX_Include_Dirs`, which CubeMX has no awareness of and dropped.
+- **Real regression caught by this regen, unrelated to USB:** `Core/Src/gpio.c`'s
+  `MX_GPIO_Init()` lost the `EXTI0_1_IRQn`/`EXTI2_3_IRQn`/`EXTI4_15_IRQn` NVIC enable calls
+  for the WP3 encoder pins. The `.ioc` tracks each pin's EXTI *trigger mode* but never
+  tracked the NVIC *enable* checkbox for those three lines (that was only ever hand-added
+  straight into `gpio.c` back in WP3, never reflected in the `.ioc`) — so this entirely
+  unrelated USB regen silently deleted it. Without the fix, encoder rotation would have
+  produced zero interrupts despite every other piece of WP3's encoder code being intact and
+  unchanged — exactly the kind of silent, hard-to-notice breakage `CLAUDE.md` §9.2's "review
+  the full diff carefully" instruction exists to catch. Fixed by moving the three
+  `HAL_NVIC_SetPriority`/`EnableIRQ` pairs into `main.c`'s `USER CODE BEGIN 2` block (proven
+  regen-safe by this very regen preserving everything else there) instead of leaving them in
+  CubeMX-owned `gpio.c` territory a second time. **Any future CubeMX regen should be diffed
+  file-by-file before trusting it**, the same way this one was — a clean build alone would
+  not have caught this, since the code compiles fine either way; only the encoder physically
+  stops responding.
+
+Build-verified again after reconciliation: zero warnings, 214/214 objects, FLASH 112.8 KB
+(21.5%), RAM 33.2 KB (22.5%).
 
 ---
 
