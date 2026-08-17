@@ -28,7 +28,7 @@ GC runs; nothing is deleted immediately.
 |---|---|---|---|
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
 | `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted, EEPROM storage redesigned into per-subsystem pages — see "wp3 — resolution" and "Code review" below. Build-verified clean; three code-review passes complete (first: 8-angle/12-verified/10-fixed; second: partial-angle plus the EEPROM per-page redesign; third: remaining angles against that redesign, found and fixed a real data-corruption bug), 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 13 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, UI state machine restoration, three code-review fix rounds, EEPROM per-page redesign, docs throughout). `wp3` HEAD is `8f9d3e8`. |
-| `wp4` | **Hand-adapted onto `wp3@2d5fc7e` (not a cherry-pick — `d1423b5`/`48e8562` predate WP3's app-layer rewrite and would conflict heavily; ported file-by-file instead), USB Custom HID Device middleware added by hand (no CubeMX GUI), `ff054fb` dropped. Build-verified clean, 2026-08-17.** | `wp3@2d5fc7e` | See "wp4 — resolution and adaptation notes" below. `wp4` HEAD is `ad4b5b4`. |
+| `wp4` | **Hand-adapted onto `wp3@2d5fc7e`, reconciled against two real CubeMX regens (the second with NVIC properly configured via the GUI), code-reviewed (9 findings, 8 fixed) — see "wp4 — resolution and adaptation notes" below. Build-verified clean, 2026-08-18.** | `wp3@2d5fc7e` | `wp4` HEAD is `d15669f`. |
 | `wp5` | Not started | `wp4` (once pushed) | Commits `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping); drop `4bc4f16`. |
 
 **Build verification:** no ARM toolchain existed on the machine `wp3` was developed on
@@ -536,6 +536,34 @@ HID class, VID/PID/strings, `USBD_CUSTOM_HID_REPORT_DESC_SIZE`=29,
   not have caught this, since the code compiles fine either way; only the encoder physically
   stops responding.
 
+**Update (2026-08-18): a code review pass, then a second real CubeMX regen, closed this out
+properly.** A `/code-review` pass on the full wp3...wp4 diff (9 finder angles, independent
+second-pass verification on every surviving candidate) found 9 confirmed bugs, including the
+worst-case version of the risk flagged above: the CubeMX regen had actually deleted the
+`EXTI0_1/2_3/4_15_IRQHandler` *function bodies* in `stm32g0xx_it.c`, not just the NVIC-enable
+calls — meaning the `main.c` workaround above made the hard-hang **more likely** to trigger
+(NVIC now enabled, no handler behind it) rather than fixing anything. Also found: the USB RX
+callback was wiped by `hal_usb_init()` immediately after being registered (USB could send but
+never receive), the OUT report buffer was undersized against what the code reads (an
+out-of-bounds struct read), the HID report descriptor had reverted to a broken placeholder,
+and `SET_SETTINGS`/`SET_CALIBRATION`/`SET_ZERO` silently ignored EEPROM write failures and
+skipped input validation. All fixed — see commit `eecf934`.
+
+Separately, the user then regenerated again from a different machine, this time having
+**ticked the NVIC enable checkboxes for the three EXTI lines in the CubeMX GUI itself**.
+`WylerLeveltronic.ioc` now carries `NVIC.EXTI0_1_IRQn`/`EXTI2_3_IRQn`/`EXTI4_15_IRQn`, and
+`gpio.c` generates the enable calls on its own — **this closes the gap for good**; it's no
+longer a hand-maintained workaround that a future unrelated regen can silently drop. The
+redundant `main.c` block from the first fix was removed accordingly. Two things still don't
+survive a regen and were re-applied a second time (confirmed lost identically on both
+regens, since the GUI has no field for the first and the second lives in an array
+initializer outside any USER CODE marker): `CUSTOM_HID_EPIN_SIZE`/`CUSTOM_HID_EPOUT_SIZE` in
+`usbd_conf.h`, and the report descriptor bytes in `usbd_custom_hid_if.c`. Both are now called
+out with an explicit "re-verify after every future regen" comment at their definition site.
+
+Build-verified after both passes: zero warnings, 214/214 objects, FLASH 113.2 KB (21.6%),
+RAM 33.2 KB (22.5%). Still not flash-tested on real hardware.
+
 Build-verified again after reconciliation: zero warnings, 214/214 objects, FLASH 112.8 KB
 (21.5%), RAM 33.2 KB (22.5%).
 
@@ -548,11 +576,12 @@ Build-verified again after reconciliation: zero warnings, 214/214 objects, FLASH
    resolution and adaptation notes" and "Code review" above — the third pass fixed a real
    EEPROM data-corruption bug in the per-page storage redesign). `wp3` HEAD is `8f9d3e8`.
    Still needs real-hardware flash testing — nothing here has touched real silicon yet.
-3. **`wp4` is done and build-verified** (see "wp4 — resolution and adaptation notes" above).
-   `wp4` HEAD is `ad4b5b4`. Not yet code-reviewed the way `wp2`/`wp3` were — worth a
-   `/code-review` pass before pushing, given the amount of hand-written USB middleware glue.
+3. **`wp4` is done, build-verified, and code-reviewed** (see "wp4 — resolution and adaptation
+   notes" above — 9 findings from a `/code-review` pass, 8 fixed, including a critical
+   regen-induced encoder hard-hang; 1 skipped as low-impact). `wp4` HEAD is `d15669f`. Still
+   needs real-hardware flash testing — nothing here has touched real silicon yet.
 4. Move to `wp5`: `git checkout wp5 && git reset --hard wp4 && git cherry-pick 1662959 73aa050`
-   (decide on `81a9643`, drop `4bc4f16`) — `wp4` here means its current tip (`ad4b5b4`).
+   (decide on `81a9643`, drop `4bc4f16`) — `wp4` here means its current tip (`d15669f`).
    `1662959`'s own commit message flags a real pin conflict between its RN4871 UART choice
    and WP3's *old* encoder pins (PA2/PA3) — REV B's actual WP3 encoders are on
    PC4/PB0/PB1/PB2 now, so re-verify `73aa050`'s PD4/PD5/PD6 relocation is still free and
