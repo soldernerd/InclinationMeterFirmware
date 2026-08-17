@@ -27,19 +27,20 @@ GC runs; nothing is deleted immediately.
 | Branch | State | Base | Notes |
 |---|---|---|---|
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
-| `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), scope trimmed and hardware-adapted — see "wp3 — resolution" below. NOT build-verified (no ARM toolchain on this machine — see note).** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 1 follow-up commit for Core/ EXTI wiring. `wp3` HEAD is `58afb60`. |
-| `wp4` | Not started | `wp3` (once this lands) | `d1423b5`, `48e8562` | `ff054fb` |
+| `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted — see "wp3 — resolution" below. Build-verified clean, 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 4 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, docs, UI state machine restoration). `wp3` HEAD is `06956b8`. |
+| `wp4` | Not started | `wp3` (once pushed) | `d1423b5`, `48e8562` | `ff054fb` |
 | `wp5` | Not started | `wp4` (rebased) | `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping) | `4bc4f16` |
 
-**Build verification:** `wp2`'s builds above were done on a machine with `arm-none-eabi-gcc`
-14.2.1 / CMake 4.4.2 / Ninja 1.13.2 (installed via `winget`) — that toolchain is **not present
-on the machine `wp3` was done on** (confirmed by an exhaustive filesystem search; the `build/`
-directory checked into this working tree is a stale artifact from the other machine, path
-`C:/Users/lfaes/...`, different user profile). `wp3`'s changes were reviewed by hand
-(re-reading every changed file for type/include/logic correctness) but **have not been
-compiled**. Building on the toolchain-equipped machine is the first thing to do before
-trusting this work further. **Still not flashed to real hardware** either — see the
-outstanding items in "wp2 — post-rebase work" below, which apply equally to `wp3`.
+**Build verification:** no ARM toolchain existed on the machine `wp3` was developed on
+(confirmed by an exhaustive filesystem search; the `build/` directory previously checked
+into this working tree was a stale artifact from a different machine/user profile,
+`C:/Users/lfaes/...`) — every file was reviewed by hand first. `arm-none-eabi-gcc` 14.2.1,
+CMake 4.4.2, and Ninja 1.13.2 (exact same versions `wp2` was built with) were then installed
+via `winget` on this machine, the stale `build/` directory removed, and a fresh
+`cmake -S . -B build -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake` +
+`cmake --build build` run clean: **all 207 objects compile and link with zero warnings under
+`-Wall -Wextra -Werror`** (RAM 20.6%, Flash 15.2%). **Still not flashed to real hardware** —
+see the outstanding items in "wp2 — post-rebase work" below, which apply equally to `wp3`.
 
 ---
 
@@ -241,14 +242,16 @@ weak overrides forwarding to per-pin callbacks via `hal_gpio_exti_register`) and
 `Drivers_App/drv_buzzer.c`'s non-blocking beep/update pattern (wrap-safe signed millisecond
 countdown, no `HAL_Delay` blocking) — both pin-agnostic, ported unchanged.
 
-**Not build-verified** — no ARM toolchain (`arm-none-eabi-gcc`/CMake/Ninja) found on this
-machine after an exhaustive search; the checked-in `build/` directory is a stale artifact
-from a different machine/user (`C:/Users/lfaes/...` in its CMakeCache). Every changed file
-was manually re-read for type/include/logic correctness instead, but **compiling on the
-toolchain-equipped machine is required before trusting this further** — see the Status
-table above.
+**Build-verified (2026-08-17)** — `arm-none-eabi-gcc` 14.2.1, CMake 4.4.2, and Ninja 1.13.2
+installed via `winget` on this machine (none were present before; the checked-in `build/`
+directory had been a stale artifact from a different machine/user,
+`C:/Users/lfaes/...` in its CMakeCache — removed and reconfigured fresh). Every file had
+already been manually re-read for type/include/logic correctness before the toolchain
+existed to check that directly; the subsequent clean build (zero warnings under
+`-Wall -Wextra -Werror`, all 207 objects, links to a valid ELF) confirms that review was
+accurate. See the Status table above for exact figures.
 
-**Still outstanding, beyond the "not built" gap:**
+**Still outstanding, beyond the "not on real hardware" gap:**
 - Quadrature sign convention (CW = +1) unverified against real hardware rotation.
 - Whether this encoder part is actually 4 raw transitions per mechanical detent — needed
   once a UI layer wants to translate `drv_encoder_get_count()` into "clicks."
@@ -294,11 +297,10 @@ confirm "Hello World" + LED heartbeat render on real REV B hardware.
 ## Resuming this work
 
 1. Read this file and the two docs linked at the top.
-2. **`wp3` is done except for a build check** (see "wp3 — resolution and adaptation notes"
-   above) — on a machine with the ARM toolchain, `cmake --build` it and fix whatever
-   `-Wall -Wextra -Werror` turns up before trusting it further. `wp3` HEAD is `58afb60`.
-3. Then move to `wp4`: `git checkout wp4 && git reset --hard wp3 && git cherry-pick d1423b5 48e8562`
-   (drop `ff054fb`) — `wp3` here means its current tip (`58afb60`), not the old pre-rebase
+2. **`wp3` is done and build-verified** (see "wp3 — resolution and adaptation notes"
+   above). `wp3` HEAD is `06956b8`. Still needs real-hardware flash testing.
+3. Move to `wp4`: `git checkout wp4 && git reset --hard wp3 && git cherry-pick d1423b5 48e8562`
+   (drop `ff054fb`) — `wp3` here means its current tip (`06956b8`), not the old pre-rebase
    base this doc originally pointed at. Resolve conflicts, apply the same 6-item checklist,
    grep for stale pin names, build and verify before moving to `wp5`. Update this file's
    status table and add a `wp4` section mirroring the `wp2`/`wp3` ones above.
