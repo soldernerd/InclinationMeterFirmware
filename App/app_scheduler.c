@@ -6,9 +6,12 @@
 #include "drv_buzzer.h"
 #include "hal_adc.h"
 #include "hal_systick.h"
+#include "svc_api.h"
 #include "svc_battery.h"
+#include "svc_measurement.h"
 #include "svc_storage.h"
 #include "svc_input.h"
+#include "svc_usb.h"
 #include "config.h"
 #include "system_state.h"
 #include <stddef.h>
@@ -85,6 +88,10 @@ static void task_leds(void)
     app_leds_task();
 }
 
+static void task_usb(void)         { svc_usb_update();         }
+static void task_api(void)         { svc_api_update();         }
+static void task_measurement(void) { svc_measurement_update(); }
+
 /* ---- task table ----
  * Order matters when multiple tasks share a tick: task_ui before
  * task_display so display sees a fresh redraw_needed the same tick. */
@@ -96,6 +103,9 @@ static SchedulerEntry s_tasks[] = {
     { task_storage,     0,                   0 },
     { task_input,       0,                   0 },
     { task_buzzer,      0,                   0 },
+    { task_usb,         0,                   0 },
+    { task_api,         0,                   0 },
+    { task_measurement, 0,                   0 },
     { task_ui,          0,                   0 },
     { task_display,     0,                   0 },
     { task_leds,        DEFAULT_TASK_LED_MS, 0 },
@@ -113,15 +123,18 @@ void app_scheduler_reload_periods(void)
      * task_ui, mid-iteration of app_scheduler_run()'s own for-loop). This
      * is the preferred entry point for a runtime settings change; only
      * app_scheduler_init() also resets last_run_ms, and only once. */
-    s_tasks[0].period_ms = g_device_settings.task_sensors_ms;
-    s_tasks[1].period_ms = g_device_settings.task_temperature_ms;
-    s_tasks[2].period_ms = g_device_settings.task_battery_ms;
-    s_tasks[3].period_ms = SYSTICK_PERIOD_MS;     /* every tick */
-    s_tasks[4].period_ms = SYSTICK_PERIOD_MS;     /* input — every tick */
-    s_tasks[5].period_ms = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
-    s_tasks[6].period_ms = g_device_settings.task_display_ms;
-    s_tasks[7].period_ms = g_device_settings.task_display_ms;
-    /* s_tasks[8] (LEDs) period is the fixed literal set in the table above —
+    s_tasks[0].period_ms  = g_device_settings.task_sensors_ms;
+    s_tasks[1].period_ms  = g_device_settings.task_temperature_ms;
+    s_tasks[2].period_ms  = g_device_settings.task_battery_ms;
+    s_tasks[3].period_ms  = SYSTICK_PERIOD_MS;     /* storage — every tick */
+    s_tasks[4].period_ms  = SYSTICK_PERIOD_MS;     /* input — every tick */
+    s_tasks[5].period_ms  = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
+    s_tasks[6].period_ms  = g_device_settings.task_usb_ms;
+    s_tasks[7].period_ms  = g_device_settings.task_sensors_ms;   /* api — poll rate for stream/progress checks */
+    s_tasks[8].period_ms  = g_device_settings.task_sensors_ms;   /* measurement */
+    s_tasks[9].period_ms  = g_device_settings.task_display_ms;   /* ui */
+    s_tasks[10].period_ms = g_device_settings.task_display_ms;   /* display */
+    /* s_tasks[11] (LEDs) period is the fixed literal set in the table above —
      * not user/BLE-configurable like the others. */
 }
 

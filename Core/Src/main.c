@@ -24,7 +24,7 @@
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
-#include "usb_drd_fs.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -48,6 +48,9 @@
 #include "app_leds.h"
 #include "app_ui.h"
 #include "svc_input.h"
+#include "svc_usb.h"
+#include "svc_api.h"
+#include "svc_measurement.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
@@ -138,7 +141,7 @@ int main(void)
   MX_TIM6_Init();
   MX_USART3_UART_Init();
   MX_USART6_UART_Init();
-  MX_USB_DRD_FS_PCD_Init();
+  MX_USB_Device_Init();
   MX_I2C3_Init();
   /* USER CODE BEGIN 2 */
   hal_gpio_init();
@@ -169,6 +172,13 @@ int main(void)
   drv_encoder_init(ENCODER_2);
   svc_input_init();
   app_ui_init();
+
+  /* svc_api_init() before svc_usb_init(): the latter registers itself as
+   * API_TRANSPORT_USB via svc_api_register_transport(), which needs the
+   * transport table already zeroed. */
+  svc_api_init();
+  svc_measurement_init();
+  svc_usb_init();
 
   app_scheduler_init();
   app_leds_init();
