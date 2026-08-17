@@ -4,7 +4,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Field groups below are laid out contiguously per EEPROM page — see
+ * config.h's EEPROM_*_SETTINGS_ADDR/VERSION and
+ * Services/svc_storage.c's SettingsSection table, which slices this
+ * struct into independently-versioned/CRC'd pages by exactly these
+ * group boundaries (offsetof(first field) .. offsetof(last field) +
+ * sizeof(last field)). Keep each group's fields adjacent — inserting an
+ * unrelated field in the middle of a group would silently pull it into
+ * that group's EEPROM page. No calibration constant lives only in
+ * flash; these are always read from here, not a #define, past first
+ * boot — see config.h's DEFAULT_* for the seed values. */
 typedef struct {
+    /* --- Scheduler/Timing page --- */
     uint16_t task_sensors_ms;
     uint16_t task_processing_ms;
     uint16_t task_display_ms;
@@ -17,15 +28,14 @@ typedef struct {
     uint32_t settling_timeout_ms;
     uint16_t filter_cutoff_hz_num;
     uint16_t filter_cutoff_hz_den;
+
+    /* --- Battery page --- */
     uint16_t battery_critical_mv;   /* below this: BATTERY_CRITICAL */
     uint16_t battery_low_mv;        /* below this (and >= critical): BATTERY_LOW */
-
-    /* ADC/sensor scaling calibration — see config.h's DEFAULT_* for the
-     * seed values and what each feeds. No calibration constant lives
-     * only in flash; these are always read from here, not a #define,
-     * past first boot. */
     uint16_t vbat_scale_num;
     uint16_t vbat_scale_den;
+
+    /* --- TMP236 (on-board temp sensor) page --- */
     uint16_t tmp236_seg1_voffs_mv;
     uint16_t tmp236_seg1_num;
     uint16_t tmp236_seg1_den;
@@ -34,16 +44,15 @@ typedef struct {
     uint16_t tmp236_seg2_num;
     uint16_t tmp236_seg2_den;
     uint16_t tmp236_seg2_tinfl_cdeg;
+
+    /* --- LM35 (external temp sensor) page --- */
     uint16_t lm35_scale_mv_per_c;
 
-    /* Raw quadrature transitions per mechanical detent (WP3) — see
-     * config.h's DEFAULT_ENCODER_COUNTS_PER_DETENT and
-     * App/app_ui.c's consume_detents(). Same category as the ADC/sensor
-     * calibration fields above: unconfirmed against real hardware, so
-     * EEPROM-backed rather than a flash #define. */
+    /* --- Encoder page (WP3) ---
+     * Raw quadrature transitions per mechanical detent — see
+     * App/app_ui.c's consume_detents(). Unconfirmed against real
+     * hardware, same as the calibration fields above. */
     uint16_t encoder_counts_per_detent;
-
-    uint16_t checksum;
 } DeviceSettings;
 
 typedef struct {

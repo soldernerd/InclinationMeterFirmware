@@ -71,17 +71,37 @@
  * bare #define — see App/app_ui.c's consume_detents(). */
 #define DEFAULT_ENCODER_COUNTS_PER_DETENT  4
 
-/* --- EEPROM --- */
-#define EEPROM_MAGIC                    0xA55A
-#define EEPROM_SETTINGS_VERSION         0x0004  /* bumped: added
-                                                   * encoder_counts_per_detent —
-                                                   * see DEFAULT_ENCODER_COUNTS_PER_DETENT
-                                                   * above. Previous bump (0x0003)
-                                                   * added vbat_scale_num/den,
-                                                   * tmp236_seg1/seg2_*,
-                                                   * lm35_scale_mv_per_c. */
+/* --- EEPROM (REV B, 2026-08-17: per-subsystem page split) ---
+ * DeviceSettings used to live under ONE version number covering the
+ * whole struct — any single field addition (most recently
+ * encoder_counts_per_detent, version 0x0004) forced every OTHER
+ * subsystem's saved data to be discarded and reseeded to defaults too,
+ * confirmed as real project debt during code review (see
+ * docs/wp2-5_rebase_status.md). Fixed by giving each subsystem its own
+ * page — its own magic/version/CRC header — so a layout change in one
+ * no longer touches the others. This changes the address map, not just
+ * field content, so any prior EEPROM contents under the old single-page
+ * scheme are void either way; harmless, since no hardware has been
+ * calibrated/flashed yet. Services/svc_storage.c is the only consumer
+ * of the _ADDR/_VERSION pairs below — see its SettingsSection table.
+ *
+ * 256 bytes/page (24LC256 has 32 KB total, so this uses well under 5%
+ * of it) leaves each subsystem generous room to grow without ever
+ * needing to shift addresses again. */
+#define EEPROM_MAGIC                     0xA55A
+
+#define EEPROM_SCHEDULER_SETTINGS_ADDR    0x0000  /* task periods, stream interval, settling, filter */
+#define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0001
+#define EEPROM_BATTERY_SETTINGS_ADDR      0x0100  /* thresholds + ADC divider scale */
+#define EEPROM_BATTERY_SETTINGS_VERSION   0x0001
+#define EEPROM_TMP236_SETTINGS_ADDR       0x0200  /* on-board temp sensor piecewise-linear constants */
+#define EEPROM_TMP236_SETTINGS_VERSION    0x0001
+#define EEPROM_LM35_SETTINGS_ADDR         0x0300  /* external temp sensor scale */
+#define EEPROM_LM35_SETTINGS_VERSION      0x0001
+#define EEPROM_ENCODER_SETTINGS_ADDR      0x0400  /* quadrature counts/detent */
+#define EEPROM_ENCODER_SETTINGS_VERSION   0x0001
+
+#define EEPROM_CALIBRATION_ADDR         0x0500     /* moved from 0x0100 */
 #define EEPROM_CALIBRATION_VERSION      0x0001
-#define EEPROM_SETTINGS_ADDR            0x0000
-#define EEPROM_CALIBRATION_ADDR         0x0100
 
 #endif /* CONFIG_H */
