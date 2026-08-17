@@ -176,14 +176,23 @@ onto `wp2@83c4617`, dropped `880c218` (its CubeMX-regen-only companion, TIM1-era
 therefore moot), then hand-adapted for REV B hardware and a deliberately trimmed scope —
 driven by direct user requirements, not just mechanical pin renames:
 
-**Scope cut vs. the original prototype:** the user's request for this pass was explicitly
-"just evaluate the inputs and make them available to future UI software... just to verify
-the code" — not the full settings-editing UI. `App/app_ui.c`/`.h` and the multi-screen
-`App/app_display.c` compositor from `f2646e4` were reverted back to their pre-cherry-pick
-(WP1-stub / single-screen) state rather than carried forward; a new `Services/svc_input.c`
-(polling, not the old `app_ui.c` state machine) fills the gap instead. The full settings UI
-these old files implemented is real prior work, still sitting in `f2646e4`'s tree if a
-future WP wants to resurrect it — it was a deliberate scope decision, not a loss.
+**Scope history:** the first pass at this (commits `e14e086`/`58afb60`/`015bb94`) trimmed
+scope to "just evaluate the inputs... just to verify the code" per an early instruction in
+the session, reverting `App/app_ui.c`/`.h` and the multi-screen `App/app_display.c`
+compositor back to WP1-stub / single-screen. The user then clarified they wanted
+`.workpackages/WP3_prompt.md`'s full original scope (commit after `015bb94`) — the UI state
+machine and multi-screen display are now implemented, adapted for REV B rather than a
+straight restore of `f2646e4`'s versions: `Services/svc_input.c` was narrowed to pure
+polling (no beeping — `app_ui.c` now owns all buzzer triggering, contextually, avoiding a
+double-beep between the two), `drv_encoder`'s `EncoderState`/`get_state()`/`clear()` API
+from the prototype was **not** brought back (the 2026-08-17 decision earlier in this same
+session — full quadrature, raw transition count — stands; `app_ui.c`'s `consume_detents()`
+converts raw counts to clicks instead), button press events move through new
+`g_system_state.encoder{1,2}_sw_press_event` latches (buttons are polled, not EXTI, on
+REV B — see below), and `battery_cutoff_mv` (REV A-era field, no longer exists) maps to
+today's `battery_critical_mv`. The buzzer stayed **single-tone at 2 kHz** (that decision
+also stands) rather than the prototype's 1200/2400 Hz nav/confirm split — beeps differ only
+in duration (20 ms nav / 40 ms confirm) to keep some of the original's tactile distinction.
 
 **Hardware-driven changes beyond pin renames:**
 - **Buzzer moved timers entirely**, not just pins: REV A prototype used TIM1_CH2/PB3; REV B
@@ -244,10 +253,14 @@ table above.
 - Whether this encoder part is actually 4 raw transitions per mechanical detent — needed
   once a UI layer wants to translate `drv_encoder_get_count()` into "clicks."
 - Buzzer audibility/loudness at 2 kHz on the real board, and whether `ENC_1SW`/`ENC_2SW`
-  polling (rather than interrupt) feels responsive enough for real button presses.
-- The reverted `app_ui.c` settings-editing UI (still in `f2646e4`'s tree) is real, unused
-  prior work — a future WP should decide whether to resurrect it or design fresh against
-  whatever WP5's "Full display UI" ends up needing.
+  polling (rather than interrupt) feels responsive enough for real button presses and screen
+  navigation.
+- `ENCODER_COUNTS_PER_DETENT` (`App/app_ui.c`, currently 4) is an assumption — confirm
+  against the real encoder part and adjust if screen navigation feels like it needs more
+  or less than one physical click per step.
+- EEPROM settings save-on-confirm (`svc_storage_save_settings()` from the SETTINGS screen)
+  hasn't been exercised against real EEPROM hardware in this pass — inherits the same
+  "not yet flashed" caveat as everything else here.
 
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 

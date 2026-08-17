@@ -1,6 +1,7 @@
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
+#include "app_ui.h"
 #include "drv_tmp236.h"
 #include "drv_buzzer.h"
 #include "hal_adc.h"
@@ -56,16 +57,22 @@ static void task_storage(void)
 
 static void task_input(void)
 {
-    /* Encoder turns are EXTI-driven (see Drivers_App/drv_encoder.c) and
-     * need no polling themselves, but button state (ENC_1SW/ENC_2SW are
-     * not EXTI-capable on this pinout — see pin_config.h) and the
-     * "did anything change since last tick" edge/beep logic do. */
+    /* ENC_1SW/ENC_2SW aren't EXTI-capable on this pinout (see
+     * pin_config.h) so they need polling; also mirrors the EXTI-driven
+     * encoder rotation counts into g_system_state. Runs every tick so
+     * task_ui (slower, task_display_ms) doesn't miss a button press
+     * latched between its ticks. */
     svc_input_update();
 }
 
 static void task_buzzer(void)
 {
     drv_buzzer_update();
+}
+
+static void task_ui(void)
+{
+    app_ui_update();
 }
 
 static void task_display(void)
@@ -78,7 +85,9 @@ static void task_leds(void)
     app_leds_task();
 }
 
-/* ---- task table ---- */
+/* ---- task table ----
+ * Order matters when multiple tasks share a tick: task_ui before
+ * task_display so display sees a fresh redraw_needed the same tick. */
 
 static SchedulerEntry s_tasks[] = {
     { task_adc,         0,                   0 },
@@ -87,6 +96,7 @@ static SchedulerEntry s_tasks[] = {
     { task_storage,     0,                   0 },
     { task_input,       0,                   0 },
     { task_buzzer,      0,                   0 },
+    { task_ui,          0,                   0 },
     { task_display,     0,                   0 },
     { task_leds,        DEFAULT_TASK_LED_MS, 0 },
 };
@@ -103,7 +113,8 @@ void app_scheduler_init(void)
     s_tasks[4].period_ms = SYSTICK_PERIOD_MS;     /* input — every tick */
     s_tasks[5].period_ms = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
     s_tasks[6].period_ms = g_device_settings.task_display_ms;
-    /* s_tasks[7] (LEDs) period is the fixed literal set in the table above —
+    s_tasks[7].period_ms = g_device_settings.task_display_ms;
+    /* s_tasks[8] (LEDs) period is the fixed literal set in the table above —
      * not user/BLE-configurable like the others. */
 
     uint32_t now = hal_systick_get_ms();

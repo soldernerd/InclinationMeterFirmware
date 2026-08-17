@@ -69,12 +69,23 @@ typedef struct {
 
     /* Local UI input (WP3), published by Services/svc_input.c. Raw
      * quadrature transition counts, not mechanical-detent counts — see
-     * Drivers_App/drv_encoder.h. A future UI layer owns translating these
-     * (and the press flags) into navigation/edit actions. */
+     * Drivers_App/drv_encoder.h. App/app_ui.c is the UI layer that
+     * translates these (and the press events) into navigation/edit
+     * actions, deciding on its own how many raw counts make one
+     * mechanical "click." */
     int32_t  encoder1_count;
     int32_t  encoder2_count;
-    bool     encoder1_sw_pressed;
+    bool     encoder1_sw_pressed;        /* current level */
     bool     encoder2_sw_pressed;
+    bool     encoder1_sw_press_event;    /* latched on press edge; the
+                                           * consumer (app_ui.c) clears it
+                                           * after acting on it — buttons
+                                           * aren't EXTI-capable on this
+                                           * pinout (see pin_config.h), so
+                                           * svc_input.c polls and can't
+                                           * hand the consumer a real
+                                           * one-shot interrupt event */
+    bool     encoder2_sw_press_event;
 } SystemState;
 
 typedef struct {

@@ -1,25 +1,17 @@
 #include "svc_input.h"
 #include "drv_encoder.h"
-#include "drv_buzzer.h"
 #include "hal_gpio.h"
 #include "pin_config.h"
 #include "system_state.h"
-#include <stdint.h>
 #include <stdbool.h>
 
-#define BUTTON_BEEP_MS   30U
-
-static bool    s_sw1_pressed;
-static bool    s_sw2_pressed;
-static int32_t s_enc1_last_count;
-static int32_t s_enc2_last_count;
+static bool s_sw1_pressed;
+static bool s_sw2_pressed;
 
 void svc_input_init(void)
 {
-    s_sw1_pressed     = false;
-    s_sw2_pressed     = false;
-    s_enc1_last_count = drv_encoder_get_count(ENCODER_1);
-    s_enc2_last_count = drv_encoder_get_count(ENCODER_2);
+    s_sw1_pressed = false;
+    s_sw2_pressed = false;
 }
 
 void svc_input_update(void)
@@ -33,29 +25,21 @@ void svc_input_update(void)
     bool sw1_now = hal_gpio_get(ENC_1SW_PORT, ENC_1SW_PIN);
     bool sw2_now = hal_gpio_get(ENC_2SW_PORT, ENC_2SW_PIN);
 
+    /* Latch press edges rather than overwrite — app_ui.c (or any future
+     * consumer) runs slower than this polling task and must not miss a
+     * press that happens between its ticks. Consumer clears the flag
+     * after acting on it. */
     if (sw1_now && !s_sw1_pressed) {
-        drv_buzzer_beep(BUZZER_TONE_CLICK, BUTTON_BEEP_MS);
+        g_system_state.encoder1_sw_press_event = true;
     }
     if (sw2_now && !s_sw2_pressed) {
-        drv_buzzer_beep(BUZZER_TONE_CLICK, BUTTON_BEEP_MS);
+        g_system_state.encoder2_sw_press_event = true;
     }
     s_sw1_pressed = sw1_now;
     s_sw2_pressed = sw2_now;
 
-    int32_t enc1_count = drv_encoder_get_count(ENCODER_1);
-    int32_t enc2_count = drv_encoder_get_count(ENCODER_2);
-
-    if (enc1_count != s_enc1_last_count) {
-        drv_buzzer_beep(BUZZER_TONE_CLICK, BUTTON_BEEP_MS);
-        s_enc1_last_count = enc1_count;
-    }
-    if (enc2_count != s_enc2_last_count) {
-        drv_buzzer_beep(BUZZER_TONE_CLICK, BUTTON_BEEP_MS);
-        s_enc2_last_count = enc2_count;
-    }
-
-    g_system_state.encoder1_count      = enc1_count;
-    g_system_state.encoder2_count      = enc2_count;
+    g_system_state.encoder1_count      = drv_encoder_get_count(ENCODER_1);
+    g_system_state.encoder2_count      = drv_encoder_get_count(ENCODER_2);
     g_system_state.encoder1_sw_pressed = sw1_now;
     g_system_state.encoder2_sw_pressed = sw2_now;
 }

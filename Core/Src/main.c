@@ -46,6 +46,7 @@
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
+#include "app_ui.h"
 #include "svc_input.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
@@ -167,6 +168,7 @@ int main(void)
   drv_encoder_init(ENCODER_1);
   drv_encoder_init(ENCODER_2);
   svc_input_init();
+  app_ui_init();
 
   app_scheduler_init();
   app_leds_init();
