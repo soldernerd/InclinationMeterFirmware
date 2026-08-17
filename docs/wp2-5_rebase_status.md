@@ -28,7 +28,7 @@ GC runs; nothing is deleted immediately.
 |---|---|---|---|
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
 | `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted, EEPROM storage redesigned into per-subsystem pages — see "wp3 — resolution" and "Code review" below. Build-verified clean; three code-review passes complete (first: 8-angle/12-verified/10-fixed; second: partial-angle plus the EEPROM per-page redesign; third: remaining angles against that redesign, found and fixed a real data-corruption bug), 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 13 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, UI state machine restoration, three code-review fix rounds, EEPROM per-page redesign, docs throughout). `wp3` HEAD is `8f9d3e8`. |
-| `wp4` | **Hand-adapted onto `wp3@2d5fc7e`, reconciled against two real CubeMX regens (the second with NVIC properly configured via the GUI), code-reviewed (9 findings, 8 fixed) — see "wp4 — resolution and adaptation notes" below. Build-verified clean, 2026-08-18.** | `wp3@2d5fc7e` | `wp4` HEAD is `d15669f`. |
+| `wp4` | **Hand-adapted onto `wp3@2d5fc7e`, reconciled against two real CubeMX regens (the second with NVIC properly configured via the GUI), through two full code-review passes (9+8 findings, 17 fixed total) — see "wp4 — resolution and adaptation notes" below. Build-verified clean, 2026-08-18.** | `wp3@2d5fc7e` | `wp4` HEAD is `c7665dc`. |
 | `wp5` | Not started | `wp4` (once pushed) | Commits `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping); drop `4bc4f16`. |
 
 **Build verification:** no ARM toolchain existed on the machine `wp3` was developed on
@@ -564,8 +564,42 @@ out with an explicit "re-verify after every future regen" comment at their defin
 Build-verified after both passes: zero warnings, 214/214 objects, FLASH 113.2 KB (21.6%),
 RAM 33.2 KB (22.5%). Still not flash-tested on real hardware.
 
-Build-verified again after reconciliation: zero warnings, 214/214 objects, FLASH 112.8 KB
-(21.5%), RAM 33.2 KB (22.5%).
+**Update (2026-08-18): a second full `/code-review` pass, requested explicitly before
+pushing.** Same method (9 finder angles on the full `wp3...HEAD` diff, independent
+re-verification on every candidate) run fresh against the state after the first review pass
+and both regens. No crash-level bugs this time — everything from the first pass held up —
+but 8 real issues survived undetected until this second look, all fixed (commit `c7665dc`):
+- `svc_storage_update()`'s retry-exhausted branch only escalated `settings_save_failed` for
+  settings saves, not calibration saves — a `SET_CALIBRATION` that ACKs on synchronous
+  queue-success could still fail asynchronously with nothing surfacing it. Now symmetric for
+  both kinds of save.
+- `svc_api.c`'s `SET_ZERO`/`SET_CALIBRATION`/`SET_SETTINGS` didn't check
+  `svc_storage_is_busy()` before saving — ordinary contention with an in-flight local-UI save
+  produced a false "SAVE FAILED" and NACK. Now checked first; busy NACKs without escalating.
+- `svc_storage_validate_settings()`'s comment claimed to cover "every EEPROM-backed divisor"
+  but only guarded 4 of 6 — `filter_cutoff_hz_den`/`lm35_scale_mv_per_c` (unconsumed today,
+  future WP5/LM35-driver fields) had no guard. Added, so the comment is now actually true.
+- The measuring overlay's "[ENC2 push] Cancel" hint had no wiring behind it — encoder-2-press
+  never called `svc_measurement_cancel()`, only reachable via a connected host. Wired in.
+- `svc_usb.c`'s `send_via_usb()`/`svc_usb_send()` silently discarded USB send failures
+  (CLAUDE.md 7.6). Added `g_system_state.usb_tx_dropped_count` to at least make drops
+  observable (no retry queue — that's a bigger feature). `svc_usb_send()` itself was dead
+  code (zero callers) — deleted.
+- The three `SET_*` handlers' duplicated save-result-and-ack/nack logic factored into one
+  `handle_save_result()` helper.
+- `CUSTOM_HID_EPIN_SIZE`/`EPOUT_SIZE` moved into `usbd_conf.h`'s `USER CODE BEGIN/END
+  INCLUDE` block — the comment-only mitigation from the first regen reconciliation had
+  already failed to prevent silent loss on a *second* regen; the marker block is the one
+  place in this file confirmed to survive both. The report descriptor in
+  `usbd_custom_hid_if.c` has no equivalent regen-safe home (its content lives in an array
+  initializer, not a marker) — still comment-only, still needs a human re-check after any
+  future regen.
+- `hal_usb_send()` no longer unconditionally re-zeros a full 64-byte buffer the caller
+  already zero-padded.
+
+Build-verified after this pass too: zero warnings, 214/214 objects, FLASH 113.4 KB (21.6%),
+RAM 33.2 KB (22.5%). Still not flash-tested on real hardware — everything here is
+logic-level review, not a substitute for real silicon.
 
 ---
 
@@ -578,10 +612,12 @@ Build-verified again after reconciliation: zero warnings, 214/214 objects, FLASH
    Still needs real-hardware flash testing — nothing here has touched real silicon yet.
 3. **`wp4` is done, build-verified, and code-reviewed** (see "wp4 — resolution and adaptation
    notes" above — 9 findings from a `/code-review` pass, 8 fixed, including a critical
-   regen-induced encoder hard-hang; 1 skipped as low-impact). `wp4` HEAD is `d15669f`. Still
-   needs real-hardware flash testing — nothing here has touched real silicon yet.
+   regen-induced encoder hard-hang; 1 skipped as low-impact), plus a second pass after both
+   regens landed (8 more findings, all fixed, no crash-level bugs this time). `wp4` HEAD is
+   `c7665dc`. Still needs real-hardware flash testing — nothing here has touched real
+   silicon yet.
 4. Move to `wp5`: `git checkout wp5 && git reset --hard wp4 && git cherry-pick 1662959 73aa050`
-   (decide on `81a9643`, drop `4bc4f16`) — `wp4` here means its current tip (`d15669f`).
+   (decide on `81a9643`, drop `4bc4f16`) — `wp4` here means its current tip (`c7665dc`).
    `1662959`'s own commit message flags a real pin conflict between its RN4871 UART choice
    and WP3's *old* encoder pins (PA2/PA3) — REV B's actual WP3 encoders are on
    PC4/PB0/PB1/PB2 now, so re-verify `73aa050`'s PD4/PD5/PD6 relocation is still free and
