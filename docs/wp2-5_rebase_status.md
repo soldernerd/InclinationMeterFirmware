@@ -28,8 +28,8 @@ GC runs; nothing is deleted immediately.
 |---|---|---|---|
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
 | `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted, EEPROM storage redesigned into per-subsystem pages — see "wp3 — resolution" and "Code review" below. Build-verified clean; three code-review passes complete (first: 8-angle/12-verified/10-fixed; second: partial-angle plus the EEPROM per-page redesign; third: remaining angles against that redesign, found and fixed a real data-corruption bug), 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 13 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, UI state machine restoration, three code-review fix rounds, EEPROM per-page redesign, docs throughout). `wp3` HEAD is `8f9d3e8`. |
-| `wp4` | Not started | `wp3` (once pushed) | `d1423b5`, `48e8562` | `ff054fb` |
-| `wp5` | Not started | `wp4` (rebased) | `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping) | `4bc4f16` |
+| `wp4` | **Hand-adapted onto `wp3@2d5fc7e` (not a cherry-pick — `d1423b5`/`48e8562` predate WP3's app-layer rewrite and would conflict heavily; ported file-by-file instead), USB Custom HID Device middleware added by hand (no CubeMX GUI), `ff054fb` dropped. Build-verified clean, 2026-08-17.** | `wp3@2d5fc7e` | See "wp4 — resolution and adaptation notes" below. `wp4` HEAD is `ad4b5b4`. |
+| `wp5` | Not started | `wp4` (once pushed) | Commits `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping); drop `4bc4f16`. |
 
 **Build verification:** no ARM toolchain existed on the machine `wp3` was developed on
 (confirmed by an exhaustive filesystem search; the `build/` directory previously checked
@@ -384,6 +384,128 @@ confirm "Hello World" + LED heartbeat render on real REV B hardware.
 
 ---
 
+## wp4 — resolution and adaptation notes (2026-08-17)
+
+Unlike `wp2`/`wp3`, this was **not** a cherry-pick. `d1423b5` (the WP4 feature commit) and
+`48e8562` (VID/PID) diff against the old REV-A prototype's `app_ui.c`/`app_display.c`/
+`app_scheduler.c` — files WP3 rewrote wholesale (unified `UiSettingMeta` table instead of
+parallel switches, multi-screen compositor with change-detection, safe
+`app_scheduler_reload_periods()`). A cherry-pick would have conflicted on nearly every hunk
+in those three files. Ported file-by-file onto `wp3@2d5fc7e` instead, applying the same
+"REV B hardware-driven changes, not mechanical renames" standard as `wp2`/`wp3`:
+
+**REV B's WP1 port had already done half the USB work, unknowingly.** `Core/Src/main.c`
+already called a standalone `MX_USB_DRD_FS_PCD_Init()`, and `Drivers/STM32G0xx_HAL_Driver/`
+already carried the full PCD/LL-USB driver files (`stm32g0xx_hal_pcd.c`, `_ex.c`,
+`stm32g0xx_ll_usb.c`) and `cmake/stm32cubemx/CMakeLists.txt` already built them — none of
+that existed on the old pre-REV-B history until WP4's own `ff054fb` added it. This also
+means **CLAUDE.md's Open Item 3 (non-standard USB pins) is moot on REV B**: the pinout CSV
+puts USB on the standard PA11 (`USB_DM`)/PA12 (`USB_DP`) pins the WP4 code already assumed —
+`docs/pinout_migration_wp2-5.md` §11 line 63 confirms this was already checked during the
+REV B pinout survey. What was still missing was the USB **Device middleware** layer
+(`Middlewares/ST/STM32_USB_Device_Library/`, `USB_Device/App+Target/`) — never added on REV
+B, and `ff054fb` (the branch that did add it) is REV-A/PA9-PC6-era and was dropped per the
+existing plan.
+
+**Middleware added by hand** (no CubeMX GUI in this environment — same constraint as every
+other WP here):
+- `Middlewares/ST/STM32_USB_Device_Library/` (Core + Class/CustomHID) is vendor code with no
+  board-specific content — ported verbatim from `ff054fb`.
+- `USB_Device/App/` + `USB_Device/Target/` needed real adaptation, not just a copy:
+  - **Duplicate-symbol conflict discovered and resolved:** `Core/Src/usb_drd_fs.c` (REV B's
+    existing standalone peripheral init) and `USB_Device/Target/usbd_conf.c` (the Device
+    middleware's own bridge layer) both declare the global `hpcd_USB_DRD_FS` handle and both
+    define `HAL_PCD_MspInit`/`MspDeInit` — a link error if both are built. This is the same
+    "CubeMX regen supersedes an earlier IP-only config" situation `CLAUDE.md` §9.2 describes;
+    resolved by deleting `usb_drd_fs.c`/`.h` (its `HAL_PCD_MspInit` didn't even enable the
+    NVIC interrupt — an incomplete stub `usbd_conf.c`'s version fully supersedes) and
+    replacing `main()`'s `MX_USB_DRD_FS_PCD_Init()` call with `MX_USB_Device_Init()`.
+  - **Report descriptor was never actually written in the old history either** — WP4's own
+    commit message flagged it as a required manual step (`hal_usb.c`'s banner: "you must
+    inject two USER CODE blocks"), and `ff054fb`'s version was still the 2-byte
+    `usbd_customhid.h` placeholder. Wrote a real 29-byte vendor-defined HID descriptor (one
+    64-byte opaque array each direction — `svc_api.c` owns the actual framing inside it).
+  - **`CUSTOM_HID_EPIN/EPOUT_SIZE` and `USBD_CUSTOMHID_OUTREPORT_BUF_SIZE` were still the ST
+    class template's 2-byte defaults** (sized for tiny reports like a keyboard LED byte) —
+    bumped to `USB_HID_REPORT_SIZE` (64) via `usbd_conf.h`, which `usbd_customhid.h`'s own
+    include chain (`usbd_ioreq.h` → `usbd_def.h` → `usbd_conf.h`) pulls in before its
+    `#ifndef` guards run, so the override lands correctly regardless of which file triggers
+    the include first.
+  - **`CUSTOM_HID_OutEvent_FS`'s callback signature only carries 2 bytes**
+    (`event_idx`/`state` — the class was designed around single-byte reports), not the full
+    64-byte report. The real received bytes sit in the private class handle's `Report_buf[]`,
+    reached via `hUsbDeviceFS.pClassDataCmsit[hUsbDeviceFS.classId]` — that's what actually
+    gets forwarded into `hal_usb_on_rx()`.
+  - `USBD_CUSTOM_HID_SendReport_FS` (what the original `hal_usb.c` called) is `static` inside
+    `usbd_custom_hid_if.c` and not linkable from `HAL_App/` — called `USBD_CUSTOM_HID_SendReport`
+    directly with `&hUsbDeviceFS` instead, matching the fix the old history's own `ff054fb`
+    commit message documented for the same problem.
+  - VID/PID/manufacturer/product strings pulled from `Config/config.h`'s existing
+    `USB_VID`/`USB_PID`/`USB_MANUFACTURER_STR`/`USB_PRODUCT_STR` instead of the class
+    template's hardcoded STMicroelectronics placeholders. Serial string descriptor left on
+    the template's own MCU-unique-ID-derived generator (more robust than a fixed string).
+- `USB_UCPD1_2_IRQHandler` added to `stm32g0xx_it.c`/`.h`, dispatching to
+  `HAL_PCD_IRQHandler(&hpcd_USB_DRD_FS)` — verified byte-for-byte against
+  `startup_stm32g0b1xx.s`'s vector table entry (STM32G0B1's USB, UCPD1, and UCPD2 all share
+  one NVIC line).
+
+**Application layer, ported with adaptation, not verbatim:**
+- `Services/svc_api.c`/`svc_measurement.c`/`Math/math_settling.c`: no REV B-specific content
+  (pure protocol/math logic), ported unchanged except one real bug fix — `SET_SETTINGS`
+  called `app_scheduler_init()`, which is boot-only and no-ops on every call after the first
+  (a WP3 code-review fix, see above) — changed to `app_scheduler_reload_periods()`, the
+  function that fix introduced specifically for this kind of runtime-reload call site.
+- `App/app_scheduler.c`: `task_usb`/`task_api`/`task_measurement` added onto the existing
+  task table and `app_scheduler_reload_periods()` (not the old history's now-superseded
+  `app_scheduler_init()`-only version).
+- `App/app_display.c`: STR/RAW/SGL top-bar badges and the MEASURING overlay ported onto the
+  current multi-screen compositor. Added `MeasurementState`/`ApiMode` tracking to
+  `DisplaySnapshot`'s change-detection struct — didn't exist when this was first written
+  against the old prototype's redraw-every-tick display code, and without it the overlay
+  could fail to appear/disappear promptly since neither field was otherwise watched.
+- `App/app_ui.c`: **not touched.** The old history's only WP4 addition there was the
+  "Reset BLE" settings action (`ble_configured = false`) — out of scope, see below.
+
+**Deliberately not ported:**
+- `EEPROM_SETTINGS_VERSION` → `0x0002` and `DeviceSettings.ble_configured`: the old history's
+  monolithic single-version EEPROM scheme these belong to no longer exists — `wp3` replaced
+  it with independently-versioned per-subsystem pages (`Services/svc_storage.c`'s
+  `SettingsSection` table). `ble_configured` has no purpose until BLE actually lands in
+  `wp5`; adding it now would mean inventing a "BLE settings" page for a field nothing reads
+  yet. Bring it in during the `wp5` rebase instead, as its own page following the established
+  `SettingsSection`/`_Static_assert` pattern.
+- WP1.5 debug UART (`db251c2`, found orphaned on branch `claude/lucid-thompson-923f35`,
+  never merged anywhere): explicit 2026-08-17 user decision to skip it rather than adapt and
+  splice it in ahead of `wp4` — USART3 becomes `svc_api`'s third `ApiTransport` directly, no
+  separate text-logging channel first. `svc_api.h`'s `ApiTransport` enum currently has only
+  `API_TRANSPORT_USB`/`API_TRANSPORT_BLE`; a `API_TRANSPORT_UART` (or similar) member and a
+  `svc_uart` adapter mirroring `svc_usb.c` would be the shape of that future addition.
+
+**Build-verified (2026-08-17)** — zero warnings under `-Wall -Wextra -Werror`, all 213/214
+objects (213 compiled + link), FLASH 113 KB (21.6%), RAM 33.2 KB (22.5%). `FW_VERSION`
+bumped to 0.4.0. **Not yet flash-tested** — nothing here has touched real silicon, same
+caveat as every other WP in this document.
+
+**Still outstanding, beyond "not on real hardware":**
+- The Custom HID report descriptor, `CUSTOM_HID_EPIN/EPOUT_SIZE`, and
+  `USBD_CUSTOMHID_OUTREPORT_BUF_SIZE` overrides are new content (not carried over from any
+  prior working state) — worth a host-side smoke test (`tools/test_usb.py`, itself unchanged
+  from the old history, not yet re-verified against this port) before trusting the framing
+  end-to-end.
+- Sensors aren't fused into `g_system_state`'s tilt fields yet (pre-dates WP4 — same gap the
+  old history had), so `svc_measurement`/`svc_api`'s STREAM/RAW_STREAM/SINGLE payloads carry
+  real timestamp/battery/status data but zero tilt values until a future WP wires that up.
+- `InclinationMeterFirmware.ioc` was not updated to reflect the USB Device middleware
+  addition (same gap `wp2`/`wp3` already have for their own hand-edited generated files —
+  never documented before now). A real CubeMX regen against this `.ioc` would currently
+  **not** reproduce what's actually built; if CubeMX GUI access becomes available, the USB
+  Device configuration should be added there properly and the drift reconciled.
+- `[ENC2 push] Cancel` on the MEASURING overlay is a display-only hint — the old history
+  never wired `svc_measurement_cancel()` into `App/app_ui.c`'s encoder-2-push handler, and
+  this port didn't add it either (out of scope: no app_ui.c changes, see above).
+
+---
+
 ## Resuming this work
 
 1. Read this file and the two docs linked at the top.
@@ -391,12 +513,16 @@ confirm "Hello World" + LED heartbeat render on real REV B hardware.
    resolution and adaptation notes" and "Code review" above — the third pass fixed a real
    EEPROM data-corruption bug in the per-page storage redesign). `wp3` HEAD is `8f9d3e8`.
    Still needs real-hardware flash testing — nothing here has touched real silicon yet.
-3. Move to `wp4`: `git checkout wp4 && git reset --hard wp3 && git cherry-pick d1423b5 48e8562`
-   (drop `ff054fb`) — `wp3` here means its current tip (`8f9d3e8`), not the old pre-rebase
-   base this doc originally pointed at, nor any earlier `wp3` commit from mid-review. Resolve
-   conflicts, apply the same 6-item checklist, grep for stale pin names, build and verify
-   before moving to `wp5`. Update this file's status table and add a `wp4` section mirroring
-   the `wp2`/`wp3` ones above.
-4. Repeat for `wp5` (base `wp4`, commits `1662959` + `73aa050` + decide on `81a9643`, drop
-   `4bc4f16`).
+3. **`wp4` is done and build-verified** (see "wp4 — resolution and adaptation notes" above).
+   `wp4` HEAD is `ad4b5b4`. Not yet code-reviewed the way `wp2`/`wp3` were — worth a
+   `/code-review` pass before pushing, given the amount of hand-written USB middleware glue.
+4. Move to `wp5`: `git checkout wp5 && git reset --hard wp4 && git cherry-pick 1662959 73aa050`
+   (decide on `81a9643`, drop `4bc4f16`) — `wp4` here means its current tip (`ad4b5b4`).
+   `1662959`'s own commit message flags a real pin conflict between its RN4871 UART choice
+   and WP3's *old* encoder pins (PA2/PA3) — REV B's actual WP3 encoders are on
+   PC4/PB0/PB1/PB2 now, so re-verify `73aa050`'s PD4/PD5/PD6 relocation is still free and
+   correct on the current netlist rather than assuming the old conflict (or its fix) still
+   applies as-is. This is also where `DeviceSettings.ble_configured` (deliberately skipped in
+   `wp4`, see above) should be added, as its own `SettingsSection` page. Resolve conflicts,
+   apply the same 6-item checklist, grep for stale pin names, build and verify.
 5. Stop after `wp5` builds clean. Do not merge into `master` — that's a separate review step.

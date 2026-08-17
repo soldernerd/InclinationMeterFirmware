@@ -4,13 +4,15 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1–WP3 implemented on the `wp3` branch** (REV B hardware): display bring-up, power
-management/battery monitoring/EEPROM storage, and the rotary-encoder + buzzer + multi-screen
-UI local interaction layer. Builds clean (zero warnings, `-Wall -Wextra -Werror`) and has
-been through multiple rounds of structured code review. **Not yet flashed to real
-hardware** — see `docs/wp2-5_rebase_status.md` for the full per-branch history, review
-findings, and what's still unverified against real silicon. `master` itself currently
-reflects WP1 only; `wp2`/`wp3` are feature branches pending their own review/merge.
+**WP1–WP4 implemented on the `wp4` branch** (REV B hardware): display bring-up, power
+management/battery monitoring/EEPROM storage, the rotary-encoder + buzzer + multi-screen UI
+local interaction layer, and a transport-agnostic device API (USB Custom HID today, BLE and
+USART3 to follow in WP5) with a single-shot measurement state machine. Builds clean (zero
+warnings, `-Wall -Wextra -Werror`). WP1–WP3 have been through multiple rounds of structured
+code review; WP4 has not yet had its own review pass. **Not yet flashed to real hardware** —
+see `docs/wp2-5_rebase_status.md` for the full per-branch history, review findings, and
+what's still unverified against real silicon. `master` itself currently reflects WP1 only;
+`wp2`/`wp3`/`wp4` are feature branches pending their own review/merge.
 
 ## Hardware
 
@@ -53,6 +55,8 @@ Output: `build/InclinationMeterFirmware.elf`.
 .
 ├── Core/                 — CubeMX-generated HAL init (do not modify outside USER CODE)
 ├── Drivers/              — ST HAL/CMSIS library
+├── Middlewares/ST/       — ST USB Device middleware (vendor code, do not modify)
+├── USB_Device/App+Target/ — CubeMX-style USB Device glue (hand-adapted, WP4)
 ├── Config/               — Project-wide constants (config.h, pin_config.h)
 ├── HAL_App/              — Application HAL wrappers (gpio, spi, tim, systick, …)
 ├── Drivers_App/          — Device drivers (sharp_lcd, scl3300, pcap04, …)
