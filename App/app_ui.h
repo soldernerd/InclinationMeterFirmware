@@ -32,6 +32,17 @@ typedef struct {
     int32_t  edit_value;            /* working copy while editing */
 } UiState;
 
+/* Display label/unit/edit-range for one setting — single source of truth
+ * shared by App/app_ui.c (edit clamping) and App/app_display.c (rendering
+ * the SETTINGS screen), instead of each keeping its own copy. */
+typedef struct {
+    const char *label;
+    const char *unit;
+    int32_t     step;
+    int32_t     min_v;
+    int32_t     max_v;
+} UiSettingMeta;
+
 extern UiState g_ui_state;
 
 void app_ui_init(void);
@@ -42,5 +53,9 @@ void app_ui_update(void);
  * re-implementing the UiSettingIndex -> field switch itself (that
  * duplication used to exist and could silently desync). */
 int32_t app_ui_setting_read(UiSettingIndex i);
+
+/* Never returns NULL — an out-of-range index falls back to index 0
+ * rather than crash a display routine over a cursor bug. */
+const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i);
 
 #endif /* APP_UI_H */

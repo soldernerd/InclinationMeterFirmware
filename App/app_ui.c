@@ -3,7 +3,6 @@
 #include "svc_storage.h"
 #include "app_scheduler.h"
 #include "system_state.h"
-#include "config.h"
 
 UiState g_ui_state = {
     .current_screen   = UI_SCREEN_LIVE,
@@ -17,20 +16,25 @@ UiState g_ui_state = {
 static int32_t s_enc1_base;
 static int32_t s_enc2_base;
 
-/* ---- per-setting metadata ---- */
+/* ---- per-setting metadata ----
+ * Single shared table (label/unit/step/min/max) — App/app_display.c
+ * pulls label/unit from here via app_ui_setting_meta() instead of
+ * keeping its own parallel switch statements. */
 
-typedef struct {
-    int32_t  step;
-    int32_t  min_v;
-    int32_t  max_v;
-} SettingRange;
-
-static const SettingRange s_ranges[UI_SETTING_COUNT] = {
-    [UI_SETTING_DISPLAY_RATE]     = {   10,    50,    500 },
-    [UI_SETTING_BATTERY_CRITICAL] = {   10,  3000,   3700 },
-    [UI_SETTING_STREAM_INTERVAL]  = {   50,   100,   2000 },
-    [UI_SETTING_SETTLING_TIMEOUT] = { 1000,  5000,  60000 },
+static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
+    [UI_SETTING_DISPLAY_RATE]     = { "Display rate",     "ms",   10,    50,    500 },
+    [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
+    [UI_SETTING_STREAM_INTERVAL]  = { "Stream interval",  "ms",   50,   100,   2000 },
+    [UI_SETTING_SETTLING_TIMEOUT] = { "Settling timeout", "ms", 1000,  5000,  60000 },
 };
+
+const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i)
+{
+    if ((unsigned)i >= UI_SETTING_COUNT) {
+        i = UI_SETTING_DISPLAY_RATE;
+    }
+    return &s_setting_meta[i];
+}
 
 int32_t app_ui_setting_read(UiSettingIndex i)
 {
@@ -74,14 +78,14 @@ static int32_t clamp(int32_t v, int32_t lo, int32_t hi)
  * NOT confirmed against this board's actual encoder part (2026-08-17
  * user note: "not even sure about the edges per dent"), which is
  * exactly why it's a settings field and not a flash constant: it can be
- * corrected after hardware bring-up without a reflash. Guarded against
- * 0 (corrupt/uninitialized EEPROM) to avoid a divide-by-zero fault. */
+ * corrected after hardware bring-up without a reflash. Not re-validated
+ * here on every call: Services/svc_storage.c's svc_storage_init() is the
+ * single gate this value passes through (runs before app_ui_init(), and
+ * nothing else in this codebase writes this field), so it's already
+ * guaranteed nonzero by the time this runs. */
 static int16_t consume_detents(int32_t current_count, int32_t *base)
 {
     int32_t per_detent = (int32_t)g_device_settings.encoder_counts_per_detent;
-    if (per_detent <= 0) {
-        per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
-    }
     int32_t delta = current_count - *base;
     int32_t detents = delta / per_detent;
     *base += detents * per_detent;
@@ -122,10 +126,10 @@ static void commit_edit(void)
     setting_write(idx, g_ui_state.edit_value);
     if (svc_storage_save_settings(&g_device_settings) == DRV_OK) {
         /* Reload task periods so e.g. display rate change takes effect
-         * now. Must NOT call app_scheduler_init() here — this runs
-         * re-entrantly from inside task_ui, itself mid-iteration of
-         * app_scheduler_run()'s loop; see app_scheduler_reload_periods()'s
-         * comment for why that matters. */
+         * now. This is the preferred entry point for a runtime settings
+         * change (app_scheduler_init() is boot-only and also now safe
+         * to call again, but only degrades to this same behavior — see
+         * its comment). */
         app_scheduler_reload_periods();
         g_ui_state.settings_editing = false;
         g_system_state.settings_save_failed = false;
@@ -187,9 +191,9 @@ void app_ui_update(void)
     if (g_ui_state.current_screen == UI_SCREEN_SETTINGS && g_ui_state.settings_editing) {
         /* Editing a value */
         if (e1_steps != 0) {
-            const SettingRange *r = &s_ranges[g_ui_state.settings_cursor];
-            int32_t delta = (int32_t)e1_steps * r->step;
-            g_ui_state.edit_value = clamp(g_ui_state.edit_value + delta, r->min_v, r->max_v);
+            const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)g_ui_state.settings_cursor);
+            int32_t delta = (int32_t)e1_steps * m->step;
+            g_ui_state.edit_value = clamp(g_ui_state.edit_value + delta, m->min_v, m->max_v);
             drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
             g_ui_state.redraw_needed = true;
         }

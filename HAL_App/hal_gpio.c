@@ -80,23 +80,32 @@ void hal_gpio_exti_register(uint8_t pin, HalGpioExtiCallback cb)
     }
 }
 
+uint8_t hal_gpio_pin_to_line(uint16_t gpio_pin)
+{
+    /* GPIO_Pin is one-hot (GPIO_PIN_0=0x0001 .. GPIO_PIN_15=0x8000);
+     * __builtin_ctz gives the bit position directly instead of scanning
+     * for it. Callers are responsible for gpio_pin != 0 (undefined
+     * behavior otherwise, same as __builtin_ctz itself) — this is a thin
+     * wrapper, not a validated API, so it stays branch-free for the
+     * interrupt-context caller below. */
+    return (uint8_t)__builtin_ctz(gpio_pin);
+}
+
 /* HAL_GPIO_EXTI_IRQHandler (called from CubeMX-generated EXTIn_m_IRQHandler
  * in stm32g0xx_it.c) dispatches to these weak callbacks based on which
  * edge fired. We register the same callback for both — the encoder driver
  * reads pin state inside its own callback to determine direction. */
 static void exti_dispatch(uint16_t pin_mask)
 {
-    /* Single bit set per HAL invocation (GPIO_Pin is one-hot:
-     * GPIO_PIN_0=0x0001 .. GPIO_PIN_15=0x8000); __builtin_ctz gives the
-     * bit position directly instead of scanning for it. This runs in
-     * interrupt context on every encoder edge, so an O(1) lookup here
-     * matters more than in most of this codebase. pin_mask == 0 would be
-     * undefined behavior for __builtin_ctz — defensively guarded even
-     * though HAL never calls this with an empty mask. */
+    /* This runs in interrupt context on every encoder edge, so the O(1)
+     * hal_gpio_pin_to_line() lookup matters more here than in most of
+     * this codebase. pin_mask == 0 would be undefined behavior for it —
+     * defensively guarded even though HAL never calls this with an
+     * empty mask. */
     if (pin_mask == 0U) {
         return;
     }
-    uint8_t pin = (uint8_t)__builtin_ctz(pin_mask);
+    uint8_t pin = hal_gpio_pin_to_line(pin_mask);
     if (s_exti_callbacks[pin]) {
         s_exti_callbacks[pin]();
     }

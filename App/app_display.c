@@ -172,28 +172,6 @@ static void draw_status_screen(void)
 
 /* ---- SETTINGS screen ---- */
 
-static const char *setting_label(UiSettingIndex i)
-{
-    switch (i) {
-        case UI_SETTING_DISPLAY_RATE:     return "Display rate";
-        case UI_SETTING_BATTERY_CRITICAL: return "Battery critical";
-        case UI_SETTING_STREAM_INTERVAL:  return "Stream interval";
-        case UI_SETTING_SETTLING_TIMEOUT: return "Settling timeout";
-        default:                          return "?";
-    }
-}
-
-static const char *setting_unit(UiSettingIndex i)
-{
-    switch (i) {
-        case UI_SETTING_DISPLAY_RATE:     return "ms";
-        case UI_SETTING_BATTERY_CRITICAL: return "mV";
-        case UI_SETTING_STREAM_INTERVAL:  return "ms";
-        case UI_SETTING_SETTLING_TIMEOUT: return "ms";
-        default:                          return "";
-    }
-}
-
 static int32_t setting_value_for_display(UiSettingIndex i)
 {
     /* If editing the row at cursor, show the working edit_value;
@@ -215,11 +193,12 @@ static void draw_settings_screen(void)
     for (uint8_t i = 0; i < UI_SETTING_COUNT; ++i) {
         char line[64];
         const char *cursor = (i == g_ui_state.settings_cursor) ? ">" : " ";
+        const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)i);
         snprintf(line, sizeof line, "%s %-18s %ld %s",
                  cursor,
-                 setting_label((UiSettingIndex)i),
+                 m->label,
                  (long)setting_value_for_display((UiSettingIndex)i),
-                 setting_unit((UiSettingIndex)i));
+                 m->unit);
         if (i == g_ui_state.settings_cursor && g_ui_state.settings_editing) {
             /* Highlight: invert background of this row */
             u8g2_SetDrawColor(&s_u8g2, 1);
@@ -234,6 +213,15 @@ static void draw_settings_screen(void)
     }
 
     u8g2_DrawUTF8(&s_u8g2, 8, 200, "[ENC1] select/edit  [ENC2] back");
+
+    /* Makes g_system_state.settings_save_failed actually visible — a
+     * prior review pass added the flag (escalating a failed EEPROM
+     * write per CLAUDE.md's "No Silent Failures" rule) but nothing
+     * rendered it, so a real save failure was recorded but invisible
+     * to the user. */
+    if (g_system_state.settings_save_failed) {
+        u8g2_DrawUTF8(&s_u8g2, 8, 216, "! SAVE FAILED - retry !");
+    }
 }
 
 /* ---- low-battery overlay (carried over from WP2) ---- */

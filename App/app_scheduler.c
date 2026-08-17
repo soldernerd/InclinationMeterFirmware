@@ -102,13 +102,17 @@ static SchedulerEntry s_tasks[] = {
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 
-/* Periods are loaded from g_device_settings, which svc_storage_init has
- * already populated (or seeded with defaults from config.h). Shared by
- * app_scheduler_init() (boot) and app_scheduler_reload_periods() (a
- * settings change at runtime) — deliberately does NOT touch
- * last_run_ms, see that function's comment for why. */
-static void load_periods(void)
+static bool s_booted = false;
+
+void app_scheduler_reload_periods(void)
 {
+    /* Periods are loaded from g_device_settings, which svc_storage_init
+     * has already populated (or seeded with defaults from config.h).
+     * Deliberately does NOT touch last_run_ms — safe to call re-entrantly
+     * (e.g. from App/app_ui.c's commit_edit(), itself running from inside
+     * task_ui, mid-iteration of app_scheduler_run()'s own for-loop). This
+     * is the preferred entry point for a runtime settings change; only
+     * app_scheduler_init() also resets last_run_ms, and only once. */
     s_tasks[0].period_ms = g_device_settings.task_sensors_ms;
     s_tasks[1].period_ms = g_device_settings.task_temperature_ms;
     s_tasks[2].period_ms = g_device_settings.task_battery_ms;
@@ -123,7 +127,20 @@ static void load_periods(void)
 
 void app_scheduler_init(void)
 {
-    load_periods();
+    app_scheduler_reload_periods();
+
+    if (s_booted) {
+        /* Re-entrant call — a previous code-review pass found a real bug
+         * where a settings-save path called this (instead of
+         * app_scheduler_reload_periods()) from inside a running task,
+         * stamping every task's last_run_ms with a freshly-sampled tick
+         * and causing an unsigned-wraparound spurious re-fire for any
+         * task not yet reached that pass. Rather than rely solely on
+         * callers picking the right function, degrade safely here too:
+         * only the true first (boot) call resets last_run_ms. */
+        return;
+    }
+    s_booted = true;
 
     uint32_t now = hal_systick_get_ms();
     for (size_t i = 0; i < TASK_COUNT; ++i) {
@@ -131,26 +148,18 @@ void app_scheduler_init(void)
     }
 }
 
-void app_scheduler_reload_periods(void)
-{
-    /* Picks up a changed g_device_settings period (e.g. the SETTINGS
-     * screen's display-rate edit) without resetting last_run_ms.
-     * app_ui.c's commit_edit() calls this instead of app_scheduler_init()
-     * because it runs re-entrantly from inside task_ui, itself mid-
-     * iteration of app_scheduler_run()'s own for-loop: stamping every
-     * task's last_run_ms with a freshly-sampled (later) tick there would
-     * make the outer loop's already-captured, now-stale `now` underflow
-     * against it for any task not yet reached that pass (unsigned
-     * wraparound makes the elapsed-time check always true), causing a
-     * spurious extra run this same tick and perturbing every task's next
-     * scheduled time as a side effect — a real bug this project's own
-     * code review caught. */
-    load_periods();
-}
-
 void app_scheduler_run(void)
 {
     while (1) {
+        /* Deliberately NOT hal_systick_elapsed_ms() here: `now` is one
+         * consistent snapshot reused for every task's due-check and its
+         * last_run_ms stamp this pass. hal_systick_elapsed_ms() samples
+         * a fresh tick internally, which would let each task's check
+         * (and its last_run_ms assignment) drift against a slightly
+         * different `now`, and desync the two from each other — a
+         * real, if minor, behavior change from re-sampling per task
+         * instead of once per pass. Same wrap-safe unsigned-subtract
+         * math either way, just against a locally cached `now`. */
         uint32_t now = hal_systick_get_ms();
         for (size_t i = 0; i < TASK_COUNT; ++i) {
             if ((uint32_t)(now - s_tasks[i].last_run_ms) >= s_tasks[i].period_ms) {

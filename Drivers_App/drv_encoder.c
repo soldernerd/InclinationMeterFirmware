@@ -54,14 +54,6 @@ static void encoder_update(EncoderInstance instance)
 static void enc1_isr(void) { encoder_update(ENCODER_1); }
 static void enc2_isr(void) { encoder_update(ENCODER_2); }
 
-/* hal_gpio_exti_register() takes a 0-15 EXTI-line index, not a GPIO_PIN_x
- * bitmask; GPIO_PIN_x is one-hot (GPIO_PIN_0=0x0001 .. GPIO_PIN_15=0x8000),
- * so __builtin_ctz recovers the line index directly. */
-static uint8_t exti_line_of(uint16_t gpio_pin)
-{
-    return (uint8_t)__builtin_ctz(gpio_pin);
-}
-
 /* s_enc[] has exactly one entry per EncoderInstance value; anything
  * outside that range is a caller bug, not a state this driver should
  * silently index past (no MPU on this MCU — an out-of-bounds static
@@ -75,13 +67,16 @@ DrvStatus drv_encoder_init(EncoderInstance instance)
     }
 
     EncoderCtx *e = &s_enc[instance];
+    HalGpioExtiCallback isr;
 
     if (instance == ENCODER_1) {
         e->a_port = ENC_1A_PORT; e->a_pin = ENC_1A_PIN;   /* PC4, EXTI4 */
         e->b_port = ENC_1B_PORT; e->b_pin = ENC_1B_PIN;   /* PB0, EXTI0 */
+        isr = enc1_isr;
     } else {
         e->a_port = ENC_2A_PORT; e->a_pin = ENC_2A_PIN;   /* PB1, EXTI1 */
         e->b_port = ENC_2B_PORT; e->b_pin = ENC_2B_PIN;   /* PB2, EXTI2 */
+        isr = enc2_isr;
     }
 
     /* Seed count/ab_state from the live pins BEFORE arming the EXTI
@@ -93,13 +88,8 @@ DrvStatus drv_encoder_init(EncoderInstance instance)
     e->count    = 0;
     e->ab_state = read_ab_state(e);
 
-    if (instance == ENCODER_1) {
-        hal_gpio_exti_register(exti_line_of(ENC_1A_PIN), enc1_isr);
-        hal_gpio_exti_register(exti_line_of(ENC_1B_PIN), enc1_isr);
-    } else {
-        hal_gpio_exti_register(exti_line_of(ENC_2A_PIN), enc2_isr);
-        hal_gpio_exti_register(exti_line_of(ENC_2B_PIN), enc2_isr);
-    }
+    hal_gpio_exti_register(hal_gpio_pin_to_line(e->a_pin), isr);
+    hal_gpio_exti_register(hal_gpio_pin_to_line(e->b_pin), isr);
 
     return DRV_OK;
 }

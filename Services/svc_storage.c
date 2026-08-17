@@ -203,9 +203,22 @@ DrvStatus svc_storage_load_settings(DeviceSettings *settings)
     }
 
     if (version != EEPROM_SETTINGS_VERSION) {
-        /* Migration: caller can detect via version mismatch and reseed.
-         * For WP2 we accept the loaded data — fields beyond what current
-         * firmware understands are ignored, missing fields stay zero. */
+        /* No field-preserving migration exists — a version mismatch is
+         * treated exactly like "absent" (comment above corrected
+         * 2026-08-17: this used to claim "we accept the loaded data,"
+         * which was never true; the caller, svc_storage_init(), reacts
+         * to DRV_ERR_NOT_READY by overwriting every field with defaults
+         * and persisting that, discarding whatever was actually stored).
+         * KNOWN GAP, not new to this version bump: the same reseed-on-
+         * mismatch behavior already applied across the 0x0001->0x0003
+         * bumps (see docs/wp2-5_rebase_status.md's outstanding items) —
+         * a device with real calibration data saved under an older
+         * version loses ALL of it on a firmware update that bumps this,
+         * not just whatever new field motivated the bump. No hardware
+         * has been calibrated/flashed yet, so today's blast radius is
+         * zero; a real migration path (re-read the old-sized struct,
+         * copy forward the fields both versions share) is needed before
+         * this matters on a device with real field data. */
         return DRV_ERR_NOT_READY;
     }
     return DRV_OK;
@@ -351,6 +364,17 @@ void svc_storage_init(void)
         build_header(hdr_and_struct, EEPROM_SETTINGS_VERSION, crc);
         memcpy(&hdr_and_struct[HDR_SIZE], &g_device_settings, sizeof(DeviceSettings));
         (void)blocking_write_block(SETTINGS_BASE, hdr_and_struct, sizeof(hdr_and_struct));
+    }
+
+    /* Validated once here, at the single gate every settings consumer's
+     * data passes through — not re-checked at every call site that
+     * happens to divide by one of these fields (App/app_ui.c's
+     * consume_detents() used to duplicate this exact check on every UI
+     * tick). fill_default_settings() already guarantees a sane value on
+     * the reseed path above; this only matters for a CRC-valid load that
+     * somehow still carries a zero divisor. */
+    if (g_device_settings.encoder_counts_per_detent == 0U) {
+        g_device_settings.encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
     }
 
     /* Calibration: same pattern, but a missing/corrupt header just means
