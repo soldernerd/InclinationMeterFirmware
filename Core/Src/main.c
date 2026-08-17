@@ -144,19 +144,6 @@ int main(void)
   MX_I2C3_Init();
   MX_USB_Device_Init();
   /* USER CODE BEGIN 2 */
-  /* EXTI NVIC enable for the encoder pins (ENC_1A/1B/2A/2B) — CubeMX's own
-   * .ioc doesn't track these (only their per-pin EXTI trigger mode, not an
-   * NVIC-enable checkbox), so gpio.c's MX_GPIO_Init() won't regenerate this
-   * and a CubeMX regen for something unrelated (WP4's USB, in this case)
-   * silently drops it if it lives there. Kept here instead, in a marker
-   * CubeMX always preserves. */
-  HAL_NVIC_SetPriority(EXTI0_1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI0_1_IRQn);
-  HAL_NVIC_SetPriority(EXTI2_3_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI2_3_IRQn);
-  HAL_NVIC_SetPriority(EXTI4_15_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(EXTI4_15_IRQn);
-
   hal_gpio_init();
   hal_systick_init();
   /* Record whether this boot resumed from Standby mode (all RAM/state was
