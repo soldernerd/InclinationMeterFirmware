@@ -312,6 +312,21 @@ data is at risk today). Applying the elapsed-time-helper suggestion to the sched
 (would desync each task's due-check from its `last_run_ms` stamp) and reverted with an
 explanatory comment. Build-verified clean after fixes.
 
+**EEPROM page split (2026-08-17, commit `30b14e8`) — actually fixes the version-bump finding
+above, instead of just documenting it as accepted risk.** User's proposal: since the 24LC256
+has 32KB and settings use under 1KB, give each subsystem (Scheduler/Timing, Battery, TMP236,
+LM35, Encoder) its own EEPROM page with its own magic/version/CRC header, instead of one
+version number covering the whole `DeviceSettings` struct. `g_device_settings` stays one flat
+struct in RAM — no consumer code changed — only `Services/svc_storage.c`'s persistence layer
+changed internally, via a `SettingsSection` table (address + version + `offsetof`/`sizeof`
+byte range per subsystem) driving both load and save. `EEPROM_CALIBRATION_ADDR` moved
+`0x0100`→`0x0500` to make room; addresses `0x0000`-`0x0400` now hold the five settings pages.
+Removed the vestigial `checksum` struct field (set but never read — real integrity checking
+was always the header's separate CRC). Verified via `_Static_assert` that the five sections
+exactly tile the struct with no padding gaps/overlaps between boundaries. The "still
+outstanding" `encoder_counts_per_detent` bullet above is now more precisely scoped: its own
+page can change layout/version without affecting battery or TMP236 calibration.
+
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 
 **Previously:** `HAL_App/hal_tim.c`'s `hal_tim_vcom_start()` still drove `TIM3_CH1` hardware
