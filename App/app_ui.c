@@ -1,6 +1,7 @@
 #include "app_ui.h"
 #include "drv_buzzer.h"
 #include "svc_storage.h"
+#include "svc_measurement.h"
 #include "app_scheduler.h"
 #include "system_state.h"
 
@@ -183,10 +184,17 @@ void app_ui_update(void)
     g_system_state.encoder2_sw_press_event = false;
     (void)e2_steps;     /* ENC2 rotate reserved for future scroll */
 
-    /* Encoder 2 push — universal "back / cancel" */
+    /* Encoder 2 push — universal "back / cancel". A measurement in
+     * progress takes priority over everything else this button normally
+     * does: App/app_display.c's overlay replaces the whole screen body
+     * and explicitly tells the user "[ENC2 push] Cancel" while it's
+     * showing, so honor that instead of falling through to the
+     * settings-edit-cancel/screen-back behavior underneath it. */
     if (e2_press) {
         drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
-        if (g_ui_state.settings_editing) {
+        if (svc_measurement_get_state() != MEAS_STATE_IDLE) {
+            svc_measurement_cancel();
+        } else if (g_ui_state.settings_editing) {
             cancel_edit();
         } else {
             switch_screen(g_ui_state.previous_screen);

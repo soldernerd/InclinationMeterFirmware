@@ -35,6 +35,27 @@
 
 /* USER CODE BEGIN INCLUDE */
 #include "config.h"
+
+/* Overrides the Class/CustomHID/Inc/usbd_customhid.h #ifndef defaults
+ * (2 bytes, sized for the ST template's tiny LED-report use case) to our
+ * full 64-byte vendor report. Effective here (rather than down in the
+ * "Exported Defines" section below, where CubeMX's own regen output
+ * lives) because usbd_customhid.h pulls in this whole file — top to
+ * bottom, this INCLUDE block included — via usbd_ioreq.h -> usbd_def.h
+ * -> usbd_conf.h before its own #ifndef guards run, so definition order
+ * within this file doesn't matter as long as it's above the point
+ * usbd_customhid.h itself gets included from some other translation
+ * unit. What DOES matter: this needs to be inside a USER CODE marker.
+ * Placed in the "Exported Defines" section (outside any marker) twice
+ * before, it was silently deleted by a CubeMX regen both times — this
+ * USER CODE BEGIN/END INCLUDE block is the one place in this file
+ * confirmed to survive a regen (docs/wp2-5_rebase_status.md's "wp4"
+ * section has the history). The CubeMX GUI has no field for either
+ * macro, so this can't be fixed by ticking a checkbox the way the
+ * EXTI NVIC issue was — re-verify these two lines are still here after
+ * any future regen. */
+#define CUSTOM_HID_EPIN_SIZE     USB_HID_REPORT_SIZE
+#define CUSTOM_HID_EPOUT_SIZE    USB_HID_REPORT_SIZE
 /* USER CODE END INCLUDE */
 
 /** @addtogroup USBD_OTG_DRIVER
@@ -82,16 +103,6 @@
 #define USBD_CUSTOM_HID_REPORT_DESC_SIZE     29U
 /*---------- -----------*/
 #define CUSTOM_HID_FS_BINTERVAL     0x5U
-/*---------- -----------*/
-/* Overrides the Class/CustomHID/Inc/usbd_customhid.h #ifndef defaults
- * (2 bytes, sized for the ST template's tiny LED-report use case) to our
- * full 64-byte vendor report. Effective here because usbd_customhid.h
- * pulls in this file (via usbd_ioreq.h -> usbd_def.h -> usbd_conf.h)
- * before its own #ifndef guards run. The CubeMX GUI does not expose these
- * two fields anywhere — this override does not survive a regen and must
- * be re-added by hand every time (confirmed lost on two regens now). */
-#define CUSTOM_HID_EPIN_SIZE     USB_HID_REPORT_SIZE
-#define CUSTOM_HID_EPOUT_SIZE    USB_HID_REPORT_SIZE
 
 /****************************************/
 /* #define for FS and HS identification */

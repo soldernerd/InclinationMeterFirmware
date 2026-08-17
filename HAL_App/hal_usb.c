@@ -60,10 +60,18 @@ bool hal_usb_send(const uint8_t *data, uint16_t len)
         return false;
     }
     /* Pad to full HID report size — the descriptor advertises a fixed
-     * 64-byte IN report and host stacks expect that exact length. */
+     * 64-byte IN report and host stacks expect that exact length. The
+     * only real caller (svc_api.c's send_packet()) already builds a
+     * full, zero-padded USB_HID_REPORT_SIZE frame, so copy == sizeof
+     * s_tx_buf in practice and this memset is a no-op — kept defensive
+     * for a hypothetical future caller passing len < USB_HID_REPORT_SIZE,
+     * but only zeroing the actual remainder instead of always re-zeroing
+     * all 64 bytes first. */
     uint16_t copy = len > USB_HID_REPORT_SIZE ? USB_HID_REPORT_SIZE : len;
-    memset(s_tx_buf, 0, sizeof s_tx_buf);
     memcpy(s_tx_buf, data, copy);
+    if (copy < sizeof(s_tx_buf)) {
+        memset(s_tx_buf + copy, 0, sizeof(s_tx_buf) - copy);
+    }
 
     /* USBD_CUSTOM_HID_SendReport may return USBD_BUSY when a previous IN
      * report is still in flight (common at high stream rates). Caller

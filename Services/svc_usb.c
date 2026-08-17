@@ -26,9 +26,18 @@ static void rx_handler(const uint8_t *data, uint16_t len)
     s_rx_pending = true;
 }
 
+/* CLAUDE.md 7.6 — No Silent Failures: hal_usb_send() can fail (not
+ * connected, or USBD_BUSY — a previous IN report still in flight) and
+ * there's no retry queue, so a failed send here is genuinely lost.
+ * Escalate to g_system_state.usb_tx_dropped_count rather than silently
+ * discarding the result — see that field's own comment. */
 static void send_via_usb(const uint8_t *data, uint16_t len)
 {
-    (void)hal_usb_send(data, len);
+    if (!hal_usb_send(data, len)) {
+        if (g_system_state.usb_tx_dropped_count < UINT16_MAX) {
+            g_system_state.usb_tx_dropped_count++;
+        }
+    }
 }
 
 void svc_usb_init(void)
@@ -45,11 +54,6 @@ void svc_usb_init(void)
 bool svc_usb_is_connected(void)
 {
     return hal_usb_is_connected();
-}
-
-void svc_usb_send(const uint8_t *data, uint16_t len)
-{
-    (void)hal_usb_send(data, len);
 }
 
 void svc_usb_update(void)

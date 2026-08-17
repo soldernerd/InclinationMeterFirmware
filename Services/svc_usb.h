@@ -7,6 +7,5 @@
 void svc_usb_init(void);
 void svc_usb_update(void);
 bool svc_usb_is_connected(void);
-void svc_usb_send(const uint8_t *data, uint16_t len);
 
 #endif /* SVC_USB_H */
