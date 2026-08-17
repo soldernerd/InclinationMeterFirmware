@@ -27,7 +27,7 @@ GC runs; nothing is deleted immediately.
 | Branch | State | Base | Notes |
 |---|---|---|---|
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
-| `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted — see "wp3 — resolution" below. Build-verified clean, 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 4 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, docs, UI state machine restoration). `wp3` HEAD is `06956b8`. |
+| `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted — see "wp3 — resolution" below. Build-verified clean; full code review (8-angle, 12 verified) complete with all 10 findings fixed and re-verified, 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 6 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, docs, UI state machine restoration, docs, code-review fixes). `wp3` HEAD is `8365768`. |
 | `wp4` | Not started | `wp3` (once pushed) | `d1423b5`, `48e8562` | `ff054fb` |
 | `wp5` | Not started | `wp4` (rebased) | `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping) | `4bc4f16` |
 
@@ -258,12 +258,35 @@ accurate. See the Status table above for exact figures.
 - Buzzer audibility/loudness at 2 kHz on the real board, and whether `ENC_1SW`/`ENC_2SW`
   polling (rather than interrupt) feels responsive enough for real button presses and screen
   navigation.
-- `ENCODER_COUNTS_PER_DETENT` (`App/app_ui.c`, currently 4) is an assumption — confirm
-  against the real encoder part and adjust if screen navigation feels like it needs more
-  or less than one physical click per step.
+- `encoder_counts_per_detent` (EEPROM-backed `DeviceSettings` field, `DEFAULT_ENCODER_COUNTS_PER_DETENT`=4
+  in `config.h`) is still an assumption — confirm against the real encoder part; correcting
+  it now only needs a settings write, not a reflash (see "Code review" below).
 - EEPROM settings save-on-confirm (`svc_storage_save_settings()` from the SETTINGS screen)
   hasn't been exercised against real EEPROM hardware in this pass — inherits the same
   "not yet flashed" caveat as everything else here.
+
+## Code review (2026-08-17)
+
+`/code-review` at high effort: 8 finder angles (3 correctness, 3 cleanup, altitude,
+conventions) against `wp2...HEAD`, ~25 raw candidates, 12 sent through 1-vote verification,
+10 survived (2 refuted: a naming/header-guard finding turned out to match 100% of this
+codebase's pre-existing style, not a regression). All 10 fixed and re-verified via a clean
+rebuild — see commit `8365768`. Highlights:
+
+- **Spurious button-press event on Standby wake** — `svc_input_init()` seeded button state
+  as "not pressed" unconditionally, but `ENC_1SW`/`ENC_2SW` are the Standby wake sources;
+  waking by holding one down made the first poll see a false press edge. Fixed by seeding
+  from the actual pin level at init.
+- **Re-entrant `app_scheduler_init()` bug** — `commit_edit()` called it from inside
+  `task_ui`, itself mid-iteration of `app_scheduler_run()`'s own loop; an unsigned-wraparound
+  in the reset logic spuriously re-fired not-yet-run tasks the same tick and delayed every
+  task's next run (including battery monitoring). Fixed with a new
+  `app_scheduler_reload_periods()` that doesn't touch `last_run_ms`.
+- Frozen STATUS-screen uptime, a boot-time encoder-state race, a dropped instance bounds
+  check, `ENCODER_COUNTS_PER_DETENT` moved to EEPROM, a duplicated settings-read switch, a
+  6x-duplicated elapsed-time idiom now factored into `hal_systick_elapsed_ms()`, an unlogged
+  EEPROM-save failure, and an O(16)→O(1) EXTI dispatch fix — see commit `8365768`'s message
+  for the full list.
 
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 
