@@ -74,6 +74,45 @@ static const SettingsSection s_sections[] = {
 };
 #define SETTINGS_SECTION_COUNT  ((uint8_t)(sizeof(s_sections) / sizeof(s_sections[0])))
 
+/* Compile-time guarantees — code review flagged that these had only
+ * been checked by a throwaway standalone build, never committed as an
+ * actual guard in the source. Enforced here so a future field insertion
+ * that breaks a section boundary, or a copy-pasted duplicate address,
+ * fails the build instead of silently corrupting cross-page data. */
+_Static_assert(offsetof(DeviceSettings, task_sensors_ms) + SECTION_SPAN(task_sensors_ms, filter_cutoff_hz_den)
+                == offsetof(DeviceSettings, battery_critical_mv),
+                "scheduler section must end exactly where battery section begins");
+_Static_assert(offsetof(DeviceSettings, battery_critical_mv) + SECTION_SPAN(battery_critical_mv, vbat_scale_den)
+                == offsetof(DeviceSettings, tmp236_seg1_voffs_mv),
+                "battery section must end exactly where tmp236 section begins");
+_Static_assert(offsetof(DeviceSettings, tmp236_seg1_voffs_mv) + SECTION_SPAN(tmp236_seg1_voffs_mv, tmp236_seg2_tinfl_cdeg)
+                == offsetof(DeviceSettings, lm35_scale_mv_per_c),
+                "tmp236 section must end exactly where lm35 section begins");
+_Static_assert(offsetof(DeviceSettings, lm35_scale_mv_per_c) + SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c)
+                == offsetof(DeviceSettings, encoder_counts_per_detent),
+                "lm35 section must end exactly where encoder section begins");
+_Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent)
+                == sizeof(DeviceSettings),
+                "encoder section must end exactly at the struct's end");
+
+_Static_assert(HDR_SIZE + SECTION_SPAN(task_sensors_ms, filter_cutoff_hz_den) <= 0x0100U,
+               "scheduler page must fit within its 256-byte EEPROM page budget");
+_Static_assert(HDR_SIZE + SECTION_SPAN(battery_critical_mv, vbat_scale_den) <= 0x0100U,
+               "battery page must fit within its 256-byte EEPROM page budget");
+_Static_assert(HDR_SIZE + SECTION_SPAN(tmp236_seg1_voffs_mv, tmp236_seg2_tinfl_cdeg) <= 0x0100U,
+               "tmp236 page must fit within its 256-byte EEPROM page budget");
+_Static_assert(HDR_SIZE + SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c) <= 0x0100U,
+               "lm35 page must fit within its 256-byte EEPROM page budget");
+_Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) <= 0x0100U,
+               "encoder page must fit within its 256-byte EEPROM page budget");
+
+_Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR != EEPROM_TMP236_SETTINGS_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR != EEPROM_LM35_SETTINGS_ADDR
+               && EEPROM_LM35_SETTINGS_ADDR != EEPROM_ENCODER_SETTINGS_ADDR
+               && EEPROM_ENCODER_SETTINGS_ADDR != EEPROM_CALIBRATION_ADDR,
+               "every settings/calibration EEPROM page address must be distinct");
+
 /* Pending-write state machine. Sized for one section's header+data (all
  * DeviceSettings sections are small, well under sizeof(DeviceSettings))
  * or a whole CalibrationData save, whichever is larger. */
@@ -230,10 +269,15 @@ static bool blocking_write_block(uint16_t addr, const uint8_t *buf, uint16_t len
 
 /* ---------------- settings section helpers ---------------- */
 
-/* Loads and validates one settings page directly into *dest (which
- * points `sec->size` bytes inside a DeviceSettings). Leaves *dest
- * untouched on any failure — caller is expected to have already seeded
- * it with a default. */
+/* Loads and validates one settings page into *dest (which points
+ * `sec->size` bytes inside a DeviceSettings). Leaves *dest untouched on
+ * any failure — caller is expected to have already seeded it with a
+ * default. Reads into a local buffer first and only memcpy's into
+ * *dest on full success (CRC AND version both matching): committing the
+ * read result before validation would let corrupt/mismatched EEPROM
+ * bytes overwrite a good default, and svc_storage_init()'s reseed path
+ * would then compute a CRC over that corruption and persist it as
+ * "valid" — the exact bug this ordering exists to prevent. */
 static DrvStatus load_section(const SettingsSection *sec, uint8_t *dest)
 {
     uint8_t hdr[HDR_SIZE];
@@ -245,17 +289,20 @@ static DrvStatus load_section(const SettingsSection *sec, uint8_t *dest)
         return DRV_ERR_NOT_READY;       /* magic missing — first boot */
     }
 
-    if (!blocking_read((uint16_t)(sec->eeprom_addr + HDR_SIZE), dest, (uint16_t)sec->size)) {
+    uint8_t tmp[sizeof(DeviceSettings)];   /* safe upper bound for any single section */
+    if (!blocking_read((uint16_t)(sec->eeprom_addr + HDR_SIZE), tmp, (uint16_t)sec->size)) {
         return DRV_ERR_COMM;
     }
 
-    uint16_t calc_crc = math_crc16(dest, (uint16_t)sec->size);
+    uint16_t calc_crc = math_crc16(tmp, (uint16_t)sec->size);
     if (calc_crc != stored_crc) {
-        return DRV_ERR_INVALID;         /* corrupt */
+        return DRV_ERR_INVALID;         /* corrupt — dest untouched */
     }
     if (version != sec->version) {
-        return DRV_ERR_NOT_READY;       /* layout changed since this was written */
+        return DRV_ERR_NOT_READY;       /* layout changed since this was written — dest untouched */
     }
+
+    memcpy(dest, tmp, sec->size);
     return DRV_OK;
 }
 
@@ -380,7 +427,24 @@ void svc_storage_update(void)
              * forever. The header/CRC written so far (if any) will fail
              * the CRC check on next boot's load and get reseeded. Also
              * abandons any remaining sections of a multi-section
-             * settings save, same reasoning. */
+             * settings save, same reasoning — an aborted save can leave
+             * some pages holding the new values and others the old ones
+             * (not atomic across pages; the single-page design this
+             * replaced didn't have that failure mode, but did have the
+             * exact same "caller already got DRV_OK and never learns
+             * about a later async failure" gap this now also closes).
+             *
+             * svc_storage_save_settings()'s synchronous return only
+             * covers whether section 0 could be QUEUED, not whether the
+             * whole multi-page write actually completes — App/app_ui.c's
+             * commit_edit() clears settings_save_failed the moment
+             * queueing succeeds, which can be premature. Escalate here
+             * too, at the point a settings save genuinely fails, so the
+             * SETTINGS screen's indicator (App/app_display.c) still
+             * lights up even though the UI already exited edit mode. */
+            if (s_pending.is_settings_save) {
+                g_system_state.settings_save_failed = true;
+            }
             s_pending.active       = false;
             s_pending.inflight_len = 0U;
             s_pending.retry_count  = 0U;
@@ -396,6 +460,12 @@ void svc_storage_update(void)
             && (uint8_t)(s_pending.section_idx + 1U) < SETTINGS_SECTION_COUNT) {
             start_section_write(s_pending.settings_src, (uint8_t)(s_pending.section_idx + 1U));
             return;
+        }
+        if (s_pending.is_settings_save) {
+            /* All 5 pages genuinely finished — the authoritative "did it
+             * really succeed" point, as opposed to commit_edit()'s
+             * optimistic synchronous clear on queueing. */
+            g_system_state.settings_save_failed = false;
         }
         s_pending.active = false;
         return;
@@ -435,16 +505,39 @@ void svc_storage_init(void)
             uint16_t crc = math_crc16(dest, (uint16_t)sec->size);
             build_header(buf, sec->version, crc);
             memcpy(&buf[HDR_SIZE], dest, sec->size);
-            (void)blocking_write_block(sec->eeprom_addr, buf, (uint16_t)(HDR_SIZE + sec->size));
+            if (!blocking_write_block(sec->eeprom_addr, buf, (uint16_t)(HDR_SIZE + sec->size))) {
+                /* Not silently discarded (CLAUDE.md 7.6) -- g_device_settings
+                 * still holds the correct in-RAM default either way, so this
+                 * boot runs correctly; only the reseed-to-EEPROM step failed,
+                 * meaning the same reseed will be retried next boot. No
+                 * DBG_PRINT infra exists yet (WP1.5 was never wired up), so
+                 * this reuses settings_save_failed as the escalation point --
+                 * broader than just commit_edit()'s user-initiated saves, but
+                 * the same underlying condition (a settings EEPROM write
+                 * failed) and the same SETTINGS-screen indicator applies. */
+                g_system_state.settings_save_failed = true;
+            }
         }
     }
 
     /* Belt-and-suspenders beyond load_section()'s own guarantees: a
      * page that legitimately passed CRC+version but somehow still holds
      * a zero divisor (e.g. a future bug in whatever writes this field)
-     * would otherwise fault App/app_ui.c's consume_detents(). */
+     * would otherwise fault a consumer. Covers every EEPROM-backed
+     * divisor, not just the encoder one App/app_ui.c happens to divide
+     * by every UI tick -- Services/svc_battery.c and
+     * Drivers_App/drv_tmp236.c divide by these too. */
     if (g_device_settings.encoder_counts_per_detent == 0U) {
         g_device_settings.encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
+    }
+    if (g_device_settings.vbat_scale_den == 0U) {
+        g_device_settings.vbat_scale_den = DEFAULT_VBAT_SCALE_DEN;
+    }
+    if (g_device_settings.tmp236_seg1_den == 0U) {
+        g_device_settings.tmp236_seg1_den = DEFAULT_TMP236_SEG1_DEN;
+    }
+    if (g_device_settings.tmp236_seg2_den == 0U) {
+        g_device_settings.tmp236_seg2_den = DEFAULT_TMP236_SEG2_DEN;
     }
 
     /* Calibration: same pattern, but a missing/corrupt header just means

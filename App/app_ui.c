@@ -132,7 +132,13 @@ static void commit_edit(void)
          * its comment). */
         app_scheduler_reload_periods();
         g_ui_state.settings_editing = false;
-        g_system_state.settings_save_failed = false;
+        /* Deliberately NOT clearing settings_save_failed here — queueing
+         * the write successfully doesn't mean it actually completed
+         * (Services/svc_storage.c writes 5 EEPROM pages sequentially,
+         * asynchronously, over many ticks; a later page can still fail
+         * after this returns DRV_OK). svc_storage_update() is the only
+         * place that clears the flag, at the point the whole multi-page
+         * save genuinely finishes — see system_state.h's comment. */
     } else {
         /* Save failed — stay in edit mode rather than silently pretending
          * it saved, and escalate into system_state (CLAUDE.md 7.6: no

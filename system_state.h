@@ -104,13 +104,23 @@ typedef struct {
                                            * one-shot interrupt event */
     bool     encoder2_sw_press_event;
 
-    /* Set true by App/app_ui.c's commit_edit() when
-     * svc_storage_save_settings() fails (EEPROM write couldn't be
-     * queued/completed), cleared on the next successful save. No
-     * DBG_PRINT infra exists in this codebase yet (WP1.5 was never
+    /* True while a settings EEPROM write has failed and hasn't been
+     * superseded by a successful one yet. Set from three places in
+     * Services/svc_storage.c / App/app_ui.c: (1) commit_edit() sets it
+     * synchronously if svc_storage_save_settings() can't even be
+     * queued; (2) svc_storage_update() sets it (asynchronously, possibly
+     * many ticks later) if a multi-page settings save fails partway
+     * through after retries are exhausted — the save isn't atomic across
+     * its 5 EEPROM pages, so this is the only signal that a "successful"
+     * queue didn't actually finish; (3) svc_storage_init()'s boot-time
+     * per-page reseed-to-defaults write can also fail and sets it. Only
+     * svc_storage_update() clears it, at the point a full multi-page
+     * save genuinely completes — not commit_edit()'s optimistic
+     * synchronous-queue-success clear, which can't see a later failure.
+     * No DBG_PRINT infra exists in this codebase yet (WP1.5 was never
      * wired up), so this is the escalation-to-system-state half of
-     * CLAUDE.md's "No Silent Failures" rule — a future UI indicator can
-     * surface it, and it's readable for debugging in the meantime. */
+     * CLAUDE.md's "No Silent Failures" rule; App/app_display.c's
+     * SETTINGS screen renders it. */
     bool     settings_save_failed;
 } SystemState;
 

@@ -111,5 +111,13 @@ void drv_encoder_reset(EncoderInstance instance)
     if ((unsigned)instance >= ENCODER_INSTANCE_COUNT) {
         return;
     }
-    s_enc[instance].count = 0;   /* single aligned 32-bit store — atomic */
+    /* The store itself is a single aligned 32-bit write — atomic in the
+     * sense that a concurrent read can't observe a torn value. NOT
+     * atomic against the ISR's own read-modify-write of the same field
+     * (encoder_update()'s `count += ...`): an edge landing between this
+     * store and the ISR's next read could still overwrite the reset with
+     * a stale-based increment, silently losing the reset by one step.
+     * No current caller (unused as of this WP), so unreachable today —
+     * flagging for whoever adds the first one. */
+    s_enc[instance].count = 0;
 }
