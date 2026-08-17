@@ -8,11 +8,14 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 management/battery monitoring/EEPROM storage, the rotary-encoder + buzzer + multi-screen UI
 local interaction layer, and a transport-agnostic device API (USB Custom HID today, BLE and
 USART3 to follow in WP5) with a single-shot measurement state machine. Builds clean (zero
-warnings, `-Wall -Wextra -Werror`). WP1–WP3 have been through multiple rounds of structured
-code review; WP4 has not yet had its own review pass. **Not yet flashed to real hardware** —
-see `docs/wp2-5_rebase_status.md` for the full per-branch history, review findings, and
-what's still unverified against real silicon. `master` itself currently reflects WP1 only;
-`wp2`/`wp3`/`wp4` are feature branches pending their own review/merge.
+warnings, `-Wall -Wextra -Werror`). WP1–WP4 have all been through multiple rounds of
+structured code review — WP4 through two full passes plus reconciliation against two real
+CubeMX regenerations, which caught real regen-induced regressions (including one that would
+have hard-hung the MCU on first encoder touch) in addition to the usual logic-level findings.
+**Not yet flashed to real hardware** — see `docs/wp2-5_rebase_status.md` for the full
+per-branch history, review findings, and what's still unverified against real silicon.
+`master` itself currently reflects WP1 only; `wp2`/`wp3`/`wp4` are feature branches pending
+their own review/merge.
 
 ## Hardware
 
