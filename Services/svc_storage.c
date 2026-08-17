@@ -520,25 +520,7 @@ void svc_storage_init(void)
         }
     }
 
-    /* Belt-and-suspenders beyond load_section()'s own guarantees: a
-     * page that legitimately passed CRC+version but somehow still holds
-     * a zero divisor (e.g. a future bug in whatever writes this field)
-     * would otherwise fault a consumer. Covers every EEPROM-backed
-     * divisor, not just the encoder one App/app_ui.c happens to divide
-     * by every UI tick -- Services/svc_battery.c and
-     * Drivers_App/drv_tmp236.c divide by these too. */
-    if (g_device_settings.encoder_counts_per_detent == 0U) {
-        g_device_settings.encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
-    }
-    if (g_device_settings.vbat_scale_den == 0U) {
-        g_device_settings.vbat_scale_den = DEFAULT_VBAT_SCALE_DEN;
-    }
-    if (g_device_settings.tmp236_seg1_den == 0U) {
-        g_device_settings.tmp236_seg1_den = DEFAULT_TMP236_SEG1_DEN;
-    }
-    if (g_device_settings.tmp236_seg2_den == 0U) {
-        g_device_settings.tmp236_seg2_den = DEFAULT_TMP236_SEG2_DEN;
-    }
+    svc_storage_validate_settings(&g_device_settings);
 
     /* Calibration: same pattern, but a missing/corrupt header just means
      * the device hasn't been calibrated yet — fill zeros, leave validity
@@ -551,4 +533,28 @@ void svc_storage_init(void)
 
     g_system_state.calibration_valid =
         g_calibration.scale_valid && g_calibration.zero_valid;
+}
+
+void svc_storage_validate_settings(DeviceSettings *settings)
+{
+    /* Belt-and-suspenders beyond load_section()'s own guarantees: a page
+     * that legitimately passed CRC+version but somehow still holds a
+     * zero divisor (e.g. a future bug in whatever writes this field, or
+     * an untrusted SET_SETTINGS payload from svc_api.c) would otherwise
+     * fault a consumer. Covers every EEPROM-backed divisor, not just the
+     * encoder one App/app_ui.c happens to divide by every UI tick --
+     * Services/svc_battery.c and Drivers_App/drv_tmp236.c divide by
+     * these too. */
+    if (settings->encoder_counts_per_detent == 0U) {
+        settings->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
+    }
+    if (settings->vbat_scale_den == 0U) {
+        settings->vbat_scale_den = DEFAULT_VBAT_SCALE_DEN;
+    }
+    if (settings->tmp236_seg1_den == 0U) {
+        settings->tmp236_seg1_den = DEFAULT_TMP236_SEG1_DEN;
+    }
+    if (settings->tmp236_seg2_den == 0U) {
+        settings->tmp236_seg2_den = DEFAULT_TMP236_SEG2_DEN;
+    }
 }

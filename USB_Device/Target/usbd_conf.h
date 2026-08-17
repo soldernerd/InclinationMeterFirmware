@@ -77,11 +77,33 @@
 /*---------- -----------*/
 #define USBD_SELF_POWERED     1U
 /*---------- -----------*/
-#define USBD_CUSTOMHID_OUTREPORT_BUF_SIZE     29U
+/* CubeMX's own regen wrote 29U here (matching REPORT_DESC_SIZE below,
+ * apparently a GUI/generator quirk even though the Class Parameters panel
+ * was set to 64 during configuration) instead of the actual OUT report
+ * payload size. This one is NOT a template #ifndef default we can leave
+ * for the GUI to own — it directly sizes Report_buf[] in
+ * USBD_CUSTOM_HID_HandleTypeDef, and usbd_custom_hid_if.c's
+ * CUSTOM_HID_OutEvent_FS reads USB_HID_REPORT_SIZE (64) bytes from it — a
+ * mismatch here is a real out-of-bounds read on every USB OUT report.
+ * Verify this value after every future regen. */
+#define USBD_CUSTOMHID_OUTREPORT_BUF_SIZE     USB_HID_REPORT_SIZE
 /*---------- -----------*/
+/* 29 bytes: vendor-defined collection, one 64-byte INPUT array + one
+ * 64-byte OUTPUT array — see the CUSTOM_HID_ReportDesc_FS byte layout in
+ * USB_Device/App/usbd_custom_hid_if.c for the item-by-item breakdown. */
 #define USBD_CUSTOM_HID_REPORT_DESC_SIZE     29U
 /*---------- -----------*/
 #define CUSTOM_HID_FS_BINTERVAL     0x5U
+/*---------- -----------*/
+/* Overrides the Class/CustomHID/Inc/usbd_customhid.h #ifndef defaults
+ * (2 bytes, sized for the ST template's tiny LED-report use case) to our
+ * full 64-byte vendor report. Effective here because usbd_customhid.h
+ * pulls in this file (via usbd_ioreq.h -> usbd_def.h -> usbd_conf.h)
+ * before its own #ifndef guards run. The CubeMX GUI does not expose these
+ * two fields anywhere — this override does not survive a regen and must
+ * be re-added by hand every time (confirmed lost once already). */
+#define CUSTOM_HID_EPIN_SIZE     USB_HID_REPORT_SIZE
+#define CUSTOM_HID_EPOUT_SIZE    USB_HID_REPORT_SIZE
 
 /****************************************/
 /* #define for FS and HS identification */

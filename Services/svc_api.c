@@ -302,10 +302,18 @@ static void dispatch(ApiTransport t, uint8_t cmd,
             break;
         case API_CMD_SET_ZERO:
             /* Sensors not yet fused into g_system_state — stub: accept
-             * the command and ack. A future WP implements actual
-             * zero-offset capture. */
-            (void)svc_storage_save_calibration(&g_calibration);
-            send_ack(t);
+             * the command. A future WP implements actual zero-offset
+             * capture. */
+            if (svc_storage_save_calibration(&g_calibration) == DRV_OK) {
+                send_ack(t);
+            } else {
+                /* CLAUDE.md 7.6 — No Silent Failures: an EEPROM write
+                 * failure must not be reported to the host as success,
+                 * and must be escalated the same way App/app_ui.c's
+                 * commit_edit() does for the local-UI save path. */
+                g_system_state.settings_save_failed = true;
+                send_nack(t);
+            }
             break;
         case API_CMD_GET_CALIBRATION:
             send_calibration(t);
@@ -313,8 +321,18 @@ static void dispatch(ApiTransport t, uint8_t cmd,
         case API_CMD_SET_CALIBRATION:
             if (payload_len == sizeof(CalibrationData)) {
                 memcpy(&g_calibration, payload, sizeof g_calibration);
-                (void)svc_storage_save_calibration(&g_calibration);
-                send_ack(t);
+                /* Recompute immediately — this is otherwise only ever
+                 * set once at boot in svc_storage_init(), so GET_STATUS
+                 * would keep reporting the pre-boot value forever after
+                 * a runtime calibration change. */
+                g_system_state.calibration_valid =
+                    g_calibration.scale_valid && g_calibration.zero_valid;
+                if (svc_storage_save_calibration(&g_calibration) == DRV_OK) {
+                    send_ack(t);
+                } else {
+                    g_system_state.settings_save_failed = true;
+                    send_nack(t);
+                }
             } else {
                 send_nack(t);
             }
@@ -325,13 +343,23 @@ static void dispatch(ApiTransport t, uint8_t cmd,
         case API_CMD_SET_SETTINGS:
             if (payload_len == sizeof(DeviceSettings)) {
                 memcpy(&g_device_settings, payload, sizeof g_device_settings);
-                (void)svc_storage_save_settings(&g_device_settings);
-                /* Reload task periods only — app_scheduler_init() is
-                 * boot-only (guards against re-entrant last_run_ms
-                 * resets, see its own comment) and would silently no-op
-                 * here since svc_api_update() only ever runs post-boot. */
-                app_scheduler_reload_periods();
-                send_ack(t);
+                /* Untrusted host payload — re-run the same zero-guard
+                 * svc_storage_init() applies on every EEPROM load, or a
+                 * malformed divisor field (e.g. encoder_counts_per_detent)
+                 * silently deadens whatever consumer divides by it. */
+                svc_storage_validate_settings(&g_device_settings);
+                if (svc_storage_save_settings(&g_device_settings) == DRV_OK) {
+                    /* Reload task periods only — app_scheduler_init() is
+                     * boot-only (guards against re-entrant last_run_ms
+                     * resets, see its own comment) and would silently
+                     * no-op here since svc_api_update() only ever runs
+                     * post-boot. */
+                    app_scheduler_reload_periods();
+                    send_ack(t);
+                } else {
+                    g_system_state.settings_save_failed = true;
+                    send_nack(t);
+                }
             } else {
                 send_nack(t);
             }

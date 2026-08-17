@@ -24,8 +24,10 @@ static uint8_t          s_tx_buf[USB_HID_REPORT_SIZE];
 void hal_usb_init(void)
 {
     /* hUsbDeviceFS / USB middleware are initialised by MX_USB_Device_Init
-     * in usb_device.c (called from main()). We just reset local state. */
-    s_rx_cb = 0;
+     * in usb_device.c (called from main()). Nothing to do here — s_rx_cb
+     * is NOT reset in this function: svc_usb_init() registers its callback
+     * via hal_usb_register_rx_callback() before calling this, and this
+     * function running after that registration must not clobber it. */
 }
 
 void hal_usb_register_rx_callback(HalUsbRxCallback cb)
