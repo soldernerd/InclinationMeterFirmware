@@ -29,7 +29,7 @@ GC runs; nothing is deleted immediately.
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
 | `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted, EEPROM storage redesigned into per-subsystem pages — see "wp3 — resolution" and "Code review" below. Build-verified clean; three code-review passes complete (first: 8-angle/12-verified/10-fixed; second: partial-angle plus the EEPROM per-page redesign; third: remaining angles against that redesign, found and fixed a real data-corruption bug), 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 13 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, UI state machine restoration, three code-review fix rounds, EEPROM per-page redesign, docs throughout). `wp3` HEAD is `8f9d3e8`. |
 | `wp4` | **Hand-adapted onto `wp3@2d5fc7e`, reconciled against two real CubeMX regens (the second with NVIC properly configured via the GUI), through two full code-review passes (9+8 findings, 17 fixed total) — see "wp4 — resolution and adaptation notes" below. Build-verified clean, 2026-08-18.** | `wp3@2d5fc7e` | `wp4` HEAD is `c7665dc`. |
-| `wp5` | Not started | `wp4` (once pushed) | Commits `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping); drop `4bc4f16`. |
+| `wp5` | **Hand-ported onto `wp4@bb0b95f`, adapted for REV B's actual BLE pinout, one code-review pass complete (10 findings, 8 fixed, 2 documented as accepted known limitations) — see "wp5 — resolution and adaptation notes" below. Build-verified clean, 2026-08-17.** | `wp4@bb0b95f` | Still uncommitted at end of this session — see "Resuming this work" below for the commit step. |
 
 **Build verification:** no ARM toolchain existed on the machine `wp3` was developed on
 (confirmed by an exhaustive filesystem search; the `build/` directory previously checked
@@ -603,6 +603,115 @@ logic-level review, not a substitute for real silicon.
 
 ---
 
+## wp5 — resolution and adaptation notes (2026-08-17)
+
+`git cherry-pick 1662959` conflicted immediately in `App/app_display.c`, `App/app_scheduler.c`,
+`Config/pin_config.h`, and `Core/Src/main.c` — the same files WP3/WP4 already rewrote for REV
+B, same as WP4's own cherry-pick experience. Aborted and hand-ported instead: read the old
+commit's `Drivers_App/drv_rn4871.c`/`.h` and `HAL_App/hal_uart.c`/`.h` via `git show`, then
+rewrote each file fresh against REV B's actual pins and the current codebase's established
+patterns (per-transport ring buffers, `SettingsSection` EEPROM pages, `ApiSendFn` transport
+registration), rather than replaying a REV-A-era diff.
+
+**Pin sourcing.** REV B's BLE pinout was confirmed against two sources per the task's own
+instruction — `STM32G0B1RET6_Pinout.csv` (the authoritative REV B pin list) and the RN4871
+datasheet (DS50002489H, pages 1–40 read) — not assumed from the old commit. USART6 on
+PB8/PB9 (not the old REV-A USART2/PA2-PA3 the pre-rebase commit used), `!BLE_RESET!` on PB5
+(active-low), and the module's 4 generic GPIOs (P1_2/P1_3/P1_6/P1_7) on PB4/PB15/PA9/PA8. Of
+those 4, only P1_6 has a documented function on this board's specific 16-pin RN4871 package
+per the datasheet's own Table 1-3 (UART RX Indication, for waking the module's UART out of
+32kHz low-power clocking) — P1_2/P1_3/P1_7 are "None" on this package variant (the
+Status1/Status2/RSSI/Link-Drop/Pairing-Key functions Table 1-3 lists exist only on the
+physically-larger 33-pin RN4870). Left wired but unused rather than inventing a function for
+them without the RN4870/71 User's Guide (DS50002466, not available in this repo) — same
+reasoning applied to *not* implementing P1_6 low-power-mode entry either (needs exact `SO`
+command semantics from the same missing document, plus runtime GPIO-mode reconfiguration
+this codebase's `hal_gpio` API doesn't support today). See `Config/pin_config.h`'s RN4871
+block for the full citation trail.
+
+**CubeMX regen.** By the time this work package started, the `.ioc` already carried USART6
+(115200 8N1, DMA1_Channel6 RX circular / DMA2_Channel3 TX normal, NVIC
+`USART3_4_5_6_LPUART1_IRQn` enabled) and all 5 RN4871 GPIO pins (`BLE_RESET_Pin`=PB5 output,
+PA8/PA9/PA15/PA1 and PB15/PB4 inputs) — configured by the user in the same CubeMX session as
+WP4's second regen, ahead of this session picking up the BLE work. No further regen was
+needed this pass; `Core/Src/main.c`'s new `hal_uart_init()`/`svc_ble_init()` calls (ordered
+after `svc_api_init()`/`svc_usb_init()`, same registration-ordering reasoning WP4 used) were
+the only wiring gap.
+
+**Self-inflicted build break, caught immediately.** Adding `DeviceSettings.ble_configured` as
+the struct's new last field broke `svc_storage.c`'s existing trailing-section
+`_Static_assert` (an exact `offsetof(last)+size == sizeof(DeviceSettings)` check from WP3) —
+struct alignment pads `sizeof()` past a single trailing `bool`, so the assert failed to
+compile. First fix (a `gap < alignof` tolerance) got the build green but, per the review
+below, was itself too permissive; superseded during the review pass by an explicit
+`_settings_end_marker` sentinel field, restoring the exact-equality check every other section
+boundary already uses.
+
+## Code review (2026-08-17)
+
+One `/code-review` pass, 8 parallel finder angles against `git diff HEAD` (~823 lines
+across 15 files — `wp5`'s branch tip was still `wp4`'s at review time, so this was working-
+tree scope, not `@{upstream}...HEAD`, which pointed at a stale pre-rebase `origin/wp5`). 10
+findings reported after dedup/verification, 8 fixed, 2 documented as accepted known
+limitations rather than fixed:
+
+- **Most severe: `HAL_App/hal_uart.c`'s `hal_uart_init()` armed `UART_IT_IDLE` but reception
+  used plain `HAL_UART_Receive_DMA()`.** Verified directly against this repo's own
+  `Drivers/STM32G0xx_HAL_Driver/Src/stm32g0xx_hal_uart.c`: the vendor `HAL_UART_IRQHandler`'s
+  only IDLE-flag-clearing branch is gated on `ReceptionType == HAL_UART_RECEPTION_TOIDLE`,
+  which plain `Receive_DMA` never sets. The flag would never clear once set — a permanent
+  NVIC interrupt storm on the very first RN4871 UART line gap (i.e. almost immediately after
+  boot), starving the scheduler and silently killing debug UART output too (shared IRQ line).
+  Fixed by removing the unused IDLE-IT enable outright — reception is fully handled via DMA
+  position polling already, per the code's own (accurate) comment; the interrupt was armed
+  for no functional reason.
+- **Two CLAUDE.md 8.1 layering violations.** `Drivers_App/drv_rn4871.c` was directly
+  `#include`-ing `svc_storage.h`/`system_state.h`, writing `g_device_settings.ble_configured`,
+  and calling `svc_storage_save_settings()` — contradicting its own header comment about
+  deliberately not touching shared state. Fixed by adding a
+  `drv_rn4871_set_on_config_complete()` callback and moving the write+save (with proper
+  `settings_save_failed` escalation on failure, matching `app_ui.c`'s `commit_edit()`
+  pattern) into `Services/svc_ble.c`; `drv_rn4871_init()` now takes an `already_configured`
+  bool parameter instead of reading `g_device_settings` itself, fully removing
+  `system_state.h`/`svc_storage.h` from the driver. Separately, `App/app_display.c` was
+  `#include`-ing `drv_rn4871.h` directly and calling `drv_rn4871_get_state()` at 5 call
+  sites, skipping `Services/svc_ble.c` — fixed by adding a `svc_ble_get_state()` passthrough.
+- **`send_str()`** (every RN4871 command send) discarded `hal_uart_write()`'s `DrvStatus`
+  with `(void)` — a command silently not going out looked identical to "module didn't
+  respond" and burned the full step timeout for nothing. Now escalates straight to
+  `RN4871_STATE_ERROR` on a failed send (this file's existing mechanism for every other
+  unrecoverable condition — Drivers_App has no `system_state` access to escalate through
+  otherwise).
+- **`HAL_UART_Receive_DMA()`'s return value** wasn't checked at either call site.
+  `hal_uart_init()` now returns `bool`, checked in `main.c` with `Error_Handler()` — same
+  established pattern as `hal_adc_init()`. The `HAL_UART_ErrorCallback()` restart path now
+  checks it too, documented as a best-effort recovery with an accepted residual gap (no
+  system_state escalation point exists at the HAL_App layer).
+- **Non-transitive EEPROM address-distinctness `_Static_assert`** — the existing chain only
+  checked adjacent pairs (`A!=B && B!=C && ...`), and adding the BLE page replaced the
+  previously-direct `ENCODER != CALIBRATION` check with `ENCODER != BLE && BLE != CALIBRATION`
+  — inequality isn't transitive, so a future collision between those two specific addresses
+  would no longer be caught. Replaced with the full pairwise check (all 21 pairs across the 7
+  page addresses).
+- **The `_settings_end_marker` sentinel** described above, replacing the padding-tolerant
+  interim fix.
+- **Dead `s_was_connected`** in `svc_ble.c` — set every tick, read nowhere (3 independent
+  review angles converged on this one). Deleted.
+- **Two findings documented rather than fixed**, both judged out of proportionate scope
+  without inventing behavior beyond the (unavailable) RN4871 User's Guide: (1)
+  `drv_rn4871_task()`'s CONNECTED-state byte loop forwards every byte as raw BLE payload and
+  never re-scans for an inline `%DISCONN%` — confirmed unchanged from the original validated
+  reference driver (old commit `1662959`), not a WP5 regression; a real peer disconnect is
+  never detected without protocol detail this repo doesn't have. (2) `hal_uart.c`'s RX ring
+  buffer has no overflow detection — sustained BLE throughput within one `task_ble_ms` tick
+  could in principle overwrite unread bytes silently. Both documented in code comments at
+  their exact location.
+
+Build-verified after all fixes: zero warnings under `-Wall -Wextra -Werror`, RAM 33.0 KB
+(22.9%), FLASH 116.9 KB (22.8%). Not yet flash-tested on real hardware.
+
+---
+
 ## Resuming this work
 
 1. Read this file and the two docs linked at the top.
@@ -616,13 +725,15 @@ logic-level review, not a substitute for real silicon.
    regens landed (8 more findings, all fixed, no crash-level bugs this time). `wp4` HEAD is
    `c7665dc`. Still needs real-hardware flash testing — nothing here has touched real
    silicon yet.
-4. Move to `wp5`: `git checkout wp5 && git reset --hard wp4 && git cherry-pick 1662959 73aa050`
-   (decide on `81a9643`, drop `4bc4f16`) — `wp4` here means its current tip (`c7665dc`).
-   `1662959`'s own commit message flags a real pin conflict between its RN4871 UART choice
-   and WP3's *old* encoder pins (PA2/PA3) — REV B's actual WP3 encoders are on
-   PC4/PB0/PB1/PB2 now, so re-verify `73aa050`'s PD4/PD5/PD6 relocation is still free and
-   correct on the current netlist rather than assuming the old conflict (or its fix) still
-   applies as-is. This is also where `DeviceSettings.ble_configured` (deliberately skipped in
-   `wp4`, see above) should be added, as its own `SettingsSection` page. Resolve conflicts,
-   apply the same 6-item checklist, grep for stale pin names, build and verify.
-5. Stop after `wp5` builds clean. Do not merge into `master` — that's a separate review step.
+4. **`wp5` is done, build-verified, and code-reviewed** (see "wp5 — resolution and adaptation
+   notes" and its "Code review" above — 10 findings, 8 fixed including a boot-time interrupt-
+   storm hang and two layering violations, 2 documented as accepted known limitations). Still
+   **uncommitted** at end of session — the working tree on the `wp5` branch (based on
+   `wp4@bb0b95f`) has all of this in place but nothing has been staged/committed yet. Commit
+   as one or more `feat(wp5)`/`fix(wp5)`/`docs(wp5)` commits per CLAUDE.md 9.1's convention
+   (mirrors WP4's `feat` → `fix` → `docs` split), then build-verify once more from clean.
+   Still needs real-hardware flash testing — nothing here has touched real silicon yet.
+5. `App/app_version.h`'s `FW_VERSION_*`/`FW_VERSION_STRING` already bumped to `0.5.0` this
+   session.
+6. Do not merge into `master` or push without the user's explicit go-ahead — that's a
+   separate review/confirmation step, same as WP4's force-push protocol.

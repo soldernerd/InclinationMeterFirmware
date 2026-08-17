@@ -4,18 +4,21 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1–WP4 implemented on the `wp4` branch** (REV B hardware): display bring-up, power
+**WP1–WP5 implemented on the `wp5` branch** (REV B hardware): display bring-up, power
 management/battery monitoring/EEPROM storage, the rotary-encoder + buzzer + multi-screen UI
-local interaction layer, and a transport-agnostic device API (USB Custom HID today, BLE and
-USART3 to follow in WP5) with a single-shot measurement state machine. Builds clean (zero
-warnings, `-Wall -Wextra -Werror`). WP1–WP4 have all been through multiple rounds of
-structured code review — WP4 through two full passes plus reconciliation against two real
-CubeMX regenerations, which caught real regen-induced regressions (including one that would
-have hard-hung the MCU on first encoder touch) in addition to the usual logic-level findings.
-**Not yet flashed to real hardware** — see `docs/wp2-5_rebase_status.md` for the full
-per-branch history, review findings, and what's still unverified against real silicon.
-`master` itself currently reflects WP1 only; `wp2`/`wp3`/`wp4` are feature branches pending
-their own review/merge.
+local interaction layer, a transport-agnostic device API (USB Custom HID and BLE) with a
+single-shot measurement state machine, and BLE connectivity via an RN4871 module (UART
+AT-command state machine, transparent-mode data path). Builds clean (zero warnings,
+`-Wall -Wextra -Werror`). WP1–WP5 have all been through multiple rounds of structured code
+review — WP4 through two full passes plus reconciliation against two real CubeMX
+regenerations, which caught real regen-induced regressions (including one that would have
+hard-hung the MCU on first encoder touch); WP5 through one full pass, which caught a
+boot-time UART interrupt storm that would have hung the MCU almost immediately after boot,
+plus two layering violations and several silent-failure gaps — see `docs/wp2-5_rebase_status.md`
+for the complete findings list. **Not yet flashed to real hardware** — see that same doc for
+the full per-branch history and what's still unverified against real silicon. `master` itself
+currently reflects WP1 only; `wp2`/`wp3`/`wp4`/`wp5` are feature branches pending their own
+review/merge.
 
 ## Hardware
 
