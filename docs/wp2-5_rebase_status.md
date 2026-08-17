@@ -27,15 +27,19 @@ GC runs; nothing is deleted immediately.
 | Branch | State | Base | Notes |
 |---|---|---|---|
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
-| `wp3` | Not started | `wp2@ba2aa2c` (once pushed — **not** the old `f996ff9` this doc originally referenced) | `f2646e4` | `880c218` |
-| `wp4` | Not started | `wp3` (rebased) | `d1423b5`, `48e8562` | `ff054fb` |
+| `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), scope trimmed and hardware-adapted — see "wp3 — resolution" below. NOT build-verified (no ARM toolchain on this machine — see note).** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 1 follow-up commit for Core/ EXTI wiring. `wp3` HEAD is `58afb60`. |
+| `wp4` | Not started | `wp3` (once this lands) | `d1423b5`, `48e8562` | `ff054fb` |
 | `wp5` | Not started | `wp4` (rebased) | `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping) | `4bc4f16` |
 
-**Build verification:** an ARM toolchain (`arm-none-eabi-gcc` 14.2.1, CMake 4.4.2, Ninja
-1.13.2, installed via `winget`) is now available and has been used throughout — `wp2` has
-been built successfully many times over this work, most recently after every fix in both
-review passes. All builds clean under `-Wall -Wextra -Werror`. **Still not flashed to real
-hardware** — see the outstanding items in "wp2 — post-rebase work" below.
+**Build verification:** `wp2`'s builds above were done on a machine with `arm-none-eabi-gcc`
+14.2.1 / CMake 4.4.2 / Ninja 1.13.2 (installed via `winget`) — that toolchain is **not present
+on the machine `wp3` was done on** (confirmed by an exhaustive filesystem search; the `build/`
+directory checked into this working tree is a stale artifact from the other machine, path
+`C:/Users/lfaes/...`, different user profile). `wp3`'s changes were reviewed by hand
+(re-reading every changed file for type/include/logic correctness) but **have not been
+compiled**. Building on the toolchain-equipped machine is the first thing to do before
+trusting this work further. **Still not flashed to real hardware** either — see the
+outstanding items in "wp2 — post-rebase work" below, which apply equally to `wp3`.
 
 ---
 
@@ -165,6 +169,86 @@ original rebase task scoped, driven by direct user requirements:
 - The EEPROM version-bump migration path (0x0001→0x0003) on an EEPROM that actually has
   old data written to it.
 
+## wp3 — resolution and adaptation notes (2026-08-17)
+
+Cherry-picked `f2646e4` (the REV A prototype's encoder+buzzer+UI-state-machine commit)
+onto `wp2@83c4617`, dropped `880c218` (its CubeMX-regen-only companion, TIM1-era and
+therefore moot), then hand-adapted for REV B hardware and a deliberately trimmed scope —
+driven by direct user requirements, not just mechanical pin renames:
+
+**Scope cut vs. the original prototype:** the user's request for this pass was explicitly
+"just evaluate the inputs and make them available to future UI software... just to verify
+the code" — not the full settings-editing UI. `App/app_ui.c`/`.h` and the multi-screen
+`App/app_display.c` compositor from `f2646e4` were reverted back to their pre-cherry-pick
+(WP1-stub / single-screen) state rather than carried forward; a new `Services/svc_input.c`
+(polling, not the old `app_ui.c` state machine) fills the gap instead. The full settings UI
+these old files implemented is real prior work, still sitting in `f2646e4`'s tree if a
+future WP wants to resurrect it — it was a deliberate scope decision, not a loss.
+
+**Hardware-driven changes beyond pin renames:**
+- **Buzzer moved timers entirely**, not just pins: REV A prototype used TIM1_CH2/PB3; REV B
+  has no TIM1 buzzer channel at all — buzzer is TIM3_CH4/PC9, and TIM3 was *also* VCOM's
+  timer on the REV A design (now TIM6 on REV B, itself a WP1-era fix — see "Known critical
+  bug" below). `HAL_App/hal_tim.c` rewritten around `htim3`/`TIM_CHANNEL_4` instead of
+  `htim1`/`TIM_CHANNEL_2`; the ARR=(1MHz/freq)-1 math is unchanged (APB1 is still 64 MHz
+  unprescaled on both revisions).
+- **Buzzer tone: 2 kHz, single tone** (2026-08-17 user decision), not the prototype's
+  1200 Hz nav / 2400 Hz confirm split — checked against the actual buzzer datasheet (Same
+  Sky `CPT-9019A-SMT-TR`, piezo, externally driven, no internal oscillator): its frequency-
+  response curve peaks loudest around ~5.5 kHz (~84 dB), with 2 kHz landing on a smaller
+  secondary peak (~73 dB) — user chose 2 kHz anyway as less piercing. `BuzzerTone` enum
+  trimmed to one `BUZZER_TONE_CLICK` member accordingly.
+- **Encoder decode: full 4x quadrature, not A-edge-only.** The REV A prototype interrupted
+  only on the A signal and read B's level to infer direction (`a == b` → CW). REV B's
+  CubeMX config (`Core/Src/gpio.c`) fires `GPIO_MODE_IT_RISING_FALLING` on *all four* A/B
+  pins, not just the A pins — confirmed intentional (`docs/pinout_migration_wp2-5.md`'s
+  EXTI table), not an oversight to route around. `Drivers_App/drv_encoder.c` was rewritten
+  around a standard Gray-code transition table driven from either pin's edge, evaluating
+  every transition rather than only A's. Per 2026-08-17 user decision, this reports the
+  **raw signed transition count** (`drv_encoder_get_count()`, unchanged original WP1-stub
+  signature — the prototype's `EncoderState`/`get_state()`/`clear()` redesign was dropped),
+  not a mechanical-detent count: this board's encoder part isn't confirmed to be 4
+  transitions/detent, so that translation is explicitly left to a future UI/input layer.
+  CW sign convention is a naming choice only, **not verified against real hardware rotation
+  direction** — flagged in the table's own comment for hardware bring-up.
+- **Encoder push switches (`ENC_1SW`/`ENC_2SW`) are polled, not EXTI, on REV B** — a genuine
+  regression in interrupt capability, not a firmware choice: PA0/PC5 can't be routed to
+  their own EXTI lines on this pinout (PA0 shares EXTI line 0 with PB0/`ENC_1B`, and
+  `docs/pinout_migration_wp2-5.md` documents both switches were deliberately moved to
+  `SYS_WKUP1`/`SYS_WKUP5` instead — see `pin_config.h`). `Services/svc_input.c` polls both
+  every scheduler tick (RC-filtered + Schmitt-buffered, no further debounce needed) rather
+  than registering EXTI callbacks the prototype's `drv_encoder.c` used to.
+- **CubeMX regen done by hand, not via the GUI** (no STM32CubeMX/CubeIDE install found on
+  this machine): `Core/Src/gpio.c`'s encoder pins already had `GPIO_MODE_IT_RISING_FALLING`
+  and `Core/Src/tim.c` already had TIM3 CH4 PWM configured (apparently from earlier,
+  undocumented work) — what was missing and had to be added directly was the NVIC enable
+  for `EXTI0_1_IRQn`/`EXTI2_3_IRQn`/`EXTI4_15_IRQn` and their handler functions in
+  `Core/Src/stm32g0xx_it.c`, following the same hand-edit-generated-files precedent WP2
+  already established for ADC1/DMA. Separate commit `58afb60`.
+
+**Reused as-is from the prototype** (already correct, no REV B-specific content):
+`HAL_App/hal_gpio.c`'s EXTI dispatch mechanism (`HAL_GPIO_EXTI_Rising/Falling_Callback`
+weak overrides forwarding to per-pin callbacks via `hal_gpio_exti_register`) and
+`Drivers_App/drv_buzzer.c`'s non-blocking beep/update pattern (wrap-safe signed millisecond
+countdown, no `HAL_Delay` blocking) — both pin-agnostic, ported unchanged.
+
+**Not build-verified** — no ARM toolchain (`arm-none-eabi-gcc`/CMake/Ninja) found on this
+machine after an exhaustive search; the checked-in `build/` directory is a stale artifact
+from a different machine/user (`C:/Users/lfaes/...` in its CMakeCache). Every changed file
+was manually re-read for type/include/logic correctness instead, but **compiling on the
+toolchain-equipped machine is required before trusting this further** — see the Status
+table above.
+
+**Still outstanding, beyond the "not built" gap:**
+- Quadrature sign convention (CW = +1) unverified against real hardware rotation.
+- Whether this encoder part is actually 4 raw transitions per mechanical detent — needed
+  once a UI layer wants to translate `drv_encoder_get_count()` into "clicks."
+- Buzzer audibility/loudness at 2 kHz on the real board, and whether `ENC_1SW`/`ENC_2SW`
+  polling (rather than interrupt) feels responsive enough for real button presses.
+- The reverted `app_ui.c` settings-editing UI (still in `f2646e4`'s tree) is real, unused
+  prior work — a future WP should decide whether to resurrect it or design fresh against
+  whatever WP5's "Full display UI" ends up needing.
+
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 
 **Previously:** `HAL_App/hal_tim.c`'s `hal_tim_vcom_start()` still drove `TIM3_CH1` hardware
@@ -197,15 +281,14 @@ confirm "Hello World" + LED heartbeat render on real REV B hardware.
 ## Resuming this work
 
 1. Read this file and the two docs linked at the top.
-2. `git checkout wp3 && git reset --hard wp2 && git cherry-pick f2646e4` (drop `880c218`) —
-   `wp2` here means its current tip (`ba2aa2c` as of this writing), **not** the `f996ff9`
-   this doc originally pointed at. If `wp3` was ever attempted against the old tip, redo it
-   against the new one — `wp2`'s macro names (`PWR_3V3_EN_*`, `PWR_5V_EN_*`, `LED_STS_*`,
-   `battery_critical_mv`/`battery_low_mv`, etc.) and its whole EEPROM layout changed
-   significantly in the post-rebase work above.
-3. Resolve conflicts, apply the same 6-item checklist, grep for stale pin names.
-4. Build and verify before moving to `wp4`. Update this file's status table and add a
-   `wp3` section mirroring the `wp2` one above.
-5. Repeat for `wp4` (base `wp3`, commits `d1423b5` + `48e8562`, drop `ff054fb`) and `wp5`
-   (base `wp4`, commits `1662959` + `73aa050` + decide on `81a9643`, drop `4bc4f16`).
-6. Stop after `wp5` builds clean. Do not merge into `master` — that's a separate review step.
+2. **`wp3` is done except for a build check** (see "wp3 — resolution and adaptation notes"
+   above) — on a machine with the ARM toolchain, `cmake --build` it and fix whatever
+   `-Wall -Wextra -Werror` turns up before trusting it further. `wp3` HEAD is `58afb60`.
+3. Then move to `wp4`: `git checkout wp4 && git reset --hard wp3 && git cherry-pick d1423b5 48e8562`
+   (drop `ff054fb`) — `wp3` here means its current tip (`58afb60`), not the old pre-rebase
+   base this doc originally pointed at. Resolve conflicts, apply the same 6-item checklist,
+   grep for stale pin names, build and verify before moving to `wp5`. Update this file's
+   status table and add a `wp4` section mirroring the `wp2`/`wp3` ones above.
+4. Repeat for `wp5` (base `wp4`, commits `1662959` + `73aa050` + decide on `81a9643`, drop
+   `4bc4f16`).
+5. Stop after `wp5` builds clean. Do not merge into `master` — that's a separate review step.
