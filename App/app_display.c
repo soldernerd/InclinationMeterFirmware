@@ -103,12 +103,19 @@ static void draw_status_screen(void)
         u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)(bx + 8), 178, "USB");
     }
 
-    /* Sensors placeholder */
-    u8g2_DrawUTF8(&s_u8g2, 8, 210, "Sensors: offline");
+    /* Encoder readout (WP3) — raw quadrature transition counts, not
+     * mechanical detents; here purely to verify the encoder/EXTI wiring
+     * end to end. Button state isn't shown — g_system_state.encoder*_sw_
+     * pressed is available once a real UI wants it. */
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    snprintf(line, sizeof line, "ENC1: %-6ld ENC2: %-6ld",
+             (long)g_system_state.encoder1_count,
+             (long)g_system_state.encoder2_count);
+    u8g2_DrawUTF8(&s_u8g2, 8, 210, line);
 
     /* Bottom version banner */
     u8g2_SetFont(&s_u8g2, u8g2_font_5x7_tr);
-    snprintf(line, sizeof line, "InclinationMeterFirmware WP2 v%s", FW_VERSION_STRING);
+    snprintf(line, sizeof line, "InclinationMeterFirmware WP3 v%s", FW_VERSION_STRING);
     w = u8g2_GetUTF8Width(&s_u8g2, line);
     u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2), 234, line);
 

@@ -66,6 +66,15 @@ typedef struct {
     bool     sensor_pcap04_2_ok;
 
     bool     calibration_valid;
+
+    /* Local UI input (WP3), published by Services/svc_input.c. Raw
+     * quadrature transition counts, not mechanical-detent counts — see
+     * Drivers_App/drv_encoder.h. A future UI layer owns translating these
+     * (and the press flags) into navigation/edit actions. */
+    int32_t  encoder1_count;
+    int32_t  encoder2_count;
+    bool     encoder1_sw_pressed;
+    bool     encoder2_sw_pressed;
 } SystemState;
 
 typedef struct {
