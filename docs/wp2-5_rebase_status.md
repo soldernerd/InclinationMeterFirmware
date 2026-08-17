@@ -288,6 +288,30 @@ rebuild — see commit `8365768`. Highlights:
   EEPROM-save failure, and an O(16)→O(1) EXTI dispatch fix — see commit `8365768`'s message
   for the full list.
 
+**Second pass (2026-08-17, commit `3ad510c`), reviewing the fix commit itself:** 8 finder
+angles launched; A/B/C/F/H hit an API session limit mid-run, so this pass covers D (reuse),
+E (simplification), G (altitude) plus direct manual verification — not full 8-angle coverage.
+9 findings, 8 fixed: `settings_save_failed` was set but never displayed (now rendered on the
+SETTINGS screen); `app_scheduler_init()` remained re-entrancy-unsafe alongside the new safe
+function, protected only by a comment (collapsed into one self-protecting design, guarded by
+a static `s_booted` flag); the EXTI bitmask-to-line bit trick was duplicated between
+`hal_gpio.c` and `drv_encoder.c` (consolidated into `hal_gpio_pin_to_line()`);
+`drv_encoder_init()` branched on encoder instance twice (consolidated to once);
+`encoder_counts_per_detent` was re-validated every UI tick instead of once at EEPROM load
+(moved to `svc_storage_init()`); per-setting label/unit/range were still scattered across 5
+constructs in 2 files even after the first pass's read-switch consolidation (unified into one
+`UiSettingMeta` table). One finding (`Error_Handler()` for an invalid encoder instance) was
+considered and **not applied** — no precedent anywhere in this codebase for a lower layer
+calling that Core-layer function; kept the existing `DrvStatus`-based error propagation.
+One finding (bump `EEPROM_SETTINGS_VERSION` reseeds *all* settings, not just the new field)
+was confirmed real but is pre-existing WP2-era project debt this bump exercises again, not a
+new regression — fixed a stale comment claiming otherwise and documented the risk rather than
+building a field-preserving migration system (no hardware calibrated/flashed yet, so no real
+data is at risk today). Applying the elapsed-time-helper suggestion to the scheduler's own
+`app_scheduler_run()` loop was caught as a self-inflicted regression during implementation
+(would desync each task's due-check from its `last_run_ms` stamp) and reverted with an
+explanatory comment. Build-verified clean after fixes.
+
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 
 **Previously:** `HAL_App/hal_tim.c`'s `hal_tim_vcom_start()` still drove `TIM3_CH1` hardware
