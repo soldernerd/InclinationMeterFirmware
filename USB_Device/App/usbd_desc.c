@@ -22,7 +22,6 @@
 #include "usbd_core.h"
 #include "usbd_desc.h"
 #include "usbd_conf.h"
-#include "config.h"
 
 /* USER CODE BEGIN INCLUDE */
 
@@ -63,13 +62,13 @@
   * @{
   */
 
-#define USBD_VID     USB_VID
+#define USBD_VID     0x04D8
 #define USBD_LANGID_STRING     1033
-#define USBD_MANUFACTURER_STRING     USB_MANUFACTURER_STR
-#define USBD_PID     USB_PID
-#define USBD_PRODUCT_STRING     USB_PRODUCT_STR
-#define USBD_CONFIGURATION_STRING     "InclinationMeter Config"
-#define USBD_INTERFACE_STRING     "InclinationMeter HID"
+#define USBD_MANUFACTURER_STRING     "soldernerd"
+#define USBD_PID     0xF08F
+#define USBD_PRODUCT_STRING     "InclinationMeter"
+#define USBD_CONFIGURATION_STRING     "Custom HID Config"
+#define USBD_INTERFACE_STRING     "Custom HID Interface"
 
 /* USER CODE BEGIN PRIVATE_DEFINES */
 

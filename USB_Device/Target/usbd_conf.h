@@ -77,22 +77,11 @@
 /*---------- -----------*/
 #define USBD_SELF_POWERED     1U
 /*---------- -----------*/
-#define USBD_CUSTOMHID_OUTREPORT_BUF_SIZE     USB_HID_REPORT_SIZE
+#define USBD_CUSTOMHID_OUTREPORT_BUF_SIZE     29U
 /*---------- -----------*/
-/* 29 bytes: vendor-defined collection, one 64-byte INPUT array + one
- * 64-byte OUTPUT array — see the CUSTOM_HID_ReportDesc_FS byte layout in
- * USB_Device/App/usbd_custom_hid_if.c for the item-by-item breakdown. */
 #define USBD_CUSTOM_HID_REPORT_DESC_SIZE     29U
 /*---------- -----------*/
 #define CUSTOM_HID_FS_BINTERVAL     0x5U
-/*---------- -----------*/
-/* Overrides the Class/CustomHID/Inc/usbd_customhid.h #ifndef defaults
- * (2 bytes, sized for the ST template's tiny LED-report use case) to
- * our full 64-byte vendor report. Effective here because usbd_customhid.h
- * pulls in this file (via usbd_ioreq.h -> usbd_def.h -> usbd_conf.h)
- * before its own #ifndef guards run. */
-#define CUSTOM_HID_EPIN_SIZE     USB_HID_REPORT_SIZE
-#define CUSTOM_HID_EPOUT_SIZE    USB_HID_REPORT_SIZE
 
 /****************************************/
 /* #define for FS and HS identification */
