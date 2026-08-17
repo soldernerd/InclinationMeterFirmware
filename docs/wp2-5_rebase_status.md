@@ -27,7 +27,7 @@ GC runs; nothing is deleted immediately.
 | Branch | State | Base | Notes |
 |---|---|---|---|
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
-| `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted — see "wp3 — resolution" below. Build-verified clean; full code review (8-angle, 12 verified) complete with all 10 findings fixed and re-verified, 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 6 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, docs, UI state machine restoration, docs, code-review fixes). `wp3` HEAD is `8365768`. |
+| `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted, EEPROM storage redesigned into per-subsystem pages — see "wp3 — resolution" and "Code review" below. Build-verified clean; three code-review passes complete (first: 8-angle/12-verified/10-fixed; second: partial-angle plus the EEPROM per-page redesign; third: remaining angles against that redesign, found and fixed a real data-corruption bug), 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 13 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, UI state machine restoration, three code-review fix rounds, EEPROM per-page redesign, docs throughout). `wp3` HEAD is `8f9d3e8`. |
 | `wp4` | Not started | `wp3` (once pushed) | `d1423b5`, `48e8562` | `ff054fb` |
 | `wp5` | Not started | `wp4` (rebased) | `1662959`, `73aa050`, decide on `81a9643` (docs-only, likely stale post-REV-B, review before keeping) | `4bc4f16` |
 
@@ -387,13 +387,16 @@ confirm "Hello World" + LED heartbeat render on real REV B hardware.
 ## Resuming this work
 
 1. Read this file and the two docs linked at the top.
-2. **`wp3` is done and build-verified** (see "wp3 — resolution and adaptation notes"
-   above). `wp3` HEAD is `06956b8`. Still needs real-hardware flash testing.
+2. **`wp3` is done, build-verified, and through three code-review passes** (see "wp3 —
+   resolution and adaptation notes" and "Code review" above — the third pass fixed a real
+   EEPROM data-corruption bug in the per-page storage redesign). `wp3` HEAD is `8f9d3e8`.
+   Still needs real-hardware flash testing — nothing here has touched real silicon yet.
 3. Move to `wp4`: `git checkout wp4 && git reset --hard wp3 && git cherry-pick d1423b5 48e8562`
-   (drop `ff054fb`) — `wp3` here means its current tip (`06956b8`), not the old pre-rebase
-   base this doc originally pointed at. Resolve conflicts, apply the same 6-item checklist,
-   grep for stale pin names, build and verify before moving to `wp5`. Update this file's
-   status table and add a `wp4` section mirroring the `wp2`/`wp3` ones above.
+   (drop `ff054fb`) — `wp3` here means its current tip (`8f9d3e8`), not the old pre-rebase
+   base this doc originally pointed at, nor any earlier `wp3` commit from mid-review. Resolve
+   conflicts, apply the same 6-item checklist, grep for stale pin names, build and verify
+   before moving to `wp5`. Update this file's status table and add a `wp4` section mirroring
+   the `wp2`/`wp3` ones above.
 4. Repeat for `wp5` (base `wp4`, commits `1662959` + `73aa050` + decide on `81a9643`, drop
    `4bc4f16`).
 5. Stop after `wp5` builds clean. Do not merge into `master` — that's a separate review step.
