@@ -15,7 +15,7 @@
  *   0x0300  LM35 settings page
  *   0x0400  Encoder settings page
  *   0x0500  Calibration page
- *   0x0600  reserved
+ *   0x0600  BLE settings page (WP5)
  *
  * Every page: magic[0..1] + version[0..1] + crc[0..1] (6-byte header,
  * CRC covers only the page's own data bytes, not the header) + that
@@ -71,6 +71,9 @@ static const SettingsSection s_sections[] = {
     { EEPROM_ENCODER_SETTINGS_ADDR, EEPROM_ENCODER_SETTINGS_VERSION,
       offsetof(DeviceSettings, encoder_counts_per_detent),
       SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) },
+    { EEPROM_BLE_SETTINGS_ADDR, EEPROM_BLE_SETTINGS_VERSION,
+      offsetof(DeviceSettings, ble_configured),
+      SECTION_SPAN(ble_configured, ble_configured) },
 };
 #define SETTINGS_SECTION_COUNT  ((uint8_t)(sizeof(s_sections) / sizeof(s_sections[0])))
 
@@ -92,8 +95,11 @@ _Static_assert(offsetof(DeviceSettings, lm35_scale_mv_per_c) + SECTION_SPAN(lm35
                 == offsetof(DeviceSettings, encoder_counts_per_detent),
                 "lm35 section must end exactly where encoder section begins");
 _Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent)
-                == sizeof(DeviceSettings),
-                "encoder section must end exactly at the struct's end");
+                == offsetof(DeviceSettings, ble_configured),
+                "encoder section must end exactly where ble section begins");
+_Static_assert(offsetof(DeviceSettings, ble_configured) + SECTION_SPAN(ble_configured, ble_configured)
+                == offsetof(DeviceSettings, _settings_end_marker),
+                "ble section must end exactly where the struct's end-of-settings marker begins");
 
 _Static_assert(HDR_SIZE + SECTION_SPAN(task_sensors_ms, filter_cutoff_hz_den) <= 0x0100U,
                "scheduler page must fit within its 256-byte EEPROM page budget");
@@ -105,12 +111,34 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c)
                "lm35 page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) <= 0x0100U,
                "encoder page must fit within its 256-byte EEPROM page budget");
+_Static_assert(HDR_SIZE + SECTION_SPAN(ble_configured, ble_configured) <= 0x0100U,
+               "ble page must fit within its 256-byte EEPROM page budget");
 
+/* Full pairwise check across all 7 page addresses — NOT just an adjacent
+ * chain (A!=B && B!=C && ...). Inequality isn't transitive: a chain would
+ * pass even if e.g. ENCODER and CALIBRATION silently collided, as long as
+ * neither happened to equal its chain-neighbor. All C(7,2)=21 pairs. */
 _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
-               && EEPROM_BATTERY_SETTINGS_ADDR != EEPROM_TMP236_SETTINGS_ADDR
-               && EEPROM_TMP236_SETTINGS_ADDR != EEPROM_LM35_SETTINGS_ADDR
-               && EEPROM_LM35_SETTINGS_ADDR != EEPROM_ENCODER_SETTINGS_ADDR
-               && EEPROM_ENCODER_SETTINGS_ADDR != EEPROM_CALIBRATION_ADDR,
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_TMP236_SETTINGS_ADDR
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_LM35_SETTINGS_ADDR
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_ENCODER_SETTINGS_ADDR
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BLE_SETTINGS_ADDR
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_CALIBRATION_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_TMP236_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_LM35_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_ENCODER_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_BLE_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_CALIBRATION_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR    != EEPROM_LM35_SETTINGS_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR    != EEPROM_ENCODER_SETTINGS_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR    != EEPROM_BLE_SETTINGS_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR    != EEPROM_CALIBRATION_ADDR
+               && EEPROM_LM35_SETTINGS_ADDR      != EEPROM_ENCODER_SETTINGS_ADDR
+               && EEPROM_LM35_SETTINGS_ADDR      != EEPROM_BLE_SETTINGS_ADDR
+               && EEPROM_LM35_SETTINGS_ADDR      != EEPROM_CALIBRATION_ADDR
+               && EEPROM_ENCODER_SETTINGS_ADDR   != EEPROM_BLE_SETTINGS_ADDR
+               && EEPROM_ENCODER_SETTINGS_ADDR   != EEPROM_CALIBRATION_ADDR
+               && EEPROM_BLE_SETTINGS_ADDR       != EEPROM_CALIBRATION_ADDR,
                "every settings/calibration EEPROM page address must be distinct");
 
 /* Pending-write state machine. Sized for one section's header+data (all

@@ -7,6 +7,7 @@
 #include "svc_battery.h"
 #include "svc_api.h"
 #include "svc_measurement.h"
+#include "svc_ble.h"
 #include "hal_systick.h"
 #include "config.h"
 #include "u8g2.h"
@@ -26,6 +27,8 @@ typedef struct {
     bool     battery_critical;
     MeasurementState meas_state;
     ApiMode  api_mode_usb;
+    Rn4871State ble_state;
+    uint8_t  ble_blink_phase;   /* 0/1 — toggles every 500 ms while advertising */
     UiScreen screen;
     uint8_t  settings_cursor;
     bool     settings_editing;
@@ -112,8 +115,37 @@ static void draw_top_bar(void)
         x = (u8g2_uint_t)(x - 2 - w);
         u8g2_DrawUTF8(&s_u8g2, x, 12, t);
     }
+    /* BLE badge — solid when connected, blinking when advertising,
+     * absent when not yet up or in error (the error banner covers that
+     * case more visibly, see draw_ble_error_banner()). */
+    Rn4871State bs = svc_ble_get_state();
+    if (bs == RN4871_STATE_CONNECTED
+        || (bs == RN4871_STATE_ADVERTISING && ((hal_systick_get_ms() / 500U) & 1U))) {
+        const char *t = "[BLE]";
+        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
+        x = (u8g2_uint_t)(x - 2 - w);
+        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
+    }
 
     u8g2_DrawHLine(&s_u8g2, 0, 18, LCD_WIDTH);
+}
+
+/* Persistent error banner shown across all screens when the BLE module
+ * cannot be talked to. The user must use Settings -> Reset BLE module
+ * (then power-cycle) to recover — auto-retry would mask hardware faults. */
+static void draw_ble_error_banner(void)
+{
+    /* Inverted strip across the bottom (above the screen indicator). */
+    u8g2_uint_t y = 218;
+    u8g2_SetDrawColor(&s_u8g2, 1);
+    u8g2_DrawBox(&s_u8g2, 0, y, LCD_WIDTH, 12);
+    u8g2_SetDrawColor(&s_u8g2, 0);
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    const char *msg = "! BLE ERROR - Settings > Reset BLE";
+    u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, msg);
+    u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2),
+                  (u8g2_uint_t)(y + 9), msg);
+    u8g2_SetDrawColor(&s_u8g2, 1);
 }
 
 /* MEASURING overlay — drawn on top of whichever screen is active when
@@ -220,9 +252,14 @@ static void draw_status_screen(void)
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 16;
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, "EEPROM:    OK");                y += 16;
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, "Settings:  loaded");            y += 16;
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y,
-                  g_system_state.ble_connected ? "BLE:       connected"
-                                               : "BLE:       offline");       y += 16;
+    const char *ble_str;
+    switch (svc_ble_get_state()) {
+        case RN4871_STATE_CONNECTED:    ble_str = "BLE:       connected";    break;
+        case RN4871_STATE_ADVERTISING:  ble_str = "BLE:       advertising";  break;
+        case RN4871_STATE_ERROR:        ble_str = "BLE:       error";        break;
+        default:                        ble_str = "BLE:       initialising"; break;
+    }
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, ble_str);                       y += 16;
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y,
                   g_system_state.usb_connected ? "USB:       connected"
                                                : "USB:       offline");       y += 16;
@@ -254,11 +291,16 @@ static void draw_settings_screen(void)
         char line[64];
         const char *cursor = (i == g_ui_state.settings_cursor) ? ">" : " ";
         const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)i);
-        snprintf(line, sizeof line, "%s %-18s %ld %s",
-                 cursor,
-                 m->label,
-                 (long)setting_value_for_display((UiSettingIndex)i),
-                 m->unit);
+        if (app_ui_setting_is_action((UiSettingIndex)i)) {
+            snprintf(line, sizeof line, "%s %-18s %s",
+                     cursor, m->label, "[press to confirm]");
+        } else {
+            snprintf(line, sizeof line, "%s %-18s %ld %s",
+                     cursor,
+                     m->label,
+                     (long)setting_value_for_display((UiSettingIndex)i),
+                     m->unit);
+        }
         if (i == g_ui_state.settings_cursor && g_ui_state.settings_editing) {
             /* Highlight: invert background of this row */
             u8g2_SetDrawColor(&s_u8g2, 1);
@@ -318,6 +360,8 @@ static bool snapshot_changed(void)
         || s_last.battery_critical != g_system_state.battery_critical
         || s_last.meas_state       != svc_measurement_get_state()
         || s_last.api_mode_usb     != svc_api_get_mode(API_TRANSPORT_USB)
+        || s_last.ble_state        != svc_ble_get_state()
+        || s_last.ble_blink_phase  != (uint8_t)((hal_systick_get_ms() / 500U) & 1U)
         || s_last.screen           != g_ui_state.current_screen
         || s_last.settings_cursor  != g_ui_state.settings_cursor
         || s_last.settings_editing != g_ui_state.settings_editing
@@ -336,6 +380,8 @@ static void snapshot_capture(void)
     s_last.battery_critical = g_system_state.battery_critical;
     s_last.meas_state       = svc_measurement_get_state();
     s_last.api_mode_usb     = svc_api_get_mode(API_TRANSPORT_USB);
+    s_last.ble_state        = svc_ble_get_state();
+    s_last.ble_blink_phase  = (uint8_t)((hal_systick_get_ms() / 500U) & 1U);
     s_last.screen           = g_ui_state.current_screen;
     s_last.settings_cursor  = g_ui_state.settings_cursor;
     s_last.settings_editing = g_ui_state.settings_editing;
@@ -384,6 +430,9 @@ void app_display_update(void)
             default:                                          break;
         }
         draw_screen_indicator(g_ui_state.current_screen);
+        if (svc_ble_get_state() == RN4871_STATE_ERROR) {
+            draw_ble_error_banner();
+        }
     }
 
     u8g2_SendBuffer(&s_u8g2);

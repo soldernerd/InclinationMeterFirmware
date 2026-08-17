@@ -340,13 +340,45 @@
 /* SWD: PA13 SWDIO, PA14 SWCLK — configured by CubeMX. NRST is the dedicated
  * MCU reset pin, not a GPIO. */
 
+/* RN4871 BLE module (WP5) — USART6 (PB8/PB9) + reset + 4 GPIO.
+ * hal_uart.c talks to USART6 via the CubeMX-generated huart6/hdma_usart6_rx
+ * handles directly, so the TX/RX macros below are documentation only —
+ * CubeMX is the source of truth for AF/GPIO mode on those two pins. */
+#define RN4871_RST_PORT     GPIOB
+#define RN4871_RST_PIN      GPIO_PIN_5      /* PB5, !BLE_RESET!, active LOW
+                                              * (Low = reset, High = normal) */
+#define RN4871_TX_PORT      GPIOB           /* documentation only */
+#define RN4871_TX_PIN       GPIO_PIN_8      /* PB8, USART6_TX — MCU -> RN4871 RX */
+#define RN4871_RX_PORT      GPIOB           /* documentation only */
+#define RN4871_RX_PIN       GPIO_PIN_9      /* PB9, USART6_RX — RN4871 TX -> MCU */
+
+/* RN4871's 4 generic GPIOs (its own pin names P1_2/P1_3/P1_6/P1_7 — see
+ * the RN4871 datasheet Table 1-3 "Configurable Pins and Default Functions
+ * in the RN4870 and RN4871"). Of these, only P1_6 has a documented default
+ * function on the 16-pin RN4871 variant used on this board (the smaller
+ * package doesn't route out the pins Status1/Status2/RSSI/Link-Drop/
+ * Pairing-Key need — those exist only on the 33-pin RN4870): UART RX
+ * Indication, used to wake the module's UART out of 32 kHz low-power-mode
+ * clocking (see drv_rn4871.c). P1_2/P1_3/P1_7 have no built-in indication
+ * function on this module variant (Table 1-3 lists "None") — reserved
+ * here as plain inputs (matching the module's own power-on default)
+ * rather than inventing a use without the RN4870/71 User's Guide
+ * (DS50002466, not available in this repo) for the custom-scripting
+ * command syntax that would be needed to assign them one. */
+#define RN4871_P1_2_PORT    GPIOB
+#define RN4871_P1_2_PIN     GPIO_PIN_4      /* PB4 — reserved, no function assigned */
+#define RN4871_P1_3_PORT    GPIOB
+#define RN4871_P1_3_PIN     GPIO_PIN_15     /* PB15 — reserved, no function assigned */
+#define RN4871_P1_6_PORT    GPIOA
+#define RN4871_P1_6_PIN     GPIO_PIN_9      /* PA9 — UART_RX_IND, low-power wake */
+#define RN4871_P1_7_PORT    GPIOA
+#define RN4871_P1_7_PIN     GPIO_PIN_8      /* PA8 — reserved, no function assigned */
+
 /* Reserved for later work packages:
  *   SCL3300 / PCAP04            — removed from REV B hardware, no longer applicable
- *   RN4871 UART                 — WP5 (USART6 now, was USART2)
- *   USB DP/DM                   — WP4 (PA11/PA12, unchanged, standard pins)
  *   External ADC/DAC front end (SPI1/SPI3) — unidentified, future WP
  *
- * Encoder A/B quadrature and buzzer TIM3_CH4 were WP3 scope — now
- * implemented, see their #defines above. */
+ * Encoder A/B quadrature and buzzer TIM3_CH4 were WP3 scope, USB DP/DM
+ * was WP4, RN4871 UART/reset/GPIO above is WP5 — all now implemented. */
 
 #endif /* PIN_CONFIG_H */

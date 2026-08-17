@@ -51,6 +51,8 @@
 #include "svc_usb.h"
 #include "svc_api.h"
 #include "svc_measurement.h"
+#include "hal_uart.h"
+#include "svc_ble.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
@@ -173,12 +175,23 @@ int main(void)
   svc_input_init();
   app_ui_init();
 
-  /* svc_api_init() before svc_usb_init(): the latter registers itself as
-   * API_TRANSPORT_USB via svc_api_register_transport(), which needs the
+  /* svc_api_init() before svc_usb_init()/svc_ble_init(): both transports
+   * register themselves via svc_api_register_transport(), which needs the
    * transport table already zeroed. */
   svc_api_init();
   svc_measurement_init();
   svc_usb_init();
+
+  /* hal_uart_init() before svc_ble_init(): the latter's drv_rn4871_init()
+   * starts driving the RN4871 over USART6 immediately (reset pulse, then
+   * "$$$" command mode entry), so the DMA RX ring must already be live to
+   * catch the module's boot/command responses. MX_USART6_UART_Init() (and
+   * !BLE_RESET! -> PB5, driven HIGH = normal by CubeMX's own MX_GPIO_Init())
+   * already ran above this USER CODE block. */
+  if (!hal_uart_init()) {
+    Error_Handler();
+  }
+  svc_ble_init();
 
   app_scheduler_init();
   app_leds_init();

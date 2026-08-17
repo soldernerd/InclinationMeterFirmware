@@ -8,6 +8,7 @@
 #include "hal_systick.h"
 #include "svc_api.h"
 #include "svc_battery.h"
+#include "svc_ble.h"
 #include "svc_measurement.h"
 #include "svc_storage.h"
 #include "svc_input.h"
@@ -89,6 +90,7 @@ static void task_leds(void)
 }
 
 static void task_usb(void)         { svc_usb_update();         }
+static void task_ble(void)         { svc_ble_update();         }
 static void task_api(void)         { svc_api_update();         }
 static void task_measurement(void) { svc_measurement_update(); }
 
@@ -104,6 +106,7 @@ static SchedulerEntry s_tasks[] = {
     { task_input,       0,                   0 },
     { task_buzzer,      0,                   0 },
     { task_usb,         0,                   0 },
+    { task_ble,         0,                   0 },
     { task_api,         0,                   0 },
     { task_measurement, 0,                   0 },
     { task_ui,          0,                   0 },
@@ -130,11 +133,12 @@ void app_scheduler_reload_periods(void)
     s_tasks[4].period_ms  = SYSTICK_PERIOD_MS;     /* input — every tick */
     s_tasks[5].period_ms  = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
     s_tasks[6].period_ms  = g_device_settings.task_usb_ms;
-    s_tasks[7].period_ms  = g_device_settings.task_sensors_ms;   /* api — poll rate for stream/progress checks */
-    s_tasks[8].period_ms  = g_device_settings.task_sensors_ms;   /* measurement */
-    s_tasks[9].period_ms  = g_device_settings.task_display_ms;   /* ui */
-    s_tasks[10].period_ms = g_device_settings.task_display_ms;   /* display */
-    /* s_tasks[11] (LEDs) period is the fixed literal set in the table above —
+    s_tasks[7].period_ms  = g_device_settings.task_ble_ms;        /* ble — fast poll for UART command/response latency */
+    s_tasks[8].period_ms  = g_device_settings.task_sensors_ms;   /* api — poll rate for stream/progress checks */
+    s_tasks[9].period_ms  = g_device_settings.task_sensors_ms;   /* measurement */
+    s_tasks[10].period_ms = g_device_settings.task_display_ms;   /* ui */
+    s_tasks[11].period_ms = g_device_settings.task_display_ms;   /* display */
+    /* s_tasks[12] (LEDs) period is the fixed literal set in the table above —
      * not user/BLE-configurable like the others. */
 }
 

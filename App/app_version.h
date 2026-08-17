@@ -2,8 +2,8 @@
 #define APP_VERSION_H
 
 #define FW_VERSION_MAJOR  0
-#define FW_VERSION_MINOR  4
+#define FW_VERSION_MINOR  5
 #define FW_VERSION_PATCH  0
-#define FW_VERSION_STRING "0.4.0"
+#define FW_VERSION_STRING "0.5.0"
 
 #endif /* APP_VERSION_H */

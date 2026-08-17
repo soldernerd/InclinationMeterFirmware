@@ -27,7 +27,17 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
     [UI_SETTING_STREAM_INTERVAL]  = { "Stream interval",  "ms",   50,   100,   2000 },
     [UI_SETTING_SETTLING_TIMEOUT] = { "Settling timeout", "ms", 1000,  5000,  60000 },
+    [UI_SETTING_RESET_BLE]        = { "Reset BLE module",  "",    0,     0,      0 }, /* action, no range */
 };
+
+/* Action settings (currently just Reset BLE) don't hold an editable
+ * numeric value — pressing ENC1 on them fires invoke_action() instead of
+ * entering edit mode. App/app_display.c checks this too, to render
+ * "[press to confirm]" instead of a number + unit. */
+bool app_ui_setting_is_action(UiSettingIndex i)
+{
+    return i == UI_SETTING_RESET_BLE;
+}
 
 const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i)
 {
@@ -158,6 +168,23 @@ static void cancel_edit(void)
     g_ui_state.redraw_needed = true;
 }
 
+static void invoke_action(UiSettingIndex i)
+{
+    if (i == UI_SETTING_RESET_BLE) {
+        /* false -> Drivers_App/drv_rn4871.c runs the full configuration
+         * sequence again on next boot instead of the abbreviated path —
+         * see system_state.h's DeviceSettings.ble_configured comment.
+         * Takes effect on next boot/reset, not immediately; there's no
+         * live "re-run BLE setup now" path since drv_rn4871_init() only
+         * ever runs once, from main(). */
+        g_device_settings.ble_configured = false;
+        if (svc_storage_save_settings(&g_device_settings) != DRV_OK) {
+            g_system_state.settings_save_failed = true;
+        }
+    }
+    g_ui_state.redraw_needed = true;
+}
+
 /* ---- public API ---- */
 
 void app_ui_init(void)
@@ -230,7 +257,12 @@ void app_ui_update(void)
             g_ui_state.redraw_needed = true;
         }
         if (e1_press) {
-            enter_edit_mode();
+            UiSettingIndex idx = (UiSettingIndex)g_ui_state.settings_cursor;
+            if (app_ui_setting_is_action(idx)) {
+                invoke_action(idx);
+            } else {
+                enter_edit_mode();
+            }
             drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
         }
     } else {

@@ -20,6 +20,7 @@ typedef enum {
                                      * "battery cutoff"; see config.h */
     UI_SETTING_STREAM_INTERVAL,
     UI_SETTING_SETTLING_TIMEOUT,
+    UI_SETTING_RESET_BLE,           /* action, not a value — see app_ui.c */
     UI_SETTING_COUNT,
 } UiSettingIndex;
 
@@ -57,5 +58,12 @@ int32_t app_ui_setting_read(UiSettingIndex i);
 /* Never returns NULL — an out-of-range index falls back to index 0
  * rather than crash a display routine over a cursor bug. */
 const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i);
+
+/* True for settings that are one-shot actions (currently just Reset
+ * BLE) rather than an editable numeric value — shared between
+ * App/app_ui.c (routes ENC1 press to invoke_action() instead of
+ * enter_edit_mode()) and App/app_display.c (renders "[press to
+ * confirm]" instead of a number + unit). */
+bool app_ui_setting_is_action(UiSettingIndex i);
 
 #endif /* APP_UI_H */

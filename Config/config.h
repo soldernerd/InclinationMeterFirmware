@@ -104,6 +104,9 @@
 #define EEPROM_CALIBRATION_ADDR         0x0500     /* moved from 0x0100 */
 #define EEPROM_CALIBRATION_VERSION      0x0001
 
+#define EEPROM_BLE_SETTINGS_ADDR         0x0600  /* ble_configured */
+#define EEPROM_BLE_SETTINGS_VERSION      0x0001
+
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
  * SolarChargerRevE) use this VID with project-specific PIDs granted by
@@ -123,5 +126,28 @@
 #define USB_MANUFACTURER_STR            "soldernerd"
 #define USB_PRODUCT_STR                 "InclinationMeter"
 #define USB_SERIAL_STR                  "001"
+
+/* --- BLE / RN4871 (WP5) --- */
+#define BLE_DEVICE_NAME                 "InclinationMeter"
+
+/* GATT UUIDs — generated once for this product family. They MUST match
+ * whatever LevelApp connects to. The RN4871 expects 32 hex chars (no
+ * dashes) for PS,/PC, commands. CMD/DATA derived from service by
+ * incrementing the last byte. */
+#define BLE_SERVICE_UUID                "6E5D4C3B2A1948079F6E5D4C3B2A1980"
+#define BLE_CMD_CHAR_UUID                "6E5D4C3B2A1948079F6E5D4C3B2A1981"
+#define BLE_DATA_CHAR_UUID               "6E5D4C3B2A1948079F6E5D4C3B2A1982"
+
+#define BLE_RX_PACKET_TIMEOUT_MS        100     /* abort partial packet after this */
+
+/* UART ring buffer (USART6 <-> RN4871). Must be a power of 2; sized to
+ * fit the longest RN4871 reply plus headroom for BLE transparent UART
+ * traffic between scheduler ticks. */
+#define UART_RX_RING_SIZE               256
+
+/* RN4871 timeouts (ms) */
+#define RN4871_CMD_TIMEOUT_MS           500
+#define RN4871_REBOOT_TIMEOUT_MS        2000
+#define RN4871_BOOT_TIMEOUT_MS          3000
 
 #endif /* CONFIG_H */

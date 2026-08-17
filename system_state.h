@@ -53,6 +53,26 @@ typedef struct {
      * App/app_ui.c's consume_detents(). Unconfirmed against real
      * hardware, same as the calibration fields above. */
     uint16_t encoder_counts_per_detent;
+
+    /* --- BLE page (WP5) ---
+     * false -> Drivers_App/drv_rn4871.c runs the full RN4871
+     * configuration sequence (factory reset, name, security, GATT
+     * service/characteristics) on next boot instead of the abbreviated
+     * $$$ -> A -> --- path; cleared from the SETTINGS screen's "Reset
+     * BLE" action (App/app_ui.c) — deferred from WP4, added here now
+     * that BLE actually exists to configure. */
+    bool     ble_configured;
+
+    /* Not persisted, never read outside this file's own boundary check.
+     * A stable 1-byte anchor immediately after the last real settings
+     * field, so Services/svc_storage.c's trailing-section _Static_assert
+     * can require an EXACT offsetof match (like every other section
+     * boundary) instead of tolerating a few bytes of slop to account for
+     * the struct's own trailing alignment padding — that slop couldn't
+     * distinguish real padding from a small field silently added after
+     * ble_configured without a matching EEPROM section. Keep this the
+     * last member; add new settings fields above it, inside their group. */
+    uint8_t  _settings_end_marker;
 } DeviceSettings;
 
 typedef struct {
@@ -139,6 +159,12 @@ typedef struct {
      * command or GET_STATUS extension) instead of silent. Saturates
      * rather than wraps; never cleared once the count is nonzero. */
     uint16_t usb_tx_dropped_count;
+
+    /* Same as usb_tx_dropped_count above, but for Services/svc_ble.c's
+     * send_via_ble() / drv_rn4871_send_notification() path — a failed
+     * BLE notification (not connected, or the UART TX DMA already busy)
+     * is equally silent otherwise. */
+    uint16_t ble_tx_dropped_count;
 } SystemState;
 
 typedef struct {
