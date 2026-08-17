@@ -322,10 +322,38 @@ changed internally, via a `SettingsSection` table (address + version + `offsetof
 byte range per subsystem) driving both load and save. `EEPROM_CALIBRATION_ADDR` moved
 `0x0100`→`0x0500` to make room; addresses `0x0000`-`0x0400` now hold the five settings pages.
 Removed the vestigial `checksum` struct field (set but never read — real integrity checking
-was always the header's separate CRC). Verified via `_Static_assert` that the five sections
-exactly tile the struct with no padding gaps/overlaps between boundaries. The "still
-outstanding" `encoder_counts_per_detent` bullet above is now more precisely scoped: its own
-page can change layout/version without affecting battery or TMP236 calibration.
+was always the header's separate CRC). The "still outstanding" `encoder_counts_per_detent`
+bullet above is now more precisely scoped: its own page can change layout/version without
+affecting battery or TMP236 calibration.
+
+**Third review pass (2026-08-17, commit `05070d7`) on the page-split commit itself found a
+real data-corruption bug, fixed:** `load_section()` wrote each page's EEPROM read result
+directly into the live `DeviceSettings` struct *before* validating its CRC/version. On a
+mismatch, the corrupted/mismatched bytes had already overwritten the good default
+`svc_storage_init()` seeded — and the reseed step then computed a *fresh* CRC over that
+corruption and wrote it back, making it pass validation permanently on every subsequent boot
+instead of being caught and replaced. Fixed by reading into a local buffer first and only
+committing to the live struct after CRC and version both pass — now genuinely backed by
+`_Static_assert` checks (committed in `Services/svc_storage.c`, not just run once in a
+throwaway file as the doc previously — inaccurately — claimed). Also fixed: `settings_save_failed`
+only reflected whether a save was *queued*, not whether the async 5-page sequence actually
+*completed* — a real mid-sequence failure went completely unreported; `svc_storage_update()`
+now sets/clears it at the true completion point instead of `commit_edit()`'s optimistic
+synchronous clear. Matching zero-guards added for `vbat_scale_den`/`tmp236_seg1_den`/
+`tmp236_seg2_den` (previously only the encoder field had one).
+
+**Consciously left as accepted scope limitations, not code-fixed** (each would need
+disproportionate new infrastructure for a condition that requires an actual EEPROM/I2C
+hardware fault, on a device that's never been flashed):
+- The 5-page settings save is not atomic across pages — a mid-sequence failure (after 3
+  retries) can leave some pages holding new values and others stale. `settings_save_failed`
+  now correctly reports this happened, but doesn't undo the partial write.
+- Boot-time worst case grew from one ~200 ms blocking reseed write to up to five (~1 s) if
+  every page independently fails against a genuinely stuck I2C bus.
+- Old EEPROM contents written under the pre-split single-page layout (settings at `0x0000`,
+  calibration at `0x0100`) are reinterpreted under the new per-page address map with only the
+  magic-byte+CRC check as a (coincidental, not deliberate) safeguard against cross-layout
+  garbage. Moot today — no hardware has been flashed under the old layout.
 
 ## Known critical bug found — RESOLVED (2026-08-15, commit `251501d`)
 
