@@ -165,6 +165,10 @@ typedef struct {
      * BLE notification (not connected, or the UART TX DMA already busy)
      * is equally silent otherwise. */
     uint16_t ble_tx_dropped_count;
+
+    /* Same again, but for Services/svc_uart.c's send_via_uart() path
+     * (WP5.1) — the wired debug-UART transport's TX DMA already busy. */
+    uint16_t uart_tx_dropped_count;
 } SystemState;
 
 typedef struct {

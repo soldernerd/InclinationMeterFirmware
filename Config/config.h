@@ -12,6 +12,12 @@
 #define DEFAULT_TASK_LED_MS             250     /* status LED toggle period -> 2 Hz blink */
 #define DEFAULT_TASK_BLE_MS             100
 #define DEFAULT_TASK_USB_MS             100
+#define DEFAULT_TASK_UART_MS            100     /* fixed, not EEPROM-configurable like
+                                                   * task_ble_ms/task_usb_ms — see
+                                                   * App/app_scheduler.c; DeviceSettings has
+                                                   * no headroom left for another field (it's
+                                                   * sent whole in one GET/SET_SETTINGS packet,
+                                                   * already at the 60-byte payload ceiling) */
 #define DEFAULT_TASK_BATTERY_MS         1000
 #define DEFAULT_TASK_TEMPERATURE_MS     10000
 
@@ -138,16 +144,22 @@
 #define BLE_CMD_CHAR_UUID                "6E5D4C3B2A1948079F6E5D4C3B2A1981"
 #define BLE_DATA_CHAR_UUID               "6E5D4C3B2A1948079F6E5D4C3B2A1982"
 
-#define BLE_RX_PACKET_TIMEOUT_MS        100     /* abort partial packet after this */
-
-/* UART ring buffer (USART6 <-> RN4871). Must be a power of 2; sized to
- * fit the longest RN4871 reply plus headroom for BLE transparent UART
- * traffic between scheduler ticks. */
-#define UART_RX_RING_SIZE               256
-
 /* RN4871 timeouts (ms) */
 #define RN4871_CMD_TIMEOUT_MS           500
 #define RN4871_REBOOT_TIMEOUT_MS        2000
 #define RN4871_BOOT_TIMEOUT_MS          3000
+
+/* --- Shared byte-stream transport framing (WP5.1) ---
+ * Used by any svc_api transport that delivers raw bytes rather than
+ * whole frames (BLE transparent UART, wired debug UART) — see
+ * Services/svc_api.c's ApiByteReassembler. USB HID delivers whole
+ * reports already framed by the endpoint, so it doesn't need this. */
+#define API_RX_PACKET_TIMEOUT_MS        100     /* abort partial packet after this */
+
+/* HAL_App/hal_uart.c's per-instance DMA ring buffer (USART6 <-> RN4871,
+ * USART3 <-> debug/VCP header). Must be a power of 2; sized to fit the
+ * longest single reply plus headroom for burst traffic between
+ * scheduler ticks. */
+#define HAL_UART_RX_RING_SIZE           256
 
 #endif /* CONFIG_H */

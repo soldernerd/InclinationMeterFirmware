@@ -5,8 +5,9 @@
 #include <stdbool.h>
 
 typedef enum {
-    API_TRANSPORT_USB = 0,
-    API_TRANSPORT_BLE = 1,
+    API_TRANSPORT_USB  = 0,
+    API_TRANSPORT_BLE  = 1,
+    API_TRANSPORT_UART = 2,
     API_TRANSPORT_COUNT,
 } ApiTransport;
 
@@ -27,6 +28,30 @@ void svc_api_connected(ApiTransport t);
 void svc_api_disconnected(ApiTransport t);
 
 void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len);
+
+/* On-the-wire packet framing, shared with any transport whose HAL layer
+ * delivers raw bytes rather than whole frames (BLE transparent UART, the
+ * wired debug UART) and so needs to reassemble packets itself — USB HID
+ * delivers whole reports already framed by the endpoint, so svc_usb.c
+ * doesn't use this. */
+#define API_PACKET_HDR_BYTES   2U
+#define API_PACKET_CRC_BYTES   2U
+#define API_PACKET_MAX_SIZE    64U   /* must equal USB_HID_REPORT_SIZE — see svc_api.c's _Static_assert */
+
+typedef struct {
+    uint8_t  buf[API_PACKET_MAX_SIZE];
+    uint16_t pos;
+    uint32_t started_ms;
+} ApiByteReassembler;
+
+/* Feeds one received byte in. Once a complete, CRC-framed packet is
+ * assembled it's dispatched via svc_api_receive(t, ...) and the
+ * reassembler resets itself for the next packet — callers just feed
+ * bytes as they arrive and separately call
+ * svc_api_reassembler_check_timeout() to abandon a stalled partial
+ * packet. */
+void svc_api_reassembler_feed_byte(ApiTransport t, ApiByteReassembler *r, uint8_t b);
+void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_ms);
 
 void svc_api_notify_single_ready(void);
 

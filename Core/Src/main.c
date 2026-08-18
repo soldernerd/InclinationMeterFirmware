@@ -53,6 +53,7 @@
 #include "svc_measurement.h"
 #include "hal_uart.h"
 #include "svc_ble.h"
+#include "svc_uart.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
@@ -175,23 +176,33 @@ int main(void)
   svc_input_init();
   app_ui_init();
 
-  /* svc_api_init() before svc_usb_init()/svc_ble_init(): both transports
-   * register themselves via svc_api_register_transport(), which needs the
-   * transport table already zeroed. */
+  /* svc_api_init() before svc_usb_init()/svc_ble_init()/svc_uart_init():
+   * all three transports register themselves via
+   * svc_api_register_transport(), which needs the transport table already
+   * zeroed. */
   svc_api_init();
   svc_measurement_init();
   svc_usb_init();
 
-  /* hal_uart_init() before svc_ble_init(): the latter's drv_rn4871_init()
-   * starts driving the RN4871 over USART6 immediately (reset pulse, then
-   * "$$$" command mode entry), so the DMA RX ring must already be live to
-   * catch the module's boot/command responses. MX_USART6_UART_Init() (and
-   * !BLE_RESET! -> PB5, driven HIGH = normal by CubeMX's own MX_GPIO_Init())
-   * already ran above this USER CODE block. */
-  if (!hal_uart_init()) {
+  /* hal_uart_init(HAL_UART_BLE) before svc_ble_init(): the latter's
+   * drv_rn4871_init() starts driving the RN4871 over USART6 immediately
+   * (reset pulse, then "$$$" command mode entry), so the DMA RX ring must
+   * already be live to catch the module's boot/command responses.
+   * MX_USART6_UART_Init() (and !BLE_RESET! -> PB5, driven HIGH = normal
+   * by CubeMX's own MX_GPIO_Init()) already ran above this USER CODE
+   * block. */
+  if (!hal_uart_init(HAL_UART_BLE)) {
     Error_Handler();
   }
   svc_ble_init();
+
+  /* hal_uart_init(HAL_UART_DEBUG) before svc_uart_init(): same DMA-must-
+   * be-live-before-use reasoning as above, for USART3 (PD8/PD9, the
+   * STLINK VCP header) instead of USART6. */
+  if (!hal_uart_init(HAL_UART_DEBUG)) {
+    Error_Handler();
+  }
+  svc_uart_init();
 
   app_scheduler_init();
   app_leds_init();

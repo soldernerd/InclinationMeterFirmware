@@ -12,10 +12,17 @@
 /* On-the-wire packet:
  *   [CMD][LEN][PAYLOAD ...][CRC16 LSB][CRC16 MSB]
  *   total <= USB_HID_REPORT_SIZE (64). LEN counts payload bytes only.
- *   CRC16 covers CMD + LEN + PAYLOAD. */
-#define HDR_BYTES        2U
-#define CRC_BYTES        2U
+ *   CRC16 covers CMD + LEN + PAYLOAD.
+ * HDR_BYTES/CRC_BYTES alias svc_api.h's public API_PACKET_* so this file's
+ * shorter names stay readable without a second, divergible source of
+ * truth — every byte-stream transport (svc_ble.c, svc_uart.c) reassembles
+ * against the same constants via svc_api_reassembler_feed_byte() below. */
+#define HDR_BYTES        API_PACKET_HDR_BYTES
+#define CRC_BYTES        API_PACKET_CRC_BYTES
 #define MAX_PAYLOAD      (USB_HID_REPORT_SIZE - HDR_BYTES - CRC_BYTES)   /* 60 */
+
+_Static_assert(USB_HID_REPORT_SIZE == API_PACKET_MAX_SIZE,
+               "API_PACKET_MAX_SIZE must track USB_HID_REPORT_SIZE — both bound the same on-the-wire packet");
 
 /* ---------------- payload structs ---------------- */
 
@@ -438,6 +445,36 @@ void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len)
         return;
     }
     dispatch(t, cmd, paylen ? &data[HDR_BYTES] : 0, paylen);
+}
+
+void svc_api_reassembler_feed_byte(ApiTransport t, ApiByteReassembler *r, uint8_t b)
+{
+    if (r->pos == 0) {
+        r->started_ms = hal_systick_get_ms();
+    }
+    if (r->pos < API_PACKET_MAX_SIZE) {
+        r->buf[r->pos++] = b;
+    }
+
+    /* As soon as we have header + length, we know how big the packet is. */
+    if (r->pos >= HDR_BYTES) {
+        uint16_t paylen = r->buf[1];
+        uint16_t total  = (uint16_t)(HDR_BYTES + paylen + CRC_BYTES);
+        if (total > API_PACKET_MAX_SIZE) {
+            /* Garbage — drop. */
+            r->pos = 0;
+        } else if (r->pos >= total) {
+            svc_api_receive(t, r->buf, total);
+            r->pos = 0;
+        }
+    }
+}
+
+void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_ms)
+{
+    if (r->pos > 0 && (hal_systick_get_ms() - r->started_ms) > timeout_ms) {
+        r->pos = 0;
+    }
 }
 
 void svc_api_notify_single_ready(void)

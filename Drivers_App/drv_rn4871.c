@@ -82,7 +82,7 @@ static void enter_state(Rn4871State next)
  * system_state access — see CLAUDE.md 8.1). */
 static bool send_str(const char *s)
 {
-    return hal_uart_write((const uint8_t *)s, (uint16_t)strlen(s)) == DRV_OK;
+    return hal_uart_write(HAL_UART_BLE, (const uint8_t *)s, (uint16_t)strlen(s)) == DRV_OK;
 }
 
 static void start_step(const char *cmd, const char *expected, uint32_t timeout_ms)
@@ -184,7 +184,7 @@ bool drv_rn4871_is_connected(void)      { return s_state == RN4871_STATE_CONNECT
 DrvStatus drv_rn4871_send_notification(const uint8_t *data, uint16_t len)
 {
     if (s_state != RN4871_STATE_CONNECTED) return DRV_ERR_NOT_READY;
-    return hal_uart_write(data, len);
+    return hal_uart_write(HAL_UART_BLE, data, len);
 }
 
 /* ---------------- response processing ---------------- */
@@ -312,7 +312,7 @@ void drv_rn4871_task(void)
 
     /* Drain everything available since last tick. */
     uint8_t b;
-    while (hal_uart_read_byte(&b)) {
+    while (hal_uart_read_byte(HAL_UART_BLE, &b)) {
         /* In CONNECTED state, raw bytes are BLE payload — forward to
          * svc_ble verbatim and don't touch the response-line buffer.
          *

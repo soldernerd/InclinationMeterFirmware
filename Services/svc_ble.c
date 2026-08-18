@@ -4,28 +4,22 @@
 #include "svc_storage.h"
 #include "config.h"
 #include "system_state.h"
-#include "hal_systick.h"
-#include <string.h>
 
 /* BLE transport adapter. Owns:
  *   - registration with svc_api as API_TRANSPORT_BLE
  *   - drv_rn4871 connect/disconnect bridging into svc_api and
  *     g_system_state.ble_connected (the sole writer of that field —
  *     Drivers_App/drv_rn4871.c deliberately does not touch system_state)
- *   - reassembly of incoming bytes into 64-byte packets
+ *   - reassembly of incoming bytes into packets, via svc_api.c's shared
+ *     ApiByteReassembler (also used by Services/svc_uart.c — the framing
+ *     is identical for any transport that delivers raw bytes instead of
+ *     whole frames)
  *
  * RN4871 in transparent UART mode forwards CMD-characteristic writes
- * from the BLE peer as raw bytes on UART. We accumulate them into a
- * packet buffer until LEN+overhead bytes are present, then dispatch.
- * If a partial packet stalls, BLE_RX_PACKET_TIMEOUT_MS abandons it. */
+ * from the BLE peer as raw bytes on UART. If a partial packet stalls,
+ * API_RX_PACKET_TIMEOUT_MS abandons it. */
 
-#define PKT_HDR     2U
-#define PKT_CRC     2U
-#define PKT_MAX     64U
-
-static uint8_t  s_rx_buf[PKT_MAX];
-static uint16_t s_rx_pos = 0;
-static uint32_t s_rx_started_ms = 0;
+static ApiByteReassembler s_reassembler;
 
 /* CLAUDE.md 7.6 — No Silent Failures: drv_rn4871_send_notification() can
  * fail (not connected, or the UART TX DMA already busy) and there's no
@@ -43,39 +37,21 @@ static void send_via_ble(const uint8_t *data, uint16_t len)
 
 static void on_data_byte(uint8_t b)
 {
-    if (s_rx_pos == 0) {
-        s_rx_started_ms = hal_systick_get_ms();
-    }
-    if (s_rx_pos < PKT_MAX) {
-        s_rx_buf[s_rx_pos++] = b;
-    }
-
-    /* As soon as we have header + length, we know how big the packet is. */
-    if (s_rx_pos >= PKT_HDR) {
-        uint16_t paylen = s_rx_buf[1];
-        uint16_t total  = (uint16_t)(PKT_HDR + paylen + PKT_CRC);
-        if (total > PKT_MAX) {
-            /* Garbage — drop. */
-            s_rx_pos = 0;
-        } else if (s_rx_pos >= total) {
-            svc_api_receive(API_TRANSPORT_BLE, s_rx_buf, total);
-            s_rx_pos = 0;
-        }
-    }
+    svc_api_reassembler_feed_byte(API_TRANSPORT_BLE, &s_reassembler, b);
 }
 
 void svc_ble_on_connected(void)
 {
     g_system_state.ble_connected = true;
     svc_api_connected(API_TRANSPORT_BLE);
-    s_rx_pos = 0;
+    s_reassembler.pos = 0;
 }
 
 void svc_ble_on_disconnected(void)
 {
     g_system_state.ble_connected = false;
     svc_api_disconnected(API_TRANSPORT_BLE);
-    s_rx_pos = 0;
+    s_reassembler.pos = 0;
 }
 
 /* Fires once, only on the full (first-boot) config path, right after the
@@ -94,7 +70,7 @@ static void on_config_complete(void)
 
 void svc_ble_init(void)
 {
-    s_rx_pos = 0;
+    s_reassembler.pos = 0;
     g_system_state.ble_connected = false;
 
     svc_api_register_transport(API_TRANSPORT_BLE, send_via_ble);
@@ -119,10 +95,5 @@ Rn4871State svc_ble_get_state(void)
 void svc_ble_update(void)
 {
     drv_rn4871_task();
-
-    /* Abort partial packets that stalled */
-    if (s_rx_pos > 0
-        && (hal_systick_get_ms() - s_rx_started_ms) > BLE_RX_PACKET_TIMEOUT_MS) {
-        s_rx_pos = 0;
-    }
+    svc_api_reassembler_check_timeout(&s_reassembler, API_RX_PACKET_TIMEOUT_MS);
 }
