@@ -29,7 +29,7 @@ GC runs; nothing is deleted immediately.
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
 | `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted, EEPROM storage redesigned into per-subsystem pages — see "wp3 — resolution" and "Code review" below. Build-verified clean; three code-review passes complete (first: 8-angle/12-verified/10-fixed; second: partial-angle plus the EEPROM per-page redesign; third: remaining angles against that redesign, found and fixed a real data-corruption bug), 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 13 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, UI state machine restoration, three code-review fix rounds, EEPROM per-page redesign, docs throughout). `wp3` HEAD is `8f9d3e8`. |
 | `wp4` | **Hand-adapted onto `wp3@2d5fc7e`, reconciled against two real CubeMX regens (the second with NVIC properly configured via the GUI), through two full code-review passes (9+8 findings, 17 fixed total) — see "wp4 — resolution and adaptation notes" below. Build-verified clean, 2026-08-18.** | `wp3@2d5fc7e` | `wp4` HEAD is `c7665dc`. |
-| `wp5` | **Hand-ported onto `wp4@bb0b95f`, adapted for REV B's actual BLE pinout, one code-review pass complete (10 findings, 8 fixed, 2 documented as accepted known limitations) — see "wp5 — resolution and adaptation notes" below. Build-verified clean, 2026-08-17.** | `wp4@bb0b95f` | Still uncommitted at end of this session — see "Resuming this work" below for the commit step. |
+| `wp5` | **BLE half hand-ported onto `wp4@bb0b95f`, adapted for REV B's actual BLE pinout, one code-review pass complete (10 findings, 8 fixed, 2 documented as accepted known limitations), committed (2 commits) — see "wp5 — resolution and adaptation notes" below. Build-verified clean, 2026-08-17. Then extended same-branch with wp5.1 (third `svc_api` transport over USART3, 2026-08-18) — build-verified but NOT reviewed or committed yet, and needs a CubeMX regen (USART3 RX DMA -> Circular) before it's functionally safe — see "wp5.1" below.** | `wp4@bb0b95f` | wp5 (BLE) HEAD is `38f47bc`. wp5.1 (UART transport) is uncommitted working-tree state on top of that — see "Resuming this work" below. |
 
 **Build verification:** no ARM toolchain existed on the machine `wp3` was developed on
 (confirmed by an exhaustive filesystem search; the `build/` directory previously checked
@@ -712,6 +712,84 @@ Build-verified after all fixes: zero warnings under `-Wall -Wextra -Werror`, RAM
 
 ---
 
+## wp5.1 — third `svc_api` transport over the debug UART (2026-08-18)
+
+Added while still on the `wp5` branch, right after WP5's BLE work above (not a separate
+branch) — a user request to also bring in the third transport the original README note
+("BLE and USART3 to follow in WP5") had flagged: `API_TRANSPORT_UART`, the same binary
+command/response protocol USB and BLE already speak, now also reachable over USART3
+(PD8/PD9 — the STLINK VCP header, §5.7 of `CLAUDE.md`) with no BLE pairing or USB HID driver
+needed. This is a different feature from WP1.5's still-not-implemented plain-text
+`DBG_PRINT()` debug-log channel — same physical wire, different (mutually exclusive) use.
+
+**Generalized `HAL_App/hal_uart.c`/`.h`** from a single BLE-only ring-buffer driver into a
+`HalUartInstance`-parameterized one (`HAL_UART_BLE` = USART6, `HAL_UART_DEBUG` = USART3),
+each with its own ring buffer/tx-busy state, so both transports share one DMA-ring-buffer
+engine instead of two near-identical copies. `Drivers_App/drv_rn4871.c`'s three call sites
+updated to pass `HAL_UART_BLE` explicitly.
+
+**Resolved a deferred review finding instead of compounding it a third time.** WP5's own
+code review (above) flagged `svc_ble.c` duplicating `svc_api.c`'s packet-framing constants
+and byte-reassembly logic — deferred as lower-priority at the time. Adding UART as a second
+byte-stream transport (BLE and wired UART both deliver raw bytes needing reassembly, unlike
+USB HID's whole-report delivery) would have meant a third copy of the same ~20 lines, so this
+was the right moment to fix it properly: `Services/svc_api.h`/`.c` now expose
+`ApiByteReassembler` + `svc_api_reassembler_feed_byte()`/`_check_timeout()`, and
+`Services/svc_ble.c` was updated to use it instead of its own `PKT_HDR`/`PKT_CRC`/`PKT_MAX` +
+hand-rolled state machine. `Services/svc_uart.c` (new) uses the same shared helper.
+
+**New `Services/svc_uart.c`/`.h`** mirrors `svc_ble.c`'s structure but skips connect/disconnect
+entirely: a wired UART has no enumeration/pairing handshake like USB's VBUS detection or
+BLE's RN4871 connect events — either something is listening on the other end of the wire or
+it isn't, with no hardware signal to poll either way. `svc_api_connected(API_TRANSPORT_UART)`
+fires once at init and the transport is simply always considered connected afterward. A new
+`SystemState.uart_tx_dropped_count` mirrors the existing `usb_tx_dropped_count`/
+`ble_tx_dropped_count` CLAUDE.md 7.6 escalation pattern for a failed send.
+
+**Hit `DeviceSettings`'s payload ceiling immediately.** The original plan added a
+`task_uart_ms` EEPROM-backed field (matching `task_ble_ms`/`task_usb_ms`) — this broke
+`Services/svc_api.c`'s `_Static_assert(sizeof(DeviceSettings) <= MAX_PAYLOAD, ...)`.
+Turned out `DeviceSettings` was already sitting at *exactly* 60/60 bytes (the single-packet
+`GET_SETTINGS`/`SET_SETTINGS` payload ceiling) before this change — zero headroom, undetected
+until now because nothing had tried to grow it since. Rather than force a multi-packet
+settings protocol for one more field, `task_uart_ms` became a **fixed, non-EEPROM-backed**
+period (`config.h`'s `DEFAULT_TASK_UART_MS`, set directly in `App/app_scheduler.c`'s task
+table) — matching the precedent `task_leds`'s period already set (see that field's own
+"not user/BLE-configurable" comment). A debug/VCP poll rate doesn't need the same
+live-tunability as the customer-facing BLE/USB API rates anyway.
+
+**CubeMX action needed — real functional gap, not caught by the build.** USART3 already had
+DMA configured in CubeMX (unlike the USART6 gap WP5 hit) — but `hdma_usart3_rx.Init.Mode` is
+`DMA_NORMAL`, not `DMA_CIRCULAR` like `hdma_usart6_rx`. `hal_uart.c`'s ring-buffer position
+tracking (`dma_write_pos()`) assumes continuously self-reloading circular reception on every
+instance; in Normal mode, DMA completes and **stops** once `HAL_UART_RX_RING_SIZE` (256)
+bytes have been received, and nothing here restarts it. This compiles and links cleanly —
+it's a silent runtime gap, not a build error — reception over USART3 would work for the
+first 256 bytes then quietly go dead. **Needs a CubeMX regen: change USART3's RX DMA channel
+from Normal to Circular mode (matching USART6's RX channel), then regenerate**, before this
+transport is safe to actually use. Documented in `hal_uart.c` itself as an "ACTION NEEDED"
+comment at its extern declarations, so it's visible at the point of use, not just here.
+
+**Code review (2026-08-18):** 3 parallel angles (correctness; conventions/layering; cross-file
+impact) against the full diff plus the two new untracked files. Came back clean — no
+missed call sites for the `hal_uart_*` functions' new `HalUartInstance` parameter, no
+layering violations, no silent-failure gaps, `Services/svc_uart.c` picked up automatically
+by `CMakeLists.txt`'s `Services/*.c` glob. Only 1 finding: a stale comment on
+`hal_uart.c`'s `instance_of()` that described USART3 as an untracked debug-only path — no
+longer true, since this same diff made USART3 one of the two tracked instances. Fixed.
+Two items surfaced but explicitly not treated as defects: `svc_uart.c`'s always-connected
+design means an unanswered `START_STREAM` left running would keep writing into an
+unattended wire (the documented tradeoff of skipping a connect/disconnect handshake, not a
+new bug), and `hal_uart_bytes_available()`/`hal_uart_is_busy()` remain unused public API
+(pre-existing pattern, not introduced here).
+
+Build-verified (compiles/links clean, zero warnings) after the review fix. **Not yet
+functionally verified** given the DMA-mode gap above — that's a real-hardware/CubeMX-config
+issue no code review can catch; the BLE transport (USART6, DMA already correct) is
+unaffected.
+
+---
+
 ## Resuming this work
 
 1. Read this file and the two docs linked at the top.
@@ -725,15 +803,21 @@ Build-verified after all fixes: zero warnings under `-Wall -Wextra -Werror`, RAM
    regens landed (8 more findings, all fixed, no crash-level bugs this time). `wp4` HEAD is
    `c7665dc`. Still needs real-hardware flash testing — nothing here has touched real
    silicon yet.
-4. **`wp5` is done, build-verified, and code-reviewed** (see "wp5 — resolution and adaptation
-   notes" and its "Code review" above — 10 findings, 8 fixed including a boot-time interrupt-
-   storm hang and two layering violations, 2 documented as accepted known limitations). Still
-   **uncommitted** at end of session — the working tree on the `wp5` branch (based on
-   `wp4@bb0b95f`) has all of this in place but nothing has been staged/committed yet. Commit
-   as one or more `feat(wp5)`/`fix(wp5)`/`docs(wp5)` commits per CLAUDE.md 9.1's convention
-   (mirrors WP4's `feat` → `fix` → `docs` split), then build-verify once more from clean.
-   Still needs real-hardware flash testing — nothing here has touched real silicon yet.
-5. `App/app_version.h`'s `FW_VERSION_*`/`FW_VERSION_STRING` already bumped to `0.5.0` this
-   session.
-6. Do not merge into `master` or push without the user's explicit go-ahead — that's a
+4. **`wp5` (BLE) is done, build-verified, code-reviewed, and committed** (see "wp5 —
+   resolution and adaptation notes" and its "Code review" above — 10 findings, 8 fixed
+   including a boot-time interrupt-storm hang and two layering violations, 2 documented as
+   accepted known limitations). Two commits on the `wp5` branch (based on `wp4@bb0b95f`):
+   `feat(wp5)` for the implementation+fixes, `docs(wp5)` for this file's WP5 sections and the
+   README update.
+5. **`wp5.1` (third `svc_api` transport, over USART3) is implemented, build-verified, and
+   code-reviewed (3-angle pass, 1 finding fixed — a stale comment) — but NOT YET committed**
+   — see "wp5.1 — third `svc_api` transport over the debug UART" above. **Before treating
+   this as functionally done**, do the CubeMX regen it flags (USART3 RX DMA: Normal ->
+   Circular) and re-verify UART reception actually keeps working past the first 256 bytes —
+   nothing catches that gap at build time, only careful reading of the generated
+   `Core/Src/usart.c` did.
+6. `App/app_version.h`'s `FW_VERSION_*`/`FW_VERSION_STRING` already bumped to `0.5.0` this
+   session (before wp5.1 was added — reconsider whether wp5.1 warrants its own bump, e.g.
+   `0.5.1`, once it's reviewed and committed).
+7. Do not merge into `master` or push without the user's explicit go-ahead — that's a
    separate review/confirmation step, same as WP4's force-push protocol.
