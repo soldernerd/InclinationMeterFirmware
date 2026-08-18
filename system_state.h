@@ -118,6 +118,22 @@ typedef struct {
     uint16_t bme280_humidity_centipct; /* 0.01 %RH / LSB */
     bool     bme280_ok;
 
+    /* Displacement sensors S1/S2 (WP10), published by
+     * Services/svc_displacement.c -- most-recent-cycle snapshot only,
+     * for a quick "current value" read (future UI/API use). The full
+     * per-cycle stream (every ~384 us carrier cycle, not just the
+     * latest one) is NOT here -- it lives in svc_displacement.c's own
+     * ring buffer, drained via its own getter, since a raw high-rate
+     * stream doesn't fit this struct's "current state" shape. residual
+     * is Im(x) from the complex division (see svc_displacement.c) --
+     * should sit near 0 if the physical model holds; a diagnostic, not
+     * itself part of the displacement result. */
+    float    disp1_delta_mm;
+    float    disp1_residual;
+    float    disp2_delta_mm;
+    float    disp2_residual;
+    bool     disp_ok;   /* true once at least one cycle has been fully computed */
+
     bool     calibration_valid;
 
     /* Local UI input (WP3), published by Services/svc_input.c. Raw
@@ -203,8 +219,46 @@ typedef struct {
     bool     zero_valid;
 } CalibrationData;
 
+/* Displacement sensor S1/S2 calibration (WP10) -- one instance per
+ * sensor (g_disp_s1_cal/g_disp_s2_cal below), each its own small
+ * standalone EEPROM page via Services/svc_storage.c's generic blob
+ * save/load (svc_storage_save_blob()/load_blob()), same pattern
+ * CalibrationData above already established (a dedicated struct + page,
+ * NOT threaded through DeviceSettings' SettingsSection/offsetof
+ * mechanism). This is deliberate, not an oversight: DeviceSettings is
+ * sent whole in one 60-byte USB HID report (Services/svc_api.c's
+ * MAX_PAYLOAD, enforced by a _Static_assert there) and was already near
+ * that ceiling -- these three float fields alone would have blown it.
+ * See Services/svc_displacement.c for how gain/d0_mm/zero_offset_mm
+ * combine with DisplacementSharedCal's atten below to compute
+ * x/delta per sensor. First float fields in this codebase's persisted
+ * calibration data -- every existing CalibrationData field above is a
+ * scaled integer, but this is the Math/Services layer, where floats are
+ * explicitly permitted (CLAUDE.md's "no floating point" rule is scoped
+ * to HAL/driver layers), and a gain ratio / sub-mm gap value is a
+ * natural fit for one. */
+typedef struct {
+    float gain;             /* S-channel amplifier gain, nominal 10 */
+    float d0_mm;             /* neutral-position air gap, mm, nominal 0.1 */
+    float zero_offset_mm;    /* displacement zero calibration, mm */
+} DisplacementSensorCal;
+
+/* atten is instrument-wide, not per-sensor: both S1 and S2 heads are
+ * driven from the same antiphase excitation pair through the same
+ * attenuator ahead of the ADC, so there is exactly one value, unlike
+ * DisplacementSensorCal's gain above (each head's own amplifier, can
+ * differ) -- its own tiny struct/page rather than folded into either
+ * sensor's, matching this file's existing convention of separating
+ * anything that can be recalibrated/versioned independently. */
+typedef struct {
+    float atten;
+} DisplacementSharedCal;
+
 extern SystemState    g_system_state;
 extern DeviceSettings g_device_settings;
 extern CalibrationData g_calibration;
+extern DisplacementSensorCal g_disp_s1_cal;
+extern DisplacementSensorCal g_disp_s2_cal;
+extern DisplacementSharedCal g_disp_shared_cal;
 
 #endif /* SYSTEM_STATE_H */

@@ -16,6 +16,9 @@
  *   0x0400  Encoder settings page
  *   0x0500  Calibration page
  *   0x0600  BLE settings page (WP5)
+ *   0x0700  Displacement sensor S1 calibration page (WP10)
+ *   0x0800  Displacement sensor S2 calibration page (WP10)
+ *   0x0900  Displacement shared calibration page (WP10, atten)
  *
  * Every page: magic[0..1] + version[0..1] + crc[0..1] (6-byte header,
  * CRC covers only the page's own data bytes, not the header) + that
@@ -114,10 +117,21 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts
 _Static_assert(HDR_SIZE + SECTION_SPAN(ble_configured, ble_configured) <= 0x0100U,
                "ble page must fit within its 256-byte EEPROM page budget");
 
-/* Full pairwise check across all 7 page addresses — NOT just an adjacent
+/* Displacement sensor calibration pages (WP10) -- standalone structs,
+ * not part of DeviceSettings/s_sections[] above (see system_state.h's
+ * DisplacementSensorCal/DisplacementSharedCal comment for why), but the
+ * same 256-byte-page-budget guarantee still applies. */
+_Static_assert(HDR_SIZE + sizeof(DisplacementSensorCal) <= 0x0100U,
+               "disp_s1/disp_s2 page must fit within its 256-byte EEPROM page budget");
+_Static_assert(HDR_SIZE + sizeof(DisplacementSharedCal) <= 0x0100U,
+               "disp_shared page must fit within its 256-byte EEPROM page budget");
+
+/* Full pairwise check across all 10 page addresses — NOT just an adjacent
  * chain (A!=B && B!=C && ...). Inequality isn't transitive: a chain would
  * pass even if e.g. ENCODER and CALIBRATION silently collided, as long as
- * neither happened to equal its chain-neighbor. All C(7,2)=21 pairs. */
+ * neither happened to equal its chain-neighbor. All C(10,2)=45 pairs: the
+ * original C(7,2)=21 below, plus every one of the 3 new WP10 addresses
+ * checked against all 7 prior ones and against each other (21+3=24). */
 _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
                && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_TMP236_SETTINGS_ADDR
                && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_LM35_SETTINGS_ADDR
@@ -138,7 +152,31 @@ _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
                && EEPROM_LM35_SETTINGS_ADDR      != EEPROM_CALIBRATION_ADDR
                && EEPROM_ENCODER_SETTINGS_ADDR   != EEPROM_BLE_SETTINGS_ADDR
                && EEPROM_ENCODER_SETTINGS_ADDR   != EEPROM_CALIBRATION_ADDR
-               && EEPROM_BLE_SETTINGS_ADDR       != EEPROM_CALIBRATION_ADDR,
+               && EEPROM_BLE_SETTINGS_ADDR       != EEPROM_CALIBRATION_ADDR
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_DISP_S1_SETTINGS_ADDR
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_DISP_S1_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_BATTERY_SETTINGS_ADDR   != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR    != EEPROM_DISP_S1_SETTINGS_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR    != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_TMP236_SETTINGS_ADDR    != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_LM35_SETTINGS_ADDR      != EEPROM_DISP_S1_SETTINGS_ADDR
+               && EEPROM_LM35_SETTINGS_ADDR      != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_LM35_SETTINGS_ADDR      != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_ENCODER_SETTINGS_ADDR   != EEPROM_DISP_S1_SETTINGS_ADDR
+               && EEPROM_ENCODER_SETTINGS_ADDR   != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_ENCODER_SETTINGS_ADDR   != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_BLE_SETTINGS_ADDR       != EEPROM_DISP_S1_SETTINGS_ADDR
+               && EEPROM_BLE_SETTINGS_ADDR       != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_BLE_SETTINGS_ADDR       != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_CALIBRATION_ADDR        != EEPROM_DISP_S1_SETTINGS_ADDR
+               && EEPROM_CALIBRATION_ADDR        != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_CALIBRATION_ADDR        != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_DISP_S1_SETTINGS_ADDR   != EEPROM_DISP_S2_SETTINGS_ADDR
+               && EEPROM_DISP_S1_SETTINGS_ADDR   != EEPROM_DISP_SHARED_SETTINGS_ADDR
+               && EEPROM_DISP_S2_SETTINGS_ADDR   != EEPROM_DISP_SHARED_SETTINGS_ADDR,
                "every settings/calibration EEPROM page address must be distinct");
 
 /* Pending-write state machine. Sized for one section's header+data (all
@@ -204,6 +242,11 @@ static void fill_default_settings(DeviceSettings *s)
 
     /* Encoder page */
     s->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
+
+    /* Displacement sensor S1/S2/shared calibration (WP10) is NOT here --
+     * those live in their own DisplacementSensorCal/DisplacementSharedCal
+     * structs, not DeviceSettings (see system_state.h), so they're
+     * defaulted where they're loaded, in svc_storage_init() below. */
 }
 
 static void fill_default_calibration(CalibrationData *c)
@@ -305,7 +348,17 @@ static bool blocking_write_block(uint16_t addr, const uint8_t *buf, uint16_t len
  * read result before validation would let corrupt/mismatched EEPROM
  * bytes overwrite a good default, and svc_storage_init()'s reseed path
  * would then compute a CRC over that corruption and persist it as
- * "valid" — the exact bug this ordering exists to prevent. */
+ * "valid" — the exact bug this ordering exists to prevent.
+ *
+ * PITFALL WORTH FLAGGING FOR ANY FUTURE EEPROM LOADER IN THIS FILE:
+ * this exact write-before-validate ordering bug has already been
+ * independently introduced and fixed TWICE in this codebase -- once
+ * here, and once in svc_storage_load_blob() below (a WP10 code review
+ * caught the second occurrence). Both fixes were per-function comments,
+ * not a shared, load-bearing check, so a third loader could still get
+ * this wrong. If you're adding one: validate into a local buffer first,
+ * memcpy to the destination only after both CRC and version checks
+ * pass -- same shape both existing loaders now use. */
 static DrvStatus load_section(const SettingsSection *sec, uint8_t *dest)
 {
     uint8_t hdr[HDR_SIZE];
@@ -355,6 +408,52 @@ static void start_section_write(const DeviceSettings *settings, uint8_t idx)
     s_pending.retry_count  = 0;
 }
 
+/* Persists `data`/`len` to EEPROM at `addr` with a fresh header/CRC --
+ * used when a page turns out missing/corrupt/wrong-version at boot and
+ * `data` already holds a good default the caller wants written back, so
+ * the page is valid (magic/version/CRC all consistent) on the next boot.
+ * Shared by svc_storage_init()'s DeviceSettings section-reseed loop and
+ * load_or_reseed_disp_blob() below -- previously duplicated between the
+ * two (a WP10 code-review finding). */
+static void reseed_blob(uint16_t addr, uint16_t version, const void *data, uint16_t len)
+{
+    uint8_t buf[HDR_SIZE + sizeof(DeviceSettings)];   /* largest possible reseed payload in this file */
+    uint16_t crc = math_crc16((const uint8_t *)data, len);
+    build_header(buf, version, crc);
+    memcpy(&buf[HDR_SIZE], data, len);
+    if (!blocking_write_block(addr, buf, (uint16_t)(HDR_SIZE + len))) {
+        /* Not silently discarded (CLAUDE.md 7.6) -- RAM already holds the
+         * correct default either way, so this boot runs correctly; only
+         * the reseed-to-EEPROM step failed, meaning the same reseed will
+         * be retried next boot. No DBG_PRINT infra exists yet (WP1.5 was
+         * never wired up), so this reuses settings_save_failed as the
+         * escalation point -- broader than just commit_edit()'s
+         * user-initiated saves, but the same underlying condition (an
+         * EEPROM write failed) and the same SETTINGS-screen indicator
+         * applies. */
+        g_system_state.settings_save_failed = true;
+    }
+}
+
+/* Loads a displacement-calibration blob (WP10) into `data`/`len`, which
+ * the caller has already pre-filled with defaults. svc_storage_load_blob()
+ * leaves `data` untouched on any failure (same guarantee load_section()
+ * gives DeviceSettings sections), so on failure this persists the
+ * still-default `data` back to EEPROM via reseed_blob() -- same
+ * reseed-on-failure pattern as svc_storage_init()'s DeviceSettings loop,
+ * unlike g_calibration below: these DO have sane nominal defaults
+ * (gain=10, d0=0.1 mm, atten=3), not "uncalibrated until proven
+ * otherwise" semantics, so a missing/corrupt page gets reseeded rather
+ * than left merely zeroed. */
+static void load_or_reseed_disp_blob(uint16_t addr, uint16_t version,
+                                     void *data, uint16_t len)
+{
+    if (svc_storage_load_blob(addr, version, data, len) == DRV_OK) {
+        return;
+    }
+    reseed_blob(addr, version, data, len);
+}
+
 /* ---------------- public API ---------------- */
 
 DrvStatus svc_storage_save_settings(const DeviceSettings *settings)
@@ -369,18 +468,28 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *settings)
     return DRV_OK;
 }
 
-DrvStatus svc_storage_save_calibration(const CalibrationData *cal)
+/* Generic single-blob save/load -- CalibrationData's original dedicated
+ * pair, generalized (WP10) so the displacement-sensor calibration
+ * structs (system_state.h's DisplacementSensorCal/DisplacementSharedCal,
+ * three independent pages) don't need three more near-copies of the
+ * same header+CRC+version bookkeeping. Any future small standalone
+ * calibration struct (own page, not threaded through DeviceSettings'
+ * SettingsSection mechanism) should use these directly rather than
+ * hand-rolling another copy. */
+DrvStatus svc_storage_save_blob(uint16_t base_addr, uint16_t version,
+                                const void *data, uint16_t len)
 {
-    if (cal == 0)                 return DRV_ERR_INVALID;
-    if (s_pending.active)         return DRV_ERR_NOT_READY;
+    if (data == 0)                                        return DRV_ERR_INVALID;
+    if ((uint32_t)HDR_SIZE + len > sizeof(s_pending.buf))  return DRV_ERR_INVALID;
+    if (s_pending.active)                                 return DRV_ERR_NOT_READY;
 
-    uint16_t crc = math_crc16((const uint8_t *)cal, sizeof(CalibrationData));
-    build_header(s_pending.buf, EEPROM_CALIBRATION_VERSION, crc);
-    memcpy(&s_pending.buf[HDR_SIZE], cal, sizeof(CalibrationData));
+    uint16_t crc = math_crc16((const uint8_t *)data, len);
+    build_header(s_pending.buf, version, crc);
+    memcpy(&s_pending.buf[HDR_SIZE], data, len);
 
     s_pending.is_settings_save = false;
-    s_pending.base_addr    = CALIBRATION_BASE;
-    s_pending.total_len    = HDR_SIZE + sizeof(CalibrationData);
+    s_pending.base_addr    = base_addr;
+    s_pending.total_len    = (uint16_t)(HDR_SIZE + len);
     s_pending.written      = 0;
     s_pending.inflight_len = 0;
     s_pending.retry_count  = 0;
@@ -388,33 +497,62 @@ DrvStatus svc_storage_save_calibration(const CalibrationData *cal)
     return DRV_OK;
 }
 
-DrvStatus svc_storage_load_calibration(CalibrationData *cal)
+DrvStatus svc_storage_load_blob(uint16_t base_addr, uint16_t version,
+                                void *data, uint16_t len)
 {
-    if (cal == 0) return DRV_ERR_INVALID;
+    if (data == 0) return DRV_ERR_INVALID;
 
     uint8_t hdr[HDR_SIZE];
-    if (!blocking_read(CALIBRATION_BASE, hdr, HDR_SIZE)) return DRV_ERR_COMM;
+    if (!blocking_read(base_addr, hdr, HDR_SIZE)) return DRV_ERR_COMM;
 
-    uint16_t version = 0;
+    uint16_t stored_version = 0;
     uint16_t stored_crc = 0;
-    if (!header_is_present(hdr, EEPROM_CALIBRATION_VERSION, &version, &stored_crc)) {
+    if (!header_is_present(hdr, version, &stored_version, &stored_crc)) {
         return DRV_ERR_NOT_READY;
     }
 
-    if (!blocking_read(CALIBRATION_BASE + HDR_SIZE,
-                       (uint8_t *)cal, sizeof(CalibrationData))) {
+    /* Read into a local buffer first and only commit to *data on full
+     * success (CRC AND version both matching) -- same reasoning as
+     * load_section()'s own comment above: committing the read result
+     * before validation would let corrupt/mismatched EEPROM bytes
+     * overwrite a caller's already-seeded default, and a subsequent
+     * reseed-on-failure path would then persist that corruption as
+     * "valid" (the exact bug this ordering exists to prevent). Sized
+     * for the largest blob any current caller passes (CalibrationData);
+     * a future much-larger blob would need this bumped, but len is
+     * checked against it here rather than silently overflowing. */
+    uint8_t tmp[sizeof(CalibrationData)];
+    if (len > sizeof(tmp)) {
+        return DRV_ERR_INVALID;
+    }
+    if (!blocking_read((uint16_t)(base_addr + HDR_SIZE), tmp, len)) {
         return DRV_ERR_COMM;
     }
 
-    uint16_t calc_crc = math_crc16((const uint8_t *)cal, sizeof(CalibrationData));
+    uint16_t calc_crc = math_crc16(tmp, len);
     if (calc_crc != stored_crc) {
-        return DRV_ERR_INVALID;
+        return DRV_ERR_INVALID;         /* corrupt -- *data untouched */
+    }
+    if (stored_version != version) {
+        return DRV_ERR_NOT_READY;       /* layout changed -- *data untouched */
     }
 
-    if (version != EEPROM_CALIBRATION_VERSION) {
-        return DRV_ERR_NOT_READY;
-    }
+    memcpy(data, tmp, len);
     return DRV_OK;
+}
+
+DrvStatus svc_storage_save_calibration(const CalibrationData *cal)
+{
+    if (cal == 0) return DRV_ERR_INVALID;
+    return svc_storage_save_blob(CALIBRATION_BASE, EEPROM_CALIBRATION_VERSION,
+                                 cal, sizeof(*cal));
+}
+
+DrvStatus svc_storage_load_calibration(CalibrationData *cal)
+{
+    if (cal == 0) return DRV_ERR_INVALID;
+    return svc_storage_load_blob(CALIBRATION_BASE, EEPROM_CALIBRATION_VERSION,
+                                 cal, sizeof(*cal));
 }
 
 bool svc_storage_is_busy(void)
@@ -528,23 +666,12 @@ void svc_storage_init(void)
             /* Persist the just-seeded default back to EEPROM so this
              * page is valid (magic/version/CRC all consistent) on the
              * next boot, matching the original single-page behavior —
-             * just scoped to this one page instead of the whole struct. */
-            uint8_t buf[HDR_SIZE + sizeof(DeviceSettings)];
-            uint16_t crc = math_crc16(dest, (uint16_t)sec->size);
-            build_header(buf, sec->version, crc);
-            memcpy(&buf[HDR_SIZE], dest, sec->size);
-            if (!blocking_write_block(sec->eeprom_addr, buf, (uint16_t)(HDR_SIZE + sec->size))) {
-                /* Not silently discarded (CLAUDE.md 7.6) -- g_device_settings
-                 * still holds the correct in-RAM default either way, so this
-                 * boot runs correctly; only the reseed-to-EEPROM step failed,
-                 * meaning the same reseed will be retried next boot. No
-                 * DBG_PRINT infra exists yet (WP1.5 was never wired up), so
-                 * this reuses settings_save_failed as the escalation point --
-                 * broader than just commit_edit()'s user-initiated saves, but
-                 * the same underlying condition (a settings EEPROM write
-                 * failed) and the same SETTINGS-screen indicator applies. */
-                g_system_state.settings_save_failed = true;
-            }
+             * just scoped to this one page instead of the whole struct.
+             * g_device_settings already holds the correct in-RAM default
+             * either way (load_section() never touched *dest on
+             * failure); reseed_blob() escalates via settings_save_failed
+             * if even the write-back fails. */
+            reseed_blob(sec->eeprom_addr, sec->version, dest, (uint16_t)sec->size);
         }
     }
 
@@ -561,6 +688,41 @@ void svc_storage_init(void)
 
     g_system_state.calibration_valid =
         g_calibration.scale_valid && g_calibration.zero_valid;
+
+    /* Displacement sensor S1/S2 + shared calibration (WP10) -- three
+     * independent pages, see system_state.h's DisplacementSensorCal/
+     * DisplacementSharedCal comment for why these aren't DeviceSettings
+     * fields. Divisor-zero guard (gain/atten both appear as divisors in
+     * Services/svc_displacement.c's k = atten*gain) mirrors
+     * svc_storage_validate_settings()'s "belt and suspenders" reasoning
+     * -- no host-writable path exists yet for these structs, so this is
+     * currently only defending against a corrupt-but-CRC-valid page,
+     * but a future SET-command handler for these would need to run the
+     * same check on an untrusted payload before accepting it. */
+    g_disp_s1_cal.gain           = DEFAULT_DISP_GAIN;
+    g_disp_s1_cal.d0_mm          = DEFAULT_DISP_D0_MM;
+    g_disp_s1_cal.zero_offset_mm = DEFAULT_DISP_ZERO_OFFSET_MM;
+    load_or_reseed_disp_blob(EEPROM_DISP_S1_SETTINGS_ADDR, EEPROM_DISP_S1_SETTINGS_VERSION,
+                             &g_disp_s1_cal, sizeof(g_disp_s1_cal));
+    if (g_disp_s1_cal.gain == 0.0f) {
+        g_disp_s1_cal.gain = DEFAULT_DISP_GAIN;
+    }
+
+    g_disp_s2_cal.gain           = DEFAULT_DISP_GAIN;
+    g_disp_s2_cal.d0_mm          = DEFAULT_DISP_D0_MM;
+    g_disp_s2_cal.zero_offset_mm = DEFAULT_DISP_ZERO_OFFSET_MM;
+    load_or_reseed_disp_blob(EEPROM_DISP_S2_SETTINGS_ADDR, EEPROM_DISP_S2_SETTINGS_VERSION,
+                             &g_disp_s2_cal, sizeof(g_disp_s2_cal));
+    if (g_disp_s2_cal.gain == 0.0f) {
+        g_disp_s2_cal.gain = DEFAULT_DISP_GAIN;
+    }
+
+    g_disp_shared_cal.atten = DEFAULT_DISP_ATTEN;
+    load_or_reseed_disp_blob(EEPROM_DISP_SHARED_SETTINGS_ADDR, EEPROM_DISP_SHARED_SETTINGS_VERSION,
+                             &g_disp_shared_cal, sizeof(g_disp_shared_cal));
+    if (g_disp_shared_cal.atten == 0.0f) {
+        g_disp_shared_cal.atten = DEFAULT_DISP_ATTEN;
+    }
 }
 
 void svc_storage_validate_settings(DeviceSettings *settings)
@@ -596,4 +758,8 @@ void svc_storage_validate_settings(DeviceSettings *settings)
     if (settings->lm35_scale_mv_per_c == 0U) {
         settings->lm35_scale_mv_per_c = DEFAULT_LM35_SCALE_MV_PER_C;
     }
+    /* Displacement sensor gain/atten divisor guards (WP10) live in
+     * svc_storage_init() itself, right after each is loaded -- those
+     * fields aren't DeviceSettings members (see system_state.h), so
+     * they don't belong in this function's signature. */
 }

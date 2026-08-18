@@ -12,7 +12,7 @@
 #include "svc_ble.h"
 #include "svc_uart.h"
 #include "svc_measurement.h"
-#include "svc_signal_analysis.h"
+#include "svc_displacement.h"
 #include "svc_storage.h"
 #include "svc_input.h"
 #include "svc_usb.h"
@@ -119,8 +119,8 @@ static void task_usb(void)         { svc_usb_update();         }
 static void task_ble(void)         { svc_ble_update();         }
 static void task_uart(void)        { svc_uart_update();        }
 static void task_api(void)         { svc_api_update();         }
-static void task_measurement(void) { svc_measurement_update(); }
-static void task_signal_analysis(void) { svc_signal_analysis_update(); }
+static void task_measurement(void)  { svc_measurement_update(); }
+static void task_displacement(void) { svc_displacement_update(); }
 
 /* ---- task table ----
  * Order matters when multiple tasks share a tick: task_ui before
@@ -137,8 +137,8 @@ static SchedulerEntry s_tasks[] = {
     { task_ble,         0,                    0 },
     { task_uart,        DEFAULT_TASK_UART_MS, 0 },
     { task_api,         0,                    0 },
-    { task_measurement, 0,                    0 },
-    { task_signal_analysis, 0,                0 },
+    { task_measurement,  0,                   0 },
+    { task_displacement, 0,                   0 },
     { task_ui,          0,                    0 },
     { task_display,     0,                    0 },
     { task_leds,        DEFAULT_TASK_LED_MS, 0 },
@@ -167,10 +167,15 @@ void app_scheduler_reload_periods(void)
     s_tasks[7].period_ms  = g_device_settings.task_ble_ms;        /* ble — fast poll for UART command/response latency */
     s_tasks[9].period_ms  = g_device_settings.task_sensors_ms;   /* api — poll rate for stream/progress checks */
     s_tasks[10].period_ms = g_device_settings.task_sensors_ms;   /* measurement */
-    s_tasks[11].period_ms = g_device_settings.task_sensors_ms;   /* signal analysis --
-                                                                    * finalizes at most this
-                                                                    * often; see
-                                                                    * svc_signal_analysis.c */
+    s_tasks[11].period_ms = SYSTICK_PERIOD_MS;   /* displacement -- must drain every
+                                                     * tick, not just at task_sensors_ms's
+                                                     * rate: at ~2.6 kHz carrier-cycle
+                                                     * production, the 64-entry input ring
+                                                     * buffer (~24.6 ms of headroom) would
+                                                     * already overrun partway through a
+                                                     * single 100 ms task_sensors_ms period,
+                                                     * let alone between ticks; see
+                                                     * svc_displacement.c */
     s_tasks[12].period_ms = g_device_settings.task_display_ms;   /* ui */
     s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* display */
     /* s_tasks[8] (UART), s_tasks[14] (LEDs), and s_tasks[15] (BME280)

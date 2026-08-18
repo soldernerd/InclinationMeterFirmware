@@ -113,6 +113,13 @@
 #define EEPROM_BLE_SETTINGS_ADDR         0x0600  /* ble_configured */
 #define EEPROM_BLE_SETTINGS_VERSION      0x0001
 
+#define EEPROM_DISP_S1_SETTINGS_ADDR     0x0700  /* S1 gain/d0/zero_offset (WP10) */
+#define EEPROM_DISP_S1_SETTINGS_VERSION  0x0001
+#define EEPROM_DISP_S2_SETTINGS_ADDR     0x0800  /* S2 gain/d0/zero_offset (WP10) */
+#define EEPROM_DISP_S2_SETTINGS_VERSION  0x0001
+#define EEPROM_DISP_SHARED_SETTINGS_ADDR    0x0900  /* atten -- shared, not per-sensor (WP10) */
+#define EEPROM_DISP_SHARED_SETTINGS_VERSION 0x0001
+
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
  * SolarChargerRevE) use this VID with project-specific PIDs granted by
@@ -194,13 +201,6 @@
  * Prescaler=0, Counter Period=3071 (3072 counts per period). */
 #define ADS131M04_TRIGGER_TIMER_PERIOD  3071U
 
-/* Services/svc_signal_analysis.c: number of complete 8-sample sine
- * cycles accumulated before each amplitude/phase recomputation. 64
- * cycles = 512 samples ~= 24.6 ms per update at 20833.33 Hz — a
- * reasonable first-cut update rate; not tied to any hardware constraint,
- * safe to retune. */
-#define SIGNAL_ANALYSIS_BATCH_CYCLES    64U
-
 /* --- BME280 environmental sensor (WP9) ---
  * Shares I2C1 with the EEPROM (see pin_config.h) — no CubeMX changes
  * needed, only a different 7-bit address per transaction.
@@ -229,5 +229,39 @@
  * reasoning as DEFAULT_TASK_UART_MS above) -- fixed literal used directly
  * in App/app_scheduler.c's task table. */
 #define DEFAULT_TASK_BME280_MS  1000U
+
+/* --- Differential-capacitor displacement sensors S1/S2 (WP10) ---
+ * Replaces Services/svc_signal_analysis.c (WP8's "first cut... additional
+ * math may follow" generic 4-channel amplitude/phase diagnostic) --
+ * Services/svc_displacement.c is now the sole consumer of
+ * drv_ads131m04's per-sample callback. See that file's top comment for
+ * the channel mapping (ADS131M04 CH0..CH3 -> B/A/S1/S2) and the full x/
+ * delta derivation -- not repeated here to avoid the two drifting apart.
+ *
+ * G (S-channel amplifier gain) and d0 (neutral air gap) are per-sensor,
+ * independently calibratable -- each head's own analog front end and
+ * mechanical assembly can differ. atten (A/B attenuation ahead of the
+ * ADC) is shared: both heads are driven from the same excitation pair
+ * through the same attenuator, so there is exactly one instrument-wide
+ * value, not one per sensor. Only the product k = atten*G matters for
+ * computing x (see svc_displacement.c) -- G and atten are still stored
+ * and calibrated separately, per the task spec, so a future per-sensor
+ * front-end change doesn't require re-deriving a combined constant by
+ * hand. */
+#define DEFAULT_DISP_GAIN          10.0f   /* S-channel amplifier gain, nominal */
+#define DEFAULT_DISP_D0_MM         0.1f    /* neutral-position air gap, mm, nominal */
+#define DEFAULT_DISP_ZERO_OFFSET_MM 0.0f   /* uncalibrated until an operator zeroes it */
+#define DEFAULT_DISP_ATTEN         3.0f    /* A/B attenuation ahead of the ADC, nominal */
+
+/* Per-cycle producer (ISR, raw I/Q) -> consumer (scheduler task, x/delta)
+ * ring buffer depth. One carrier cycle = MATH_PHASOR_SAMPLES_PER_CYCLE
+ * (8) ADC samples ~= 384 us at ADS131M04_TRIGGER_TIMER_PERIOD's
+ * 20833.33 Hz, so 64 entries ~= 24.6 ms of headroom -- comfortably
+ * covers WP9's now-tightened worst-case scheduler stall (~10-20 ms) with
+ * margin. Must be a power of two (bitmask index wrap, CLAUDE.md 8.3).
+ * Same depth reused for the output (delta1/delta2/residual) ring buffer
+ * -- both are drained every scheduler tick, so there's no reason for one
+ * to run deeper than the other. */
+#define DISPLACEMENT_RING_DEPTH    64U
 
 #endif /* CONFIG_H */

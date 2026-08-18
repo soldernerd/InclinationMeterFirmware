@@ -31,6 +31,21 @@ void svc_storage_validate_settings(DeviceSettings *settings);
 DrvStatus svc_storage_save_calibration(const CalibrationData *cal);
 DrvStatus svc_storage_load_calibration(CalibrationData *cal);
 
+/* Generic single-blob save/load, one header+CRC+version page at
+ * `base_addr` -- the mechanism svc_storage_save_calibration()/
+ * load_calibration() above are themselves built on (WP10). For any
+ * small standalone calibration struct with its own dedicated EEPROM
+ * page, not threaded through DeviceSettings' SettingsSection
+ * mechanism -- see system_state.h's DisplacementSensorCal/
+ * DisplacementSharedCal for the current example. save is non-blocking
+ * (same s_pending state machine, drained via svc_storage_update());
+ * load is blocking, for boot-time use only, same as
+ * svc_storage_load_calibration(). */
+DrvStatus svc_storage_save_blob(uint16_t base_addr, uint16_t version,
+                                const void *data, uint16_t len);
+DrvStatus svc_storage_load_blob(uint16_t base_addr, uint16_t version,
+                                void *data, uint16_t len);
+
 bool      svc_storage_is_busy(void); /* true while a write operation is in progress */
 
 #endif /* SVC_STORAGE_H */

@@ -19,7 +19,7 @@ DrvStatus drv_ads131m04_init(void);
  * extended to int32_t (datasheet "ADC Conversion Data" — 1 LSB =
  * 2.4 V / Gain / 2^24, and Gain = 1 here). Channel-to-voltage and any
  * further signal analysis belongs above this driver, per CLAUDE.md 8.1 —
- * see Services/svc_signal_analysis.c. */
+ * see Services/svc_displacement.c. */
 typedef void (*Ads131m04SampleCb)(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3);
 void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb);
 

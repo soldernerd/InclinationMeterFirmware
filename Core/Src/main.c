@@ -43,7 +43,7 @@
 #include "drv_encoder.h"
 #include "drv_buzzer.h"
 #include "drv_ad9833.h"
-#include "svc_signal_analysis.h"
+#include "svc_displacement.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
@@ -209,8 +209,10 @@ int main(void)
    * sine wave the DAC drives onto the board; requires MX_SPI1_Init()/
    * MX_TIM2_Init()/MX_TIM7_Init() (CubeMX-generated, above this USER CODE
    * block) already run, same as drv_ad9833_init()'s prerequisites. Owns
-   * starting drv_ads131m04.c itself -- see svc_signal_analysis.h. */
-  if (svc_signal_analysis_init() != DRV_OK) {
+   * starting drv_ads131m04.c itself -- see svc_displacement.h. Computes
+   * per-cycle displacement (WP10) from the two differential-capacitor
+   * sensor heads -- replaces WP8's generic svc_signal_analysis.c. */
+  if (svc_displacement_init() != DRV_OK) {
     Error_Handler();
   }
   svc_input_init();
