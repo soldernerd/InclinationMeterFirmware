@@ -201,4 +201,33 @@
  * safe to retune. */
 #define SIGNAL_ANALYSIS_BATCH_CYCLES    64U
 
+/* --- BME280 environmental sensor (WP9) ---
+ * Shares I2C1 with the EEPROM (see pin_config.h) — no CubeMX changes
+ * needed, only a different 7-bit address per transaction.
+ *
+ * Oversampling x1 temperature / x1 pressure / x1 humidity, IIR filter
+ * off, forced mode re-triggered once per second by our own scheduler
+ * task -- Bosch's own datasheet "humidity sensing" recommended profile
+ * (Table 8: forced mode, 1 sample/second, osrs_t=x1/osrs_h=x1) extended
+ * to also sample pressure at x1 instead of skipping it. Max conversion
+ * time at these settings is ~9.3 ms (datasheet Appendix B, section 9.1
+ * formula: t_measure_max = 1.25 + 2.3 + 2.3+0.575 + 2.3+0.575 ~= 9.3 ms),
+ * short enough that drv_bme280.c polls the status register with a
+ * bounded blocking wait rather than a multi-tick async state machine --
+ * NOT the same as drv_24lc256.c's EEPROM write-cycle poll (that one
+ * really is non-blocking, spread across scheduler ticks via
+ * OP_WRITE_CYCLE_POLL); this is a deliberate blocking tradeoff of its
+ * own, justified by the short, tightly-bounded worst case once
+ * hal_i2c.c's per-call I2C_TIMEOUT_MS was tightened alongside this
+ * driver (a code-review finding — a stuck/disconnected sensor could
+ * otherwise stall the whole cooperative scheduler for hundreds of ms). */
+#define BME280_CTRL_HUM_VALUE   0x01U   /* osrs_h[2:0] = 001b -> x1 */
+#define BME280_CTRL_MEAS_VALUE  0x25U   /* osrs_t=001b, osrs_p=001b, mode=01b (forced) */
+#define BME280_CONFIG_VALUE     0x00U   /* t_sb (unused, forced mode), filter off, spi3w_en=0 */
+
+/* Not EEPROM-configurable (DeviceSettings has no room left -- same
+ * reasoning as DEFAULT_TASK_UART_MS above) -- fixed literal used directly
+ * in App/app_scheduler.c's task table. */
+#define DEFAULT_TASK_BME280_MS  1000U
+
 #endif /* CONFIG_H */

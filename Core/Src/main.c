@@ -38,6 +38,7 @@
 #include "hal_power.h"
 #include "system_state.h"
 #include "drv_tmp236.h"
+#include "drv_bme280.h"
 #include "drv_24lc256.h"
 #include "drv_encoder.h"
 #include "drv_buzzer.h"
@@ -175,6 +176,21 @@ int main(void)
   svc_battery_init();
   drv_tmp236_init();
   drv_24lc256_init();          /* idempotent — svc_storage_init already calls this */
+
+  /* BME280 environmental sensor (WP9) -- shares I2C1 with the EEPROM
+   * above (hal_i2c_init(HAL_I2C_MAIN) already ran), needs 3V3_EN already
+   * up (same stopgap-no-rail-sequencing situation as the other sensors,
+   * see hal_gpio_init()'s own comment). Unlike the DAC/ADC precision
+   * measurement chain (Error_Handler() below), this is an auxiliary
+   * sensor -- a missing/faulty part shouldn't brick the instrument's
+   * core inclination-measurement function, same reasoning as
+   * drv_tmp236_init()/drv_buzzer_init()/drv_encoder_init() below not
+   * being checked either. drv_bme280.c guards itself against a failed
+   * init internally (won't run garbage compensation math on
+   * uninitialised calibration data); g_system_state.bme280_ok simply
+   * never becomes true if this fails, which is the CLAUDE.md 7.6
+   * escalation here -- observable, just not boot-halting. */
+  (void)drv_bme280_init();
   drv_buzzer_init();
   drv_encoder_init(ENCODER_1);
   drv_encoder_init(ENCODER_2);

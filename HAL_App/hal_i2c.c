@@ -3,7 +3,18 @@
 
 extern I2C_HandleTypeDef hi2c1;
 
-#define I2C_TIMEOUT_MS  100U
+/* Bounds each individual blocking HAL_I2C_Master_Transmit/Receive call
+ * (hal_i2c_write/read/write_read below -- the *_dma functions don't use
+ * this at all). drv_24lc256.c's EEPROM transfers are all DMA-driven and
+ * never call these blocking variants; drv_bme280.c (WP9) is currently
+ * their only caller, and its own per-cycle budget assumes each blocking
+ * call is bounded to a few ms, not 100 -- a bus fault (device
+ * unresponsive/disconnected) previously let a single blocking call
+ * stall the whole cooperative scheduler for up to 100 ms, and
+ * drv_bme280_update() makes several such calls per cycle. 10 ms is
+ * still generous margin over a real few-byte I2C1 transaction at this
+ * bus's configured speed (well under 1 ms typically). */
+#define I2C_TIMEOUT_MS  10U
 
 static volatile bool      s_busy[HAL_I2C_COUNT] = { false, false };
 static HalI2cDmaCallback  s_cb[HAL_I2C_COUNT]   = { 0, 0 };
