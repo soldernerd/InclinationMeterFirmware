@@ -71,11 +71,13 @@ needs empirical pendulum/flexure calibration and is later work. Branches from
   ratio, that factor cancels completely — the raw sums can be fed into the complex-division
   formula directly (just cast to `float`), no separate "normalize to physical amplitude" step
   needed. Simpler than WP8's amplitude/phase math, which did need that normalization.
-- **Complex division** (`Math/math_phasor.c`'s `math_complex_div()`): standard
-  `(re1+j·im1)/(re2+j·im2) = [(re1·re2+im1·im2) + j(im1·re2-re1·im2)] / (re2²+im2²)`. Returns
-  `false` on an exactly-zero denominator (A and B phasors identical — degenerate excitation,
-  shouldn't occur in practice) instead of dividing by zero; `svc_displacement.c` counts this
-  and skips the cycle rather than crashing or producing garbage.
+- **Complex division** (`Math/math_phasor.c`'s `math_complex_reciprocal()`, see the
+  "Division-reduction optimization" section below for why it's a reciprocal rather than a
+  divide): standard `1/(re+j·im) = (re-j·im)/(re²+im²)`, multiplied against the numerator by
+  the caller. Returns `false` on an exactly-zero denominator (A and B phasors identical —
+  degenerate excitation, shouldn't occur in practice) instead of dividing by zero;
+  `svc_displacement.c` counts this and skips the cycle rather than crashing or producing
+  garbage.
 - **S/k is a real-scalar division**, not a second complex division — `k = atten*G` has no
   imaginary part, so `S/k` just divides both the real and imaginary parts of the S phasor by
   the same real scalar before the complex subtraction `S/k - B`.
@@ -147,7 +149,7 @@ just what it holds) and is arguably the better conceptual fit anyway —
 
 - `Math/math_phasor.c`/`.h` (new) — `math_phasor_accumulate()` (the Q14 I/Q accumulation
   primitive, moved out of WP8's `svc_signal_analysis.c` so it's a reusable Math/ building
-  block) and `math_complex_div()`.
+  block) and `math_complex_reciprocal()`.
 - `Config/config.h` — WP10 channel-mapping/derivation comment block, `DEFAULT_DISP_*`
   nominal defaults, `DISPLACEMENT_RING_DEPTH` (64), three new EEPROM page addresses/versions.
   `SIGNAL_ANALYSIS_BATCH_CYCLES` (WP8) removed along with its consumer.
@@ -277,6 +279,58 @@ documented "not now":
 
 **Rebuilt clean after round 2's fixes: compiles and links with zero warnings.**
 RAM 39.7 KB (26.9%), FLASH 141.0 KB (26.9%).
+
+## Division-reduction optimization (2026-08-18)
+
+Follow-up question after the above: could WP8 (ADC reading) and WP10 (this module's math) be
+done in integer arithmetic to cut CPU time? Answer, worked out by tracing the actual code
+paths: WP8's ADC path is already pure integer (raw ADC codes, no floats). WP10's per-sample
+ISR-side accumulation (`math_phasor_accumulate()`) is also already pure integer (`int64`
+accumulate of `int32` samples × a Q14 `int32` coefficient table) — only WP10's per-cycle
+task-side math (`process_one_cycle()`/`compute_sensor_delta()`) used floats at all, and a
+rough cycle-counting estimate put that at only ~5% of total CPU time given the STM32G0B1's 64
+MHz / no-FPU / no-hardware-divider characteristics.
+
+Going fully fixed-point there was judged not worth it: Cortex-M0+ has no hardware integer
+divider either (`SDIV`/`UDIV` are M3+, not in ARMv6-M), so division stays a software libcall
+in fixed-point too — cheaper than float divide but not free — and getting a Q-format that
+doesn't overflow or lose precision across the phasor sums' actual dynamic range needs real
+analysis, not a mechanical type swap. That's exactly the complexity this WP's brief
+explicitly opted out of ("this math layer sits above HAL/driver code, so floats are fine
+here").
+
+What *was* real and cheap to fix, independent of the int-vs-float question: the per-cycle
+math did **8 divisions/cycle** (division is by far the most expensive soft-float op, and two
+of the three sources were pure duplication, not inherent to the algorithm):
+
+- `math_complex_div()` computed `denom` once but divided by it twice
+  (`re_out = .../denom; im_out = .../denom;`).
+- The shared `(A-B)` denominator is identical for both sensors, but each of the two
+  `compute_sensor_delta()` calls independently repeated the same complex-division work
+  against it.
+- Each sensor's `S/k` step divided by the same per-sensor `k = atten*gain` twice (once for
+  the real part, once for the imaginary part).
+
+Fixed by replacing `math_complex_div()` with `math_complex_reciprocal()` (`re,im` →
+`1/(re+j·im)`, one division) in `Math/math_phasor.c`/`.h`. `process_one_cycle()` now calls it
+**once per cycle** on the shared `(A-B)` denominator and stores the result
+(`inv_den_re`/`inv_den_im`) in `SharedCycleTerms`; `compute_sensor_delta()` multiplies by that
+precomputed reciprocal (a complex multiply — 4 multiplies, 2 add/subtracts, no division)
+instead of calling a divide routine, and replaces `iS/k`, `qS/k` with a single
+`inv_k = 1.0f/k` followed by two multiplies. The degenerate-denominator check
+(`math_complex_reciprocal()` returning `false` when `A-B` is exactly zero) moved from inside
+each sensor's call to once in `process_one_cycle()`, before either sensor's math runs — safe
+because the denominator is identical for both sensors, so this is behavior-preserving, not a
+semantic change (verified algebraically: `num · (1/den)` expands to the same real/imaginary
+formulas `math_complex_div()` computed directly). `compute_sensor_delta()` can no longer fail
+on its own, so it's `void` now instead of returning `bool`.
+
+Net effect: **8 divisions/cycle → 3** (1 shared reciprocal + 1 per sensor for `1/k`), all
+still in `float` — no dynamic-range/overflow analysis needed, no precision change beyond
+ordinary floating-point reassociation.
+
+**Rebuilt clean: compiles and links with zero warnings.** RAM 39.7 KB (26.9%), FLASH 141.0 KB
+(26.9%) — unchanged to the reported precision.
 
 ## Not yet done
 

@@ -141,43 +141,50 @@ static void push_output(float delta1, float residual1, float delta2, float resid
     s_out_head = next;
 }
 
-/* The 5 values every sensor's computation needs but that don't vary
+/* The values every sensor's computation needs but that don't vary
  * between sensors within one cycle -- bundled so process_one_cycle()'s
  * two compute_sensor_delta() calls below can't have same-typed adjacent
  * float arguments transposed by a future edit to one call site but not
  * the other (a round-2 code-review finding: C gives no type-based
- * protection against swapping e.g. iB/qB or den_re/den_im when they're
- * passed as bare positional floats). */
+ * protection against swapping e.g. iB/qB or inv_den_re/inv_den_im when
+ * they're passed as bare positional floats).
+ *
+ * inv_den_re/inv_den_im is 1/(A-B), already inverted -- both sensors
+ * divide by the identical (A-B) denominator, so process_one_cycle()
+ * computes that one reciprocal once via math_complex_reciprocal() and
+ * both calls below multiply by it instead of each dividing separately
+ * (division is the most expensive op available; multiplication is
+ * much cheaper). */
 typedef struct {
     float atten;
     float iB, qB;
-    float den_re, den_im;   /* A - B */
+    float inv_den_re, inv_den_im;   /* 1 / (A - B) */
 } SharedCycleTerms;
 
-/* One sensor's x/delta/residual, given the shared (A-B) denominator --
+/* One sensor's x/delta/residual, given the shared (A-B) reciprocal --
  * factored out so process_one_cycle() below computes S1 and S2 the same
  * way instead of two hand-duplicated copies (WP8's svc_signal_analysis.c,
  * this module's predecessor, looped over channels for the same kind of
- * repeated per-channel math). Returns false (outputs untouched) if
- * math_complex_div() hit an exactly-zero denominator. */
-static bool compute_sensor_delta(float iS, float qS, const DisplacementSensorCal *cal,
+ * repeated per-channel math). Cannot fail -- the only degenerate case
+ * (A-B exactly zero) is checked once in process_one_cycle() before this
+ * is called, since it's identical for both sensors. */
+static void compute_sensor_delta(float iS, float qS, const DisplacementSensorCal *cal,
                                   const SharedCycleTerms *shared,
                                   float *delta_out, float *residual_out)
 {
-    /* S/k - B -- S/k is a real-scalar division (k = atten*gain has no
-     * imaginary part), not math_complex_div(). */
-    float k = shared->atten * cal->gain;
-    float num_re = (iS / k) - shared->iB;
-    float num_im = (qS / k) - shared->qB;
+    /* S/k - B -- S*inv_k is a real-scalar reciprocal-multiply (k =
+     * atten*gain has no imaginary part), not a complex operation. */
+    float inv_k = 1.0f / (shared->atten * cal->gain);
+    float num_re = (iS * inv_k) - shared->iB;
+    float num_im = (qS * inv_k) - shared->qB;
 
-    float x_re, x_im;
-    if (!math_complex_div(num_re, num_im, shared->den_re, shared->den_im, &x_re, &x_im)) {
-        return false;
-    }
+    /* x = num * (1/den) -- complex multiply by the precomputed shared
+     * reciprocal, equivalent to num/den but without a division here. */
+    float x_re = num_re * shared->inv_den_re - num_im * shared->inv_den_im;
+    float x_im = num_re * shared->inv_den_im + num_im * shared->inv_den_re;
 
     *delta_out    = 2.0f * cal->d0_mm * (x_re - 0.5f) - cal->zero_offset_mm;
     *residual_out = x_im;
-    return true;
 }
 
 static void process_one_cycle(const RawCycle *c)
@@ -185,27 +192,32 @@ static void process_one_cycle(const RawCycle *c)
     float iB = (float)c->iB, qB = (float)c->qB;
     float iA = (float)c->iA, qA = (float)c->qA;
 
-    /* (A - B), shared denominator for both sensors' x. */
-    SharedCycleTerms shared = {
-        .atten  = g_disp_shared_cal.atten,
-        .iB     = iB,
-        .qB     = qB,
-        .den_re = iA - iB,
-        .den_im = qA - qB,
-    };
-
-    float delta1, residual1, delta2, residual2;
-    bool ok1 = compute_sensor_delta((float)c->iS1, (float)c->qS1, &g_disp_s1_cal,
-                                    &shared, &delta1, &residual1);
-    bool ok2 = compute_sensor_delta((float)c->iS2, (float)c->qS2, &g_disp_s2_cal,
-                                    &shared, &delta2, &residual2);
-    if (!ok1 || !ok2) {
+    /* 1/(A - B), the shared denominator's reciprocal -- computed once and
+     * reused by both sensors below (see SharedCycleTerms's comment). */
+    float inv_den_re, inv_den_im;
+    if (!math_complex_reciprocal(iA - iB, qA - qB, &inv_den_re, &inv_den_im)) {
         /* A and B phasors exactly identical -- degenerate excitation,
          * shouldn't happen in practice. Skip rather than divide by
-         * zero. */
+         * zero. Both sensors share this same (A-B) denominator, so if
+         * it's degenerate it's degenerate for both -- checked once here
+         * instead of once per sensor. */
         note_saturating(&s_degenerate_count);
         return;
     }
+
+    SharedCycleTerms shared = {
+        .atten      = g_disp_shared_cal.atten,
+        .iB         = iB,
+        .qB         = qB,
+        .inv_den_re = inv_den_re,
+        .inv_den_im = inv_den_im,
+    };
+
+    float delta1, residual1, delta2, residual2;
+    compute_sensor_delta((float)c->iS1, (float)c->qS1, &g_disp_s1_cal,
+                          &shared, &delta1, &residual1);
+    compute_sensor_delta((float)c->iS2, (float)c->qS2, &g_disp_s2_cal,
+                          &shared, &delta2, &residual2);
 
     push_output(delta1, residual1, delta2, residual2);
 

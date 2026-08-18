@@ -22,14 +22,15 @@ void math_phasor_accumulate(int32_t sample, uint8_t sample_idx,
     *q_sum += (int64_t)sample * s_sin_table[sample_idx];
 }
 
-bool math_complex_div(float re1, float im1, float re2, float im2,
-                       float *re_out, float *im_out)
+bool math_complex_reciprocal(float re, float im,
+                              float *inv_re_out, float *inv_im_out)
 {
-    float denom = re2 * re2 + im2 * im2;
+    float denom = re * re + im * im;
     if (denom == 0.0f) {
         return false;
     }
-    *re_out = (re1 * re2 + im1 * im2) / denom;
-    *im_out = (im1 * re2 - re1 * im2) / denom;
+    float inv_denom = 1.0f / denom;
+    *inv_re_out =  re * inv_denom;
+    *inv_im_out = -im * inv_denom;
     return true;
 }

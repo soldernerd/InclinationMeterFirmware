@@ -25,10 +25,17 @@
 void math_phasor_accumulate(int32_t sample, uint8_t sample_idx,
                              int64_t *i_sum, int64_t *q_sum);
 
-/* Complex division: (re_out + j*im_out) = (re1 + j*im1) / (re2 + j*im2).
- * Returns false (re_out/im_out left untouched) if the denominator is
- * exactly zero, avoiding a division-by-zero fault. */
-bool math_complex_div(float re1, float im1, float re2, float im2,
-                       float *re_out, float *im_out);
+/* Complex reciprocal: (inv_re_out + j*inv_im_out) = 1 / (re + j*im).
+ * Returns false (outputs left untouched) if re/im are exactly zero,
+ * avoiding a division-by-zero fault.
+ *
+ * Callers that need to divide several numerators by the *same*
+ * denominator (e.g. Services/svc_displacement.c's two sensors sharing
+ * one (A-B) denominator) should call this once and multiply by the
+ * result instead of dividing by the denominator each time -- this is
+ * the one division a complex division needs, done once instead of once
+ * per use. */
+bool math_complex_reciprocal(float re, float im,
+                              float *inv_re_out, float *inv_im_out);
 
 #endif /* MATH_PHASOR_H */
