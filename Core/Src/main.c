@@ -41,6 +41,7 @@
 #include "drv_24lc256.h"
 #include "drv_encoder.h"
 #include "drv_buzzer.h"
+#include "drv_ad9833.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
@@ -146,6 +147,7 @@ int main(void)
   MX_USART6_UART_Init();
   MX_I2C3_Init();
   MX_USB_Device_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   hal_gpio_init();
   hal_systick_init();
@@ -173,6 +175,16 @@ int main(void)
   drv_buzzer_init();
   drv_encoder_init(ENCODER_1);
   drv_encoder_init(ENCODER_2);
+
+  /* AD9833 DAC (WP7) — needs 3V3_EN/5V_EN already up (both asserted
+   * unconditionally above by hal_gpio_init(), same stopgap-no-rail-
+   * sequencing situation the buzzer/temp sensors are already in — see
+   * hal_gpio_init()'s own comment) and MX_SPI3_Init()/MX_TIM1_Init()
+   * (CubeMX-generated, above this USER CODE block) already run. One-shot
+   * init only — no scheduler task, see drv_ad9833.h. */
+  if (drv_ad9833_init() != DRV_OK) {
+    Error_Handler();
+  }
   svc_input_init();
   app_ui_init();
 

@@ -95,7 +95,7 @@
  * usages are declared here. Written directly in the array initializer
  * rather than inside the USER CODE BEGIN 0/END 0 markers below — those
  * markers do NOT survive a CubeMX regen for this array (confirmed on
- * three separate regens now, on two different machines). Re-verify this
+ * four separate regens now, on two different machines). Re-verify this
  * content is still present after every future regen. */
 __ALIGN_BEGIN static uint8_t CUSTOM_HID_ReportDesc_FS[USBD_CUSTOM_HID_REPORT_DESC_SIZE] __ALIGN_END =
 {

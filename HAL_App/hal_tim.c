@@ -2,6 +2,7 @@
 #include "stm32g0xx_hal.h"
 #include "pin_config.h"
 
+extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
 extern TIM_HandleTypeDef htim6;
 
@@ -51,6 +52,13 @@ void hal_tim_buzzer_start(uint16_t freq_hz)
 void hal_tim_buzzer_stop(void)
 {
     HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_4);
+}
+
+void hal_tim_dac_clock_start(void)
+{
+    /* Prescaler/Counter Period/Pulse are fixed in CubeMX (Core/Src/tim.c)
+     * at 1/5/3 — nothing to program dynamically, unlike the buzzer. */
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
