@@ -21,8 +21,15 @@ report descriptor and this time also a hand-added CMake include path — see
 `docs/wp2-5_rebase_status.md` for the complete findings list. **Not yet flashed to real
 hardware** — see that same doc for the full per-branch history and what's still unverified
 against real silicon. `master` itself currently reflects WP1 only; `wp2`/`wp3`/`wp4`/`wp5` are
-feature branches pending their own
-review/merge.
+feature branches pending their own review/merge.
+
+**WP7 (AD9833 waveform-generator DAC) on its own `wp7` branch** (based on `wp5`): fresh
+REV-B-native work, not a rebase — this hardware never had a DAC before. Programs the AD9833
+over SPI3 for a fixed ~2604 Hz sine output, MCLK fed from TIM1 PWM; the DAC then free-runs
+with no further firmware attention. Code-reviewed (register math and pin assignments
+independently re-derived from the datasheet/pinout CSV and confirmed correct; one silent-
+failure gap found and fixed). Builds clean. See `docs/wp7_ad9833_dac.md` for the full
+design rationale and CubeMX regen history.
 
 ## Hardware
 
@@ -69,7 +76,7 @@ Output: `build/InclinationMeterFirmware.elf`.
 ├── USB_Device/App+Target/ — CubeMX-style USB Device glue (hand-adapted, WP4)
 ├── Config/               — Project-wide constants (config.h, pin_config.h)
 ├── HAL_App/              — Application HAL wrappers (gpio, spi, tim, systick, …)
-├── Drivers_App/          — Device drivers (sharp_lcd, scl3300, pcap04, …)
+├── Drivers_App/          — Device drivers (sharp_lcd, rn4871, ad9833, …)
 ├── Services/             — Higher-level services (storage, calibration, …)
 ├── Math/                 — Filter, settling, CRC
 ├── App/                  — Scheduler, UI, display, u8g2 callback, version
