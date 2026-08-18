@@ -9,6 +9,15 @@ set(MX_Defines_Syms
 )
 
 # STM32CubeMX generated include paths
+# NOTE: Config and HAL_App below are hand-added, not CubeMX-generated -- a
+# regen has dropped them before (2026-08-18) since CubeMX only knows about
+# its own generated tree. They're required here (not just in the top-level
+# CMakeLists.txt's target_include_directories for the main app target)
+# because USB_Device_Library below is a SEPARATE object-library target that
+# only inherits includes via the stm32cubemx INTERFACE library defined from
+# this list -- its sources (usbd_core.c etc.) pull in USB_Device/Target/
+# usbd_conf.h, which #includes "config.h". Re-verify these two survive
+# after every future regen.
 set(MX_Include_Dirs
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../USB_Device/App
