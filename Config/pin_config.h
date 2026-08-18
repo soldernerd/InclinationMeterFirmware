@@ -397,11 +397,77 @@
                                                * SPI3 clock above despite the name
                                                * similarity. */
 
+/* SPI1 — ADS131M04 simultaneous-sampling ADC (WP8). ADS131M04IPWR, see
+ * datasheets/ADC/ADS131M04.pdf. True full-duplex: DIN and DOUT are both
+ * used (unlike the DAC/display, which are write-only) — every SPI frame
+ * both sends a command and receives the previous frame's response plus
+ * four channels of 24-bit conversion data. */
+#define ADC_SCK_PORT         GPIOA
+#define ADC_SCK_PIN          GPIO_PIN_5      /* PA5, SPI1_SCK */
+#define ADC_MISO_PORT        GPIOA
+#define ADC_MISO_PIN         GPIO_PIN_6      /* PA6, SPI1_MISO <- ADS131M04 DOUT */
+#define ADC_MOSI_PORT        GPIOA
+#define ADC_MOSI_PIN         GPIO_PIN_7      /* PA7, SPI1_MOSI -> ADS131M04 DIN */
+#define ADC_CS_PORT          GPIOA
+#define ADC_CS_PIN           GPIO_PIN_4      /* PA4, active LOW — plain GPIO, NOT
+                                               * SPI1_NSS. Standard active-low CS
+                                               * (unlike the display's inverted
+                                               * one) but still handled as
+                                               * software CS for the same reason
+                                               * as the DAC/display: SPI1 is
+                                               * SPI_NSS_SOFT, and CS needs to
+                                               * stay asserted across the whole
+                                               * multi-word frame, not toggle
+                                               * per-word the way some hardware
+                                               * NSS modes do. */
+#define ADC_SYNC_RESET_PORT  GPIOC
+#define ADC_SYNC_RESET_PIN   GPIO_PIN_3      /* PC3, plain GPIO Output, active
+                                               * LOW — dual-function SYNC/RESET
+                                               * input on the ADS131M04. Idle
+                                               * HIGH; driven low >=2048 CLKIN
+                                               * cycles at init for a clean
+                                               * hardware reset (datasheet
+                                               * t_w(RSL)), same active-low-
+                                               * pulse convention as the DAC's
+                                               * reset line. */
+#define ADC_READY_PORT       GPIOA
+#define ADC_READY_PIN        GPIO_PIN_1      /* PA1, plain GPIO Input, active
+                                               * LOW — ADS131M04's DRDY (data
+                                               * ready). Deliberately NOT an
+                                               * EXTI interrupt: PA1 and PB1
+                                               * (ENC_2A) are both "pin 1" on
+                                               * their port and the STM32 EXTI
+                                               * mux can only route one GPIO
+                                               * port to EXTI1 at a time — PB1
+                                               * already owns it. Given the
+                                               * whole DAC->ADC signal chain is
+                                               * fully deterministic (both
+                                               * clocks derive from the same
+                                               * 64 MHz SYSCLK via fixed
+                                               * prescalers), this driver polls
+                                               * this pin's level from a
+                                               * dedicated timer ISR
+                                               * (drv_ads131m04.c) synchronized
+                                               * to the known sample rate,
+                                               * rather than reacting to a
+                                               * falling edge. */
+#define ADC_CLOCK_PORT       GPIOB
+#define ADC_CLOCK_PIN        GPIO_PIN_10     /* PB10, TIM2_CH3 PWM output — the
+                                               * ADC's MCLK feed (5.333 MHz,
+                                               * see hal_tim_adc_clock_start()),
+                                               * not the SPI clock. Same
+                                               * 64 MHz/(2x6) generation as the
+                                               * DAC's TIM1_CH4/PC11 in WP7 —
+                                               * both derive from one shared
+                                               * clock relationship so the DAC
+                                               * output and ADC sample rate
+                                               * stay in a fixed, known ratio. */
+
 /* Reserved for later work packages:
- *   SCL3300 / PCAP04            — removed from REV B hardware, no longer applicable
- *   External ADC front end (SPI1) — unidentified, future WP (DAC above is WP7)
+ *   SCL3300 / PCAP04 — removed from REV B hardware, no longer applicable
  *
  * Encoder A/B quadrature and buzzer TIM3_CH4 were WP3 scope, USB DP/DM
- * was WP4, RN4871 UART/reset/GPIO above is WP5 — all now implemented. */
+ * was WP4, RN4871 UART/reset/GPIO was WP5, AD9833 DAC above was WP7,
+ * ADS131M04 ADC above is WP8 — all now implemented. */
 
 #endif /* PIN_CONFIG_H */

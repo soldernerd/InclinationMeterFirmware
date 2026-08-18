@@ -28,6 +28,14 @@ void hal_gpio_init(void)
     /* Display CS idle LOW (Sharp LCD: CS active HIGH) */
     LL_GPIO_ResetOutputPin(DISP_CS_PORT, DISP_CS_PIN);
 
+    /* ADC CS idle HIGH (ADS131M04: CS active LOW) — the WP8 CubeMX regen's
+     * initial output level for PA4 came back LOW instead (unlike the DAC's
+     * FSYNC pin, which CubeMX got right first try); defensively re-assert
+     * here rather than rely on the .ioc's GPIO Output Level checkbox,
+     * same reasoning as DISP_CS above. Without this, ADC_CS sits asserted
+     * from boot until drv_ads131m04_init()'s first register write. */
+    LL_GPIO_SetOutputPin(ADC_CS_PORT, ADC_CS_PIN);
+
     /* Display starts off — drv_sharp_lcd_init() will turn it on */
     LL_GPIO_ResetOutputPin(DISP_ON_PORT, DISP_ON_PIN);
 

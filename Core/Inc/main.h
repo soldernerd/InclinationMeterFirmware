@@ -61,6 +61,10 @@ void Error_Handler(void);
 #define DAC_SYNC_GPIO_Port GPIOC
 #define CHARGE_SENSE_Pin GPIO_PIN_2
 #define CHARGE_SENSE_GPIO_Port GPIOC
+#define ADC_SYNC_RESET_Pin GPIO_PIN_3
+#define ADC_SYNC_RESET_GPIO_Port GPIOC
+#define ADC_READY_Pin GPIO_PIN_1
+#define ADC_READY_GPIO_Port GPIOA
 #define ENC_1A_Pin GPIO_PIN_4
 #define ENC_1A_GPIO_Port GPIOC
 #define ENC_1A_EXTI_IRQn EXTI4_15_IRQn

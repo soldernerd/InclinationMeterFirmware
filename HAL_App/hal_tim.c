@@ -3,8 +3,12 @@
 #include "pin_config.h"
 
 extern TIM_HandleTypeDef htim1;
+extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim3;
 extern TIM_HandleTypeDef htim6;
+extern TIM_HandleTypeDef htim7;
+
+static HalTimCallback s_adc_trigger_cb = 0;
 
 void hal_tim_init(void)
 {
@@ -61,9 +65,30 @@ void hal_tim_dac_clock_start(void)
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 }
 
+void hal_tim_adc_clock_start(void)
+{
+    /* Same fixed 1/5/3 Prescaler/Period/Pulse as the DAC's TIM1 above,
+     * CubeMX-configured on TIM2 CH3 instead. */
+    HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+}
+
+void hal_tim_adc_trigger_start(void)
+{
+    HAL_TIM_Base_Start_IT(&htim7);
+}
+
+void hal_tim_adc_trigger_register_callback(HalTimCallback cb)
+{
+    s_adc_trigger_cb = cb;
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance == TIM6) {
         HAL_GPIO_TogglePin(DISP_VCOM_PORT, DISP_VCOM_PIN);
+    } else if (htim->Instance == TIM7) {
+        if (s_adc_trigger_cb) {
+            s_adc_trigger_cb();
+        }
     }
 }

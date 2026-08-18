@@ -42,6 +42,7 @@
 #include "drv_encoder.h"
 #include "drv_buzzer.h"
 #include "drv_ad9833.h"
+#include "svc_signal_analysis.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
@@ -148,6 +149,8 @@ int main(void)
   MX_I2C3_Init();
   MX_USB_Device_Init();
   MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
   hal_gpio_init();
   hal_systick_init();
@@ -183,6 +186,15 @@ int main(void)
    * (CubeMX-generated, above this USER CODE block) already run. One-shot
    * init only — no scheduler task, see drv_ad9833.h. */
   if (drv_ad9833_init() != DRV_OK) {
+    Error_Handler();
+  }
+
+  /* ADS131M04 ADC (WP8) -- after the DAC above since the ADC samples the
+   * sine wave the DAC drives onto the board; requires MX_SPI1_Init()/
+   * MX_TIM2_Init()/MX_TIM7_Init() (CubeMX-generated, above this USER CODE
+   * block) already run, same as drv_ad9833_init()'s prerequisites. Owns
+   * starting drv_ads131m04.c itself -- see svc_signal_analysis.h. */
+  if (svc_signal_analysis_init() != DRV_OK) {
     Error_Handler();
   }
   svc_input_init();

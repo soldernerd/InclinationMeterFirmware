@@ -173,4 +173,32 @@
  * rather than some other divisor. */
 #define AD9833_FREQREG                  131072UL   /* = 0x00020000, = 2^17 */
 
+/* --- ADS131M04 simultaneous-sampling ADC (WP8) ---
+ * MCLK is fed from TIM2_CH3/PB10, the same 64 MHz / (2 x 6) = 5.3333...
+ * MHz square wave as the DAC's MCLK (see hal_tim_adc_clock_start()) — the
+ * DAC and ADC deliberately share this exact relationship so the sample
+ * rate below is a fixed, known multiple of the DAC's output frequency.
+ *
+ * ADS131M04's own OSR is defined as fMOD/fDATA, where fMOD = fCLKIN/2
+ * (datasheet "OSR Settings and Data Rates"). We want fDATA = fCLKIN/256
+ * (a conversion "every 256 [CLKIN] cycles", per spec) = 8 x the DAC's
+ * output frequency (2048 MCLK-cycles-per-wave / 256 = 8 samples/cycle
+ * exactly). Solving: OSR = fMOD/fDATA = (fCLKIN/2)/(fCLKIN/256) = 128 —
+ * register field value 000b (CLOCK register OSR[2:0], datasheet Table
+ * 8-17), NOT 256. */
+#define ADS131M04_OSR_FIELD             0x0U       /* CLOCK.OSR[2:0] = 000b -> OSR = 128 */
+
+/* Trigger timer (TIM7, no GPIO output — see hal_tim_adc_trigger_start()):
+ * interrupts once per ADC sample. 64 MHz / 3072 = 20833.33 Hz exactly
+ * (matches fDATA above: fCLKIN/256 = 5,333,333.33/256 = 20833.33 Hz).
+ * Prescaler=0, Counter Period=3071 (3072 counts per period). */
+#define ADS131M04_TRIGGER_TIMER_PERIOD  3071U
+
+/* Services/svc_signal_analysis.c: number of complete 8-sample sine
+ * cycles accumulated before each amplitude/phase recomputation. 64
+ * cycles = 512 samples ~= 24.6 ms per update at 20833.33 Hz — a
+ * reasonable first-cut update rate; not tied to any hardware constraint,
+ * safe to retune. */
+#define SIGNAL_ANALYSIS_BATCH_CYCLES    64U
+
 #endif /* CONFIG_H */
