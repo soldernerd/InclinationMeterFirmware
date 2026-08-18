@@ -31,7 +31,8 @@
 #endif
 
 typedef struct {
-    int64_t iB, qB, iA, qA, iS1, qS1, iS2, qS2;
+    int64_t  iB, qB, iA, qA, iS1, qS1, iS2, qS2;
+    uint16_t seq;
 } RawCycle;
 
 /* Producer (ISR) -> consumer (task) handoff, one entry per completed
@@ -68,6 +69,27 @@ static volatile uint16_t s_input_drop_count = 0;
 static uint16_t s_output_drop_count = 0;
 static uint16_t s_degenerate_count  = 0;
 
+/* ISR-only, same reasoning as s_sample_idx above -- assigned in on_sample()
+ * to every completed 8-sample cycle *before* the input-ring-full check, so
+ * a cycle dropped there (consumer not keeping up) still consumes a seq
+ * value and shows up as a gap downstream. Assigning this in process_one_
+ * cycle() (task context) instead would miss exactly that drop category --
+ * a cycle that never made it into the ring can't be "assigned a seq" once
+ * it's gone. Threaded through RawCycle so process_one_cycle() (and, for
+ * degenerate cycles, the counter below) sees the ISR-assigned value rather
+ * than reassigning its own.
+ *
+ * Rolls over at 65536 cycles (~25 s at ~2.6 kHz) -- a consumer doing gap
+ * detection (Services/svc_api.c's DISP_STREAM) MUST compare seq values
+ * with wraparound-safe (modular) arithmetic, e.g. `(uint16_t)(seq -
+ * expected) != 0`, not a naive `seq != prev + 1` or `seq < prev` -- the
+ * latter produces a false "gap" at every ~25 s rollover even when nothing
+ * was actually lost. Not widened to uint32_t to dodge this: the wire
+ * format (Services/svc_api.c's ApiDispRecord) needs to stay small enough
+ * that 3 records fit in one 60-byte payload at the required drain rate --
+ * see that file's comment for the byte-budget math. */
+static uint16_t s_cycle_seq = 0;
+
 static void note_saturating(volatile uint16_t *counter)
 {
     if (*counter < UINT16_MAX) {
@@ -87,6 +109,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
         return;
     }
     s_sample_idx = 0;
+    uint16_t seq = s_cycle_seq++;
 
     uint16_t head = s_in_head;
     uint16_t next = (uint16_t)((head + 1U) & RING_MASK);
@@ -107,13 +130,14 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
         s_in_ring[head].iA  = s_iA;  s_in_ring[head].qA  = s_qA;
         s_in_ring[head].iS1 = s_iS1; s_in_ring[head].qS1 = s_qS1;
         s_in_ring[head].iS2 = s_iS2; s_in_ring[head].qS2 = s_qS2;
+        s_in_ring[head].seq = seq;
         s_in_head = next;
     }
 
     s_iB = s_qB = s_iA = s_qA = s_iS1 = s_qS1 = s_iS2 = s_qS2 = 0;
 }
 
-static void push_output(float delta1, float residual1, float delta2, float residual2)
+static void push_output(uint16_t seq, float delta1, float residual1, float delta2, float residual2)
 {
     uint16_t head = s_out_head;
     uint16_t next = (uint16_t)((head + 1U) & RING_MASK);
@@ -122,15 +146,15 @@ static void push_output(float delta1, float residual1, float delta2, float resid
          * newest. Deliberately the opposite policy from the input ring
          * above (and from CLAUDE.md 8.3's comms-transport convention,
          * where dropping new preserves in-order delivery for a peer
-         * actively reading): nothing consumes this output ring yet (see
-         * svc_displacement_pop()'s doc comment), so drop-new would mean
-         * the buffer permanently freezes at whatever the first
-         * DISPLACEMENT_RING_DEPTH cycles after boot were and never
-         * updates again -- useless as a "retained recent stream" once a
-         * consumer eventually shows up. Overwrite-oldest keeps this
-         * always holding the most recent ~24.6 ms of results, which is
-         * the useful behavior for a buffer nobody may be actively
-         * draining. */
+         * actively reading): whether or not a consumer is currently
+         * draining this (Services/svc_api.c's DISP_STREAM only does so
+         * while a USB host has actually requested it -- see
+         * svc_displacement_pop()'s doc comment), drop-new would mean the
+         * buffer permanently freezes at whatever cycles happened to be
+         * produced while nobody was reading and never updates again --
+         * useless as a "retained recent stream" once a consumer does
+         * show up. Overwrite-oldest keeps this always holding the most
+         * recent ~24.6 ms of results instead. */
         s_out_tail = (uint16_t)((s_out_tail + 1U) & RING_MASK);
         note_saturating(&s_output_drop_count);
     }
@@ -138,6 +162,7 @@ static void push_output(float delta1, float residual1, float delta2, float resid
     s_out_ring[head].residual1 = residual1;
     s_out_ring[head].delta2_mm = delta2;
     s_out_ring[head].residual2 = residual2;
+    s_out_ring[head].seq       = seq;
     s_out_head = next;
 }
 
@@ -189,6 +214,13 @@ static void compute_sensor_delta(float iS, float qS, const DisplacementSensorCal
 
 static void process_one_cycle(const RawCycle *c)
 {
+    /* Assigned by on_sample() (ISR context, see s_cycle_seq's own comment)
+     * before the input ring's full check, not here -- a cycle dropped
+     * there because the consumer isn't keeping up never reaches this
+     * function at all, so assigning fresh here would silently skip that
+     * seq value's whole purpose: making that exact drop visible. */
+    uint16_t seq = c->seq;
+
     float iB = (float)c->iB, qB = (float)c->qB;
     float iA = (float)c->iA, qA = (float)c->qA;
 
@@ -219,7 +251,7 @@ static void process_one_cycle(const RawCycle *c)
     compute_sensor_delta((float)c->iS2, (float)c->qS2, &g_disp_s2_cal,
                           &shared, &delta2, &residual2);
 
-    push_output(delta1, residual1, delta2, residual2);
+    push_output(seq, delta1, residual1, delta2, residual2);
 
     g_system_state.disp1_delta_mm = delta1;
     g_system_state.disp1_residual = residual1;
@@ -237,6 +269,7 @@ DrvStatus svc_displacement_init(void)
     s_input_drop_count  = 0;
     s_output_drop_count = 0;
     s_degenerate_count  = 0;
+    s_cycle_seq         = 0;
     g_system_state.disp_ok = false;
 
     drv_ads131m04_set_on_sample(on_sample);

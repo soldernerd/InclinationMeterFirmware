@@ -1,5 +1,6 @@
 #include "svc_api.h"
 #include "svc_measurement.h"
+#include "svc_displacement.h"
 #include "svc_storage.h"
 #include "math_crc.h"
 #include "hal_systick.h"
@@ -85,14 +86,53 @@ typedef struct {
     char     serial_str[8];
 } __attribute__((packed)) ApiIdentityPayload;
 
+/* One Services/svc_displacement.c cycle, on the wire. Deliberately a
+ * separate packed struct rather than sending DisplacementCycle directly:
+ * that struct is intentionally left unpacked (float-aligned) for safe
+ * direct field access in the ring buffer (see its own doc comment) --
+ * memcpy-ing an array of it here would carry its trailing alignment
+ * padding onto the wire and blow the batch-of-3-per-report budget below. */
+typedef struct {
+    uint16_t seq;   /* Services/svc_displacement.h's DisplacementCycle.seq --
+                      * wraps every 65536 cycles (~25 s at ~2.6 kHz); a host
+                      * doing gap detection MUST compare with wraparound-
+                      * safe (modular) arithmetic, not naive equality or
+                      * seq != prev+1 checks, or it'll see a false gap at
+                      * every rollover even with nothing actually lost. */
+    float    delta1_mm;
+    float    residual1;
+    float    delta2_mm;
+    float    residual2;
+} __attribute__((packed)) ApiDispRecord;
+
+/* MAX_PAYLOAD (60) = 2-byte header + N * sizeof(ApiDispRecord) (18) -->
+ * N <= 3.22, so 3 records/report (56 of 60 bytes used). At the USB HID
+ * interrupt endpoint's ~1000 reports/sec ceiling (bInterval=1ms -- not
+ * directly confirmed from this device's descriptor, verify before
+ * relying on this headroom number) that's 3000 cycles/sec of drain
+ * capacity against ~2604.17 cycles/sec production, ~15% margin. */
+#define API_DISP_STREAM_MAX_RECORDS 3U
+
+typedef struct {
+    uint8_t       count;      /* valid entries in records[], 1..API_DISP_STREAM_MAX_RECORDS */
+    uint8_t       reserved;   /* Not currently read by either side --
+                                * available for a future flags/version byte
+                                * (e.g. "output ring overflowed since last
+                                * report") without changing the header size
+                                * the batch-of-3 byte budget is computed
+                                * against. */
+    ApiDispRecord records[API_DISP_STREAM_MAX_RECORDS];
+} __attribute__((packed)) ApiDispStreamPayload;
+
 /* Compile-time guarantees that every payload fits in one HID report */
-_Static_assert(sizeof(ApiStatusPayload)    <= MAX_PAYLOAD, "STATUS payload too large");
-_Static_assert(sizeof(ApiStreamPayload)    <= MAX_PAYLOAD, "STREAM payload too large");
-_Static_assert(sizeof(ApiRawStreamPayload) <= MAX_PAYLOAD, "RAW_STREAM payload too large");
-_Static_assert(sizeof(ApiSinglePayload)    <= MAX_PAYLOAD, "SINGLE payload too large");
-_Static_assert(sizeof(ApiIdentityPayload)  <= MAX_PAYLOAD, "IDENTITY payload too large");
-_Static_assert(sizeof(DeviceSettings)      <= MAX_PAYLOAD, "DeviceSettings payload too large");
-_Static_assert(sizeof(CalibrationData)     <= MAX_PAYLOAD, "CalibrationData payload too large");
+_Static_assert(sizeof(ApiStatusPayload)     <= MAX_PAYLOAD, "STATUS payload too large");
+_Static_assert(sizeof(ApiStreamPayload)     <= MAX_PAYLOAD, "STREAM payload too large");
+_Static_assert(sizeof(ApiRawStreamPayload)  <= MAX_PAYLOAD, "RAW_STREAM payload too large");
+_Static_assert(sizeof(ApiSinglePayload)     <= MAX_PAYLOAD, "SINGLE payload too large");
+_Static_assert(sizeof(ApiIdentityPayload)   <= MAX_PAYLOAD, "IDENTITY payload too large");
+_Static_assert(sizeof(DeviceSettings)       <= MAX_PAYLOAD, "DeviceSettings payload too large");
+_Static_assert(sizeof(CalibrationData)      <= MAX_PAYLOAD, "CalibrationData payload too large");
+_Static_assert(sizeof(ApiDispStreamPayload) <= MAX_PAYLOAD, "DISP_STREAM payload too large");
 
 /* ---------------- per-transport state ---------------- */
 
@@ -268,6 +308,30 @@ static void send_raw_stream_data(ApiTransport t)
     send_packet(t, API_NOTIFY_RAW_STREAM_DATA, (const uint8_t *)&p, sizeof p);
 }
 
+static void send_disp_stream_data(ApiTransport t)
+{
+    ApiDispStreamPayload p;
+    p.count    = 0;
+    p.reserved = 0;
+
+    DisplacementCycle c;
+    while (p.count < API_DISP_STREAM_MAX_RECORDS && svc_displacement_pop(&c)) {
+        ApiDispRecord *r = &p.records[p.count];
+        r->seq       = c.seq;
+        r->delta1_mm = c.delta1_mm;
+        r->residual1 = c.residual1;
+        r->delta2_mm = c.delta2_mm;
+        r->residual2 = c.residual2;
+        p.count++;
+    }
+    if (p.count == 0) {
+        return;   /* nothing pending this tick */
+    }
+
+    uint16_t payload_len = (uint16_t)(2U + (uint16_t)p.count * sizeof(ApiDispRecord));
+    send_packet(t, API_NOTIFY_DISP_STREAM_DATA, (const uint8_t *)&p, payload_len);
+}
+
 static void send_single_progress(ApiTransport t, uint8_t pct)
 {
     send_packet(t, API_NOTIFY_SINGLE_PROGRESS, &pct, 1);
@@ -322,6 +386,27 @@ static void dispatch(ApiTransport t, uint8_t cmd,
             break;
         case API_CMD_STOP_RAW_STREAM:
             if (s_t[t].mode == API_MODE_RAW_STREAM) s_t[t].mode = API_MODE_IDLE;
+            send_ack(t);
+            break;
+        case API_CMD_START_DISP_STREAM:
+            if (t != API_TRANSPORT_USB) {
+                /* ~2604 cycles/sec * sizeof(ApiDispRecord) (18 bytes) =
+                 * ~46.9 KB/s of payload data alone -- far beyond BLE/
+                 * UART's 115200 baud (~11.5 KB/s). NACK rather than
+                 * silently deliver a stream that's actually dropping the
+                 * vast majority of its cycles. Revisit this per-command
+                 * special case if/when a second high-rate stream is
+                 * added (see svc_api.h's ApiMode comment) -- worth a
+                 * shared transport-capability check at that point rather
+                 * than a third copy of this same NACK block. */
+                send_nack(t);
+                break;
+            }
+            s_t[t].mode = API_MODE_DISP_STREAM;
+            send_ack(t);
+            break;
+        case API_CMD_STOP_DISP_STREAM:
+            if (s_t[t].mode == API_MODE_DISP_STREAM) s_t[t].mode = API_MODE_IDLE;
             send_ack(t);
             break;
         case API_CMD_SET_ZERO:
@@ -529,5 +614,19 @@ void svc_api_update(void)
                 s_t[t].last_progress_ms = now;
             }
         }
+    }
+}
+
+void svc_api_disp_stream_update(void)
+{
+    /* Deliberately no elapsed-time gate (unlike svc_api_update()'s other
+     * modes) -- the output ring's occupancy is the natural pacing signal
+     * here, and this needs draining every tick to keep up with ~2.6 kHz
+     * production (see svc_api.h's doc comment and app_scheduler.c's
+     * task_api_disp_stream). */
+    for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
+        if (!s_t[t].connected)                continue;
+        if (s_t[t].mode != API_MODE_DISP_STREAM) continue;
+        send_disp_stream_data(t);
     }
 }

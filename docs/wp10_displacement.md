@@ -340,11 +340,92 @@ ordinary floating-point reassociation.
   sensor head until flashed.
 - **Angle conversion** — explicitly out of scope per the task spec; δ (displacement) is the
   final output of this WP.
-- **Consumer for the retained per-cycle stream** — `svc_displacement_pop()` exists and is
-  build-verified, and now correctly retains a rolling recent window regardless of whether
-  anything drains it (see code review above), but nothing in this WP calls it yet; the
-  actual pendulum-swing/higher-frequency analysis it was retained for is future work.
 - **`SET_DISPLACEMENT_CAL`-style API command** — not built; the three new calibration
   structs are currently only loadable/saveable from within `svc_storage.c` itself (boot-time
   load, and `svc_storage_save_blob()` is available for a future caller), with no host-facing
   way to write new calibration values yet.
+- **Drop counters not exposed to the host** — `svc_displacement_get_input_drop_count()`/
+  `get_output_drop_count()`/`get_degenerate_count()` exist and are correct, but nothing in
+  the DISP_STREAM API surface (below) or `GET_STATUS` reports them to a host yet. A host
+  degraded by a slow USB link (see the bInterval caveat below) currently has no way to
+  distinguish "the sensor stopped producing data" from "the ADC-domain phasors are simply
+  quiet" except via `seq` gaps in the stream itself — a periodic diagnostic packet or
+  `GET_STATUS` fields would close this.
+
+## USB DISP_STREAM API (2026-08-18)
+
+The retained per-cycle stream now has a real consumer: `API_CMD_START_DISP_STREAM` /
+`API_CMD_STOP_DISP_STREAM` (`Services/svc_api.h`/`.c`), USB-only. Design, worked through with
+the user before implementing:
+
+- **Byte budget** — the user's own back-of-envelope math (64 KB/s USB budget ÷ ~2604.17
+  cycles/sec ≈ 20 bytes/cycle) matches what the wire format actually needs: each
+  `ApiDispRecord` (`uint16_t seq` + 4 `float`s) is 18 bytes, and 3 fit in one 60-byte HID
+  payload (`API_DISP_STREAM_MAX_RECORDS`) — ~21 bytes/cycle on the full 64-byte wire report,
+  right in that ballpark.
+- **Rate ceiling** — a USB full-speed HID interrupt endpoint polls at most once per
+  `bInterval`, commonly 1 ms by CubeMX default but **not directly confirmed from this
+  device's descriptor** — flagged explicitly in the code (`svc_api.c`'s
+  `API_DISP_STREAM_MAX_RECORDS` comment) as something to verify once real hardware exists,
+  since the whole ~15% capacity margin (3000 cycles/sec drain vs ~2604.17 produced) depends
+  on it.
+- **USB-only** — BLE/UART's 115200 baud (~11.5 KB/s) can't sustain this stream's ~46.9 KB/s;
+  `API_CMD_START_DISP_STREAM` NACKs on any transport but USB rather than silently deliver a
+  stream that's actually dropping the vast majority of its cycles. Confirmed with the user
+  as the preferred behavior over "allow it everywhere, let it drop naturally."
+- **New command pair, not a repurposed `RAW_STREAM`** — `RAW_STREAM`'s existing payload
+  (`pcap04_1_af`, `scl3300_x_cdeg`, etc.) is legacy data for sensors REV B hardware doesn't
+  carry (see `CLAUDE.md`'s WP3 section) and a fundamentally different shape (one snapshot
+  per poll, not a batched high-rate array) — confirmed with the user this should be a
+  distinctly-named command (`DISP_STREAM`, not a generic "raw stream 2"), since more
+  per-subsystem raw streams (e.g. a future single-channel raw-ADC stream) are expected to
+  each want their own name.
+- **Every-tick drain, not `svc_api_update()`'s existing poll rate** — `svc_api_update()`'s
+  other stream modes are gated by an elapsed-time interval and polled at
+  `task_sensors_ms` (100 ms default); that's far too slow to keep ~2604 cycles/sec from
+  overflowing the 64-entry output ring. `svc_api_disp_stream_update()` is a separate function,
+  polled every tick by its own new scheduler task (`task_api_disp_stream`,
+  `App/app_scheduler.c`), left ungated by time — the ring's occupancy is its own natural
+  pacing signal.
+- **`seq` gap detection** — `DisplacementCycle` gained a `uint16_t seq` field, assigned in
+  `on_sample()` (ISR context) to every completed 8-sample cycle, including ones later dropped
+  by a full input ring or skipped as degenerate — not in `process_one_cycle()`, which would
+  miss exactly the "producer overwhelms consumer" drop case this field exists to surface
+  (an early version of this code had that bug; caught in code review, see below). Wraps every
+  65536 cycles (~25 s at ~2.6 kHz) — documented at both the field (`svc_displacement.h`) and
+  wire-format (`svc_api.c`) definitions that a host doing gap detection must use
+  wraparound-safe (modular) comparison, not naive equality/increment checks, or it'll see a
+  false gap at every rollover.
+
+### Code review (2026-08-18)
+
+Five parallel angles (line-by-line, removed-behavior, cross-file/reuse,
+simplification/efficiency/altitude, CLAUDE.md conventions) against the full DISP_STREAM diff.
+Real findings, fixed:
+
+- **`seq` didn't increment on input-ring drops** — originally assigned in
+  `process_one_cycle()` (task context), which only runs for cycles that already made it into
+  the ring; a cycle dropped by `on_sample()`'s full-ring check silently left the seq stream
+  looking contiguous across a real loss. Fixed by moving the assignment into `on_sample()`
+  itself, threaded through a new `RawCycle.seq` field.
+- **Missing on-screen status badge** — `App/app_display.c`'s USB status-bar badge logic
+  handled `RAW_STREAM`/`STREAM` but had no branch for the new mode; a user standing at the
+  device during a capture had no visual indicator. Added a `[DSP]` badge, same pattern as the
+  existing two.
+- **Stale byte-count in the BLE/UART rejection comment** — computed bandwidth using 16
+  bytes/record (the 4 floats only), not `ApiDispRecord`'s actual 18 bytes once `seq` was
+  added earlier in the same change. Fixed (doesn't change the NACK decision — ~46.9 KB/s is
+  still far beyond BLE/UART's capacity either way).
+- **Stale scheduler comment** — `app_scheduler_reload_periods()`'s list of intentionally-fixed
+  task indices wasn't updated for the newly appended `task_api_disp_stream`. Fixed.
+- **Unexplained `reserved` byte** — `ApiDispStreamPayload.reserved` had no comment describing
+  why it exists. Added one (available for a future flags/version byte).
+
+**Deliberately not applied**: the USB-only restriction is a hand-rolled `if (t !=
+API_TRANSPORT_USB)` check inside `dispatch()`'s switch — with a second high-rate stream
+(flagged as likely in the code's own comments), this would become 2-3 near-identical copies
+instead of one shared transport-capability check. Left as-is for now (one instance doesn't
+justify the abstraction yet) but flagged in-code as the point to revisit.
+
+**Rebuilt clean after fixes: compiles and links with zero warnings.** RAM 40.5 KB (27.5%),
+FLASH 142.2 KB (27.1%).

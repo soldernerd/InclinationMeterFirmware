@@ -102,6 +102,11 @@ static void draw_top_bar(void)
         u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
         x = (u8g2_uint_t)(x - 2 - w);
         u8g2_DrawUTF8(&s_u8g2, x, 12, t);
+    } else if (m_usb == API_MODE_DISP_STREAM) {
+        const char *t = "[DSP]";
+        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
+        x = (u8g2_uint_t)(x - 2 - w);
+        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
     }
     if (g_system_state.battery_charging) {
         const char *t = "[CHG]";

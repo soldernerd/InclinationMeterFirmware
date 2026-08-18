@@ -40,10 +40,34 @@
  * stream. */
 
 typedef struct {
-    float delta1_mm;    /* S1 displacement, mm */
-    float residual1;    /* Im(x1) -- diagnostic, should sit near 0 */
-    float delta2_mm;    /* S2 displacement, mm */
-    float residual2;    /* Im(x2) */
+    float    delta1_mm;    /* S1 displacement, mm */
+    float    residual1;    /* Im(x1) -- diagnostic, should sit near 0 */
+    float    delta2_mm;    /* S2 displacement, mm */
+    float    residual2;    /* Im(x2) */
+    uint16_t seq;           /* Rolling per-cycle counter, assigned in
+                              * on_sample() (ISR context) to every completed
+                              * 8-sample cycle -- including ones later
+                              * dropped by a full input ring or skipped as
+                              * degenerate -- so a consumer that isn't
+                              * draining every single entry (e.g.
+                              * Services/svc_api.c's DISP_STREAM, batching a
+                              * few cycles per USB report) can detect gaps
+                              * from ring eviction, transport drops, or
+                              * skipped cycles by their absence from the seq
+                              * sequence. Wraps every 65536 cycles (~25 s at
+                              * ~2.6 kHz) -- consumers doing gap detection
+                              * MUST use wraparound-safe (modular)
+                              * comparison, not naive equality/increment
+                              * checks, or they'll see a false gap at every
+                              * rollover. Deliberately last/uint16_t rather
+                              * than packed in front of the floats: this
+                              * struct is read/written by plain field access
+                              * (the ring buffer, ISR-adjacent task context),
+                              * not memcpy'd onto the wire directly -- Cortex-
+                              * M0+ doesn't reliably support unaligned float
+                              * access, so this stays naturally aligned. The
+                              * wire format is a separate, packed struct in
+                              * svc_api.c. */
 } DisplacementCycle;
 
 /* Registers the ADC sample callback and starts drv_ads131m04.c -- call

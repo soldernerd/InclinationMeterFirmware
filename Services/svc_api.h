@@ -16,6 +16,13 @@ typedef enum {
     API_MODE_SINGLE,
     API_MODE_STREAM,
     API_MODE_RAW_STREAM,
+    API_MODE_DISP_STREAM,   /* WP10 dual-sensor displacement cycle stream --
+                              * see API_CMD_START_DISP_STREAM. Named
+                              * specifically (not a generic "raw stream 2")
+                              * because more per-subsystem raw streams are
+                              * expected later (e.g. single-channel raw ADC),
+                              * each wanting its own distinctly-named command
+                              * pair rather than one overloaded mode. */
 } ApiMode;
 
 typedef void (*ApiSendFn)(const uint8_t *data, uint16_t len);
@@ -71,6 +78,8 @@ ApiMode svc_api_get_mode(ApiTransport t);
 #define API_CMD_GET_SETTINGS        0x0BU
 #define API_CMD_SET_SETTINGS        0x0CU
 #define API_CMD_GET_IDENTITY        0x0DU
+#define API_CMD_START_DISP_STREAM   0x0EU   /* USB only -- see svc_api.c's dispatch() */
+#define API_CMD_STOP_DISP_STREAM    0x0FU
 
 #define API_RSP_GET_STATUS          0x81U
 #define API_RSP_REQUEST_SINGLE      0x82U
@@ -85,5 +94,16 @@ ApiMode svc_api_get_mode(ApiTransport t);
 #define API_NOTIFY_STREAM_DATA      0xF2U
 #define API_NOTIFY_RAW_STREAM_DATA  0xF3U
 #define API_NOTIFY_STATUS_CHANGED   0xF4U
+#define API_NOTIFY_DISP_STREAM_DATA 0xF5U
+
+/* Drains up to a few pending Services/svc_displacement.c cycles into one
+ * USB HID report per call, for any transport currently in
+ * API_MODE_DISP_STREAM. Unlike svc_api_update()'s other stream modes,
+ * this is NOT gated by an elapsed-time interval -- the ~2.6 kHz
+ * production rate needs draining every scheduler tick to keep the
+ * output ring from falling behind, so this is polled by its own
+ * dedicated every-tick scheduler task rather than svc_api_update()'s
+ * existing task_sensors_ms-period task. Call every tick. */
+void svc_api_disp_stream_update(void);
 
 #endif /* SVC_API_H */
