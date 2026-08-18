@@ -18,3 +18,8 @@ uint32_t hal_systick_elapsed_ms(uint32_t start_ms)
      * rollover, as long as the true elapsed time is under ~49.7 days. */
     return (uint32_t)(hal_systick_get_ms() - start_ms);
 }
+
+void hal_systick_delay_ms(uint32_t ms)
+{
+    HAL_Delay(ms);
+}

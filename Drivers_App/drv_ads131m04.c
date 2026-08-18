@@ -2,9 +2,9 @@
 #include "hal_spi.h"
 #include "hal_tim.h"
 #include "hal_gpio.h"
+#include "hal_systick.h"
 #include "pin_config.h"
 #include "config.h"
-#include "stm32g0xx_hal.h"
 
 /* Register addresses used here (datasheet Table 8-12, "Register Map") —
  * only the three registers this driver actually touches are named. */
@@ -79,6 +79,13 @@ static DrvStatus write_register(uint8_t addr, uint16_t value)
     return rc;
 }
 
+static void note_dropped(void)
+{
+    if (s_dropped_count < UINT16_MAX) {
+        s_dropped_count++;
+    }
+}
+
 static int32_t sign_extend24(uint8_t msb, uint8_t mid, uint8_t lsb)
 {
     uint32_t v = ((uint32_t)msb << 16) | ((uint32_t)mid << 8) | lsb;
@@ -103,7 +110,16 @@ static void on_dma_complete(HalSpiInstance instance, bool success)
         return;
     }
     hal_spi_cs_deassert(HAL_SPI_ADC);
-    if (!success || s_on_sample == 0) {
+    if (!success) {
+        /* HAL_SPI_ErrorCallback fired instead of a clean completion (bus
+         * fault, DMA error) -- escalate same as on_trigger()'s drop paths
+         * below (CLAUDE.md 7.6), otherwise a real SPI fault on this
+         * channel would be invisible to both the drop counter and
+         * DBG_PRINT. */
+        note_dropped();
+        return;
+    }
+    if (s_on_sample == 0) {
         return;
     }
     /* Frame layout (word index x WORD_BYTES): word0=response(discarded),
@@ -129,9 +145,7 @@ static void on_trigger(void)
 {
     if (hal_gpio_get(ADC_READY_PORT, ADC_READY_PIN)) {
         /* DRDY still high -- not ready yet. */
-        if (s_dropped_count < UINT16_MAX) {
-            s_dropped_count++;
-        }
+        note_dropped();
         return;
     }
     if (hal_spi_is_busy(HAL_SPI_ADC)) {
@@ -139,17 +153,13 @@ static void on_trigger(void)
          * timer rate given FRAME_BYTES take a few microseconds over SPI,
          * but don't stack a second DMA request on top of one already
          * running. */
-        if (s_dropped_count < UINT16_MAX) {
-            s_dropped_count++;
-        }
+        note_dropped();
         return;
     }
     hal_spi_cs_assert(HAL_SPI_ADC);
     if (hal_spi_transmit_receive_dma(HAL_SPI_ADC, s_tx_zero, s_rx_buf, FRAME_BYTES) != DRV_OK) {
         hal_spi_cs_deassert(HAL_SPI_ADC);
-        if (s_dropped_count < UINT16_MAX) {
-            s_dropped_count++;
-        }
+        note_dropped();
     }
 }
 
@@ -173,11 +183,11 @@ DrvStatus drv_ads131m04_init(void)
      * MHz CLKIN) -- 1 ms is a generous, simple margin for a one-time
      * boot operation, not a tight budget worth hand-timing. */
     hal_gpio_set(ADC_SYNC_RESET_PORT, ADC_SYNC_RESET_PIN, false);
-    HAL_Delay(1);
+    hal_systick_delay_ms(1);
     hal_gpio_set(ADC_SYNC_RESET_PORT, ADC_SYNC_RESET_PIN, true);
     /* t_REGACQ (5 us min) before communicating, per the datasheet's
      * SYNC/RESET Pin section -- same 1 ms margin reasoning as above. */
-    HAL_Delay(1);
+    hal_systick_delay_ms(1);
 
     if (write_register(REG_CLOCK, CLOCK_REG_VALUE) != DRV_OK) return DRV_ERR_COMM;
     if (write_register(REG_GAIN1, GAIN1_REG_VALUE) != DRV_OK) return DRV_ERR_COMM;

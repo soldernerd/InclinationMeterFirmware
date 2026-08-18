@@ -61,6 +61,17 @@ DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t l
         HAL_StatusTypeDef rc = HAL_SPI_Transmit(&hspi3, (uint8_t *)data, len, HAL_MAX_DELAY);
         s_busy[HAL_SPI_DAC] = false;
         return (rc == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
+    } else if (instance == HAL_SPI_ADC) {
+        /* Blocking TX used only by drv_ads131m04.c's one-time register
+         * writes during init -- streaming reads use
+         * hal_spi_transmit_receive_dma() below instead. HAL_SPI_Transmit()
+         * on a full-duplex peripheral still clocks MISO; the caller just
+         * doesn't capture it, same as the DISPLAY/DAC TX-only instances
+         * above ignoring whatever (if anything) comes back on their MISO. */
+        s_busy[HAL_SPI_ADC] = true;
+        HAL_StatusTypeDef rc = HAL_SPI_Transmit(&hspi1, (uint8_t *)data, len, HAL_MAX_DELAY);
+        s_busy[HAL_SPI_ADC] = false;
+        return (rc == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
     }
     return DRV_ERR_INVALID;
 }

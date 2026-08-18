@@ -75,17 +75,14 @@ static int32_t s_phase_mdeg[NUM_CHANNELS];
 
 static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
 {
+    const int32_t ch[NUM_CHANNELS] = { ch0, ch1, ch2, ch3 };
     int32_t c = s_cos_table[s_sample_idx];
     int32_t s = s_sin_table[s_sample_idx];
 
-    s_i_sum[0] += (int64_t)ch0 * c;
-    s_q_sum[0] += (int64_t)ch0 * s;
-    s_i_sum[1] += (int64_t)ch1 * c;
-    s_q_sum[1] += (int64_t)ch1 * s;
-    s_i_sum[2] += (int64_t)ch2 * c;
-    s_q_sum[2] += (int64_t)ch2 * s;
-    s_i_sum[3] += (int64_t)ch3 * c;
-    s_q_sum[3] += (int64_t)ch3 * s;
+    for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
+        s_i_sum[i] += (int64_t)ch[i] * c;
+        s_q_sum[i] += (int64_t)ch[i] * s;
+    }
 
     s_sample_idx++;
     if (s_sample_idx < SAMPLES_PER_CYCLE) {
