@@ -29,7 +29,7 @@ GC runs; nothing is deleted immediately.
 | `wp2` | **Rebased a second time (onto post-WP1-REV-B-port `master`), extensively extended beyond the original checklist, build-verified, two full code-review passes complete. Ready to push as of `ba2aa2c`.** | `master@f402d2b` | Feature commit `0e7abd1` cherry-picked, then 7 more commits of fixes/features (see "wp2 — post-rebase work" below). `wp2` HEAD is `ba2aa2c`, 9 commits ahead of `origin/wp2`. |
 | `wp3` | **Rebased onto `wp2@83c4617` (cherry-pick `f2646e4`, `880c218` dropped), full scope (including the UI state machine) implemented and hardware-adapted, EEPROM storage redesigned into per-subsystem pages — see "wp3 — resolution" and "Code review" below. Build-verified clean; three code-review passes complete (first: 8-angle/12-verified/10-fixed; second: partial-angle plus the EEPROM per-page redesign; third: remaining angles against that redesign, found and fixed a real data-corruption bug), 2026-08-17.** | `wp2@83c4617` | Feature commit `f2646e4` cherry-picked + 13 follow-up commits (Core/ EXTI wiring, svc_input/system_state/display, UI state machine restoration, three code-review fix rounds, EEPROM per-page redesign, docs throughout). `wp3` HEAD is `8f9d3e8`. |
 | `wp4` | **Hand-adapted onto `wp3@2d5fc7e`, reconciled against two real CubeMX regens (the second with NVIC properly configured via the GUI), through two full code-review passes (9+8 findings, 17 fixed total) — see "wp4 — resolution and adaptation notes" below. Build-verified clean, 2026-08-18.** | `wp3@2d5fc7e` | `wp4` HEAD is `c7665dc`. |
-| `wp5` | **BLE half hand-ported onto `wp4@bb0b95f`, adapted for REV B's actual BLE pinout, one code-review pass complete (10 findings, 8 fixed, 2 documented as accepted known limitations), committed (2 commits) — see "wp5 — resolution and adaptation notes" below. Build-verified clean, 2026-08-17. Then extended same-branch with wp5.1 (third `svc_api` transport over USART3, 2026-08-18) — build-verified but NOT reviewed or committed yet, and needs a CubeMX regen (USART3 RX DMA -> Circular) before it's functionally safe — see "wp5.1" below.** | `wp4@bb0b95f` | wp5 (BLE) HEAD is `38f47bc`. wp5.1 (UART transport) is uncommitted working-tree state on top of that — see "Resuming this work" below. |
+| `wp5` | **BLE half hand-ported onto `wp4@bb0b95f`, adapted for REV B's actual BLE pinout, one code-review pass complete (10 findings, 8 fixed, 2 documented as accepted known limitations), committed (2 commits) — see "wp5 — resolution and adaptation notes" below. Build-verified clean, 2026-08-17. Extended same-branch with wp5.1 (third `svc_api` transport over USART3, 2026-08-18), code-reviewed (3 angles, 1 fixed), committed (2 commits) — see "wp5.1" below. Its required CubeMX regen (USART3 RX DMA -> Circular) is done and reconciled (2 regen-induced regressions found and fixed the same day: USB HID report descriptor wiped a third time, CMakeLists.txt lost hand-added include dirs).** | `wp4@bb0b95f` | `wp5` HEAD is `5d8bfa6` (regen reconciliation fix, on top of `024814a`/`ba6b681` for wp5.1 and `38f47bc`/`82af12a` for wp5's BLE work). |
 
 **Build verification:** no ARM toolchain existed on the machine `wp3` was developed on
 (confirmed by an exhaustive filesystem search; the `build/` directory previously checked
@@ -770,6 +770,41 @@ from Normal to Circular mode (matching USART6's RX channel), then regenerate**, 
 transport is safe to actually use. Documented in `hal_uart.c` itself as an "ACTION NEEDED"
 comment at its extern declarations, so it's visible at the point of use, not just here.
 
+**Update (2026-08-18): regen done, reconciled.** The user changed exactly the one setting
+asked for — `git diff` on `WylerLeveltronic.ioc` showed only `Dma.USART3_RX.7.Mode` flipping
+`DMA_NORMAL` → `DMA_CIRCULAR`, and `Core/Src/usart.c` picked that up cleanly as the same
+single-line change, nothing else in that file moved. But the regen also silently broke two
+things unrelated to the actual `.ioc` edit — same category of regen fragility WP4's docs
+already catalogued twice, now a third and fourth instance:
+- `USB_Device/App/usbd_custom_hid_if.c`'s `CUSTOM_HID_ReportDesc_FS` array (the USB HID
+  report descriptor) lost its content again — down to a single `0xC0` byte, everything else
+  gone. This is the same array WP4's docs already flagged as having no `USER CODE` marker to
+  survive a regen in ("confirmed on two separate regens now... still needs a human re-check
+  after any future regen") — now confirmed a third time. Restored the full 29-byte
+  descriptor from the last commit; the comment above the array now says "three separate
+  regens."
+- `cmake/stm32cubemx/CMakeLists.txt`'s `MX_Include_Dirs` lost its two hand-added entries
+  (`Config`, `HAL_App`) — CubeMX only regenerates paths it knows about from its own generated
+  tree and doesn't preserve hand-additions to that specific list. This one hadn't broken
+  before (first CMakeLists.txt-owned regen loss on this project) but is the same underlying
+  cause as the other two: CubeMX-generated files don't have a "leave this alone" mechanism
+  for content outside `USER CODE` markers, and this particular list is consumed by both the
+  main app target AND the separate `USB_Device_Library` object-library target — the latter
+  doesn't inherit the top-level `CMakeLists.txt`'s own `target_include_directories()` call,
+  so losing these two lines broke `usbd_conf.h`'s `#include "config.h"` specifically in that
+  second target, with a `fatal error: config.h: No such file or directory` pointing at
+  `Middlewares/ST/STM32_USB_Device_Library/*` files nowhere near the actual change. Restored
+  both entries with a "why these are here" comment for the next regen.
+
+Both fixes are comment-documented at their exact location per the established pattern (report
+descriptor: "re-verify after every future regen"; CMakeLists.txt: same). Build-verified clean
+after all three regen-era files (`usart.c`, `usbd_custom_hid_if.c`, `CMakeLists.txt`) were
+reconciled — zero warnings, RAM/FLASH unchanged from the pre-regen numbers (34.1 KB / 120.3 KB)
+since none of this changed anything functionally, only restored what should already have been
+there. USART3 UART reception is now believed correct (circular DMA matches USART6's pattern)
+but still not verified against real hardware — nothing in this project has touched real
+silicon yet.
+
 **Code review (2026-08-18):** 3 parallel angles (correctness; conventions/layering; cross-file
 impact) against the full diff plus the two new untracked files. Came back clean — no
 missed call sites for the `hal_uart_*` functions' new `HalUartInstance` parameter, no
@@ -809,13 +844,13 @@ unaffected.
    accepted known limitations). Two commits on the `wp5` branch (based on `wp4@bb0b95f`):
    `feat(wp5)` for the implementation+fixes, `docs(wp5)` for this file's WP5 sections and the
    README update.
-5. **`wp5.1` (third `svc_api` transport, over USART3) is implemented, build-verified, and
-   code-reviewed (3-angle pass, 1 finding fixed — a stale comment) — but NOT YET committed**
-   — see "wp5.1 — third `svc_api` transport over the debug UART" above. **Before treating
-   this as functionally done**, do the CubeMX regen it flags (USART3 RX DMA: Normal ->
-   Circular) and re-verify UART reception actually keeps working past the first 256 bytes —
-   nothing catches that gap at build time, only careful reading of the generated
-   `Core/Src/usart.c` did.
+5. **`wp5.1` (third `svc_api` transport, over USART3) is implemented, build-verified,
+   code-reviewed, and the required CubeMX regen (USART3 RX DMA: Normal -> Circular) is done
+   and reconciled** — see "wp5.1 — third `svc_api` transport over the debug UART" above,
+   including its 2026-08-18 update recording two regen-induced regressions (USB HID report
+   descriptor wiped a third time, `CMakeLists.txt` losing its hand-added `Config`/`HAL_App`
+   include dirs) found and fixed the same session. Build-verified clean. Still not verified
+   against real hardware — nothing here has touched real silicon yet.
 6. `App/app_version.h`'s `FW_VERSION_*`/`FW_VERSION_STRING` already bumped to `0.5.0` this
    session (before wp5.1 was added — reconsider whether wp5.1 warrants its own bump, e.g.
    `0.5.1`, once it's reviewed and committed).
