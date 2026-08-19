@@ -171,4 +171,54 @@ typedef enum {
  * how often this is called. */
 void svc_api_measurement_subscriptions_update(void);
 
+/* ---------------- stage 3: Settings (0x3) and Calibrations (0x2) ----------------
+ * GET/SET, no subscribe/bulk. Every DeviceSettings field (except the
+ * internal _settings_end_marker, which isn't a real setting) and every
+ * WP10 displacement calibration constant is its own resource -- 2026-08-19
+ * project rule: every setting/calibration constant accessible out of the
+ * box, individually. Legacy REV-A CalibrationData fields (PCAP04/SCL3300)
+ * are deliberately NOT exposed -- confirmed with the user 2026-08-19,
+ * "skip legacy fields, add back if/when the sensors come back." Resource
+ * indices assigned sequentially in DeviceSettings' own field order (see
+ * docs/api-reference.md for the full table) -- not grouped/reordered. */
+
+/* Settings (category 0x3) -- indices 0x00-0x1A, matching DeviceSettings'
+ * field order exactly. */
+#define API2_RES_SET_TASK_SENSORS_MS        0x00U
+#define API2_RES_SET_TASK_PROCESSING_MS     0x01U
+#define API2_RES_SET_TASK_DISPLAY_MS        0x02U
+#define API2_RES_SET_TASK_BLE_MS            0x03U
+#define API2_RES_SET_TASK_USB_MS            0x04U
+#define API2_RES_SET_TASK_BATTERY_MS        0x05U
+#define API2_RES_SET_TASK_TEMPERATURE_MS    0x06U
+#define API2_RES_SET_STREAM_INTERVAL_MS     0x07U
+#define API2_RES_SET_SETTLING_THRESHOLD     0x08U
+#define API2_RES_SET_SETTLING_TIMEOUT_MS    0x09U
+#define API2_RES_SET_FILTER_CUTOFF_HZ_NUM   0x0AU
+#define API2_RES_SET_FILTER_CUTOFF_HZ_DEN   0x0BU
+#define API2_RES_SET_BATTERY_CRITICAL_MV    0x0CU
+#define API2_RES_SET_BATTERY_LOW_MV         0x0DU
+#define API2_RES_SET_VBAT_SCALE_NUM         0x0EU
+#define API2_RES_SET_VBAT_SCALE_DEN         0x0FU
+#define API2_RES_SET_TMP236_SEG1_VOFFS_MV   0x10U
+#define API2_RES_SET_TMP236_SEG1_NUM        0x11U
+#define API2_RES_SET_TMP236_SEG1_DEN        0x12U
+#define API2_RES_SET_TMP236_SEG_BOUNDARY_MV 0x13U
+#define API2_RES_SET_TMP236_SEG2_VOFFS_MV   0x14U
+#define API2_RES_SET_TMP236_SEG2_NUM        0x15U
+#define API2_RES_SET_TMP236_SEG2_DEN        0x16U
+#define API2_RES_SET_TMP236_SEG2_TINFL_CDEG 0x17U
+#define API2_RES_SET_LM35_SCALE_MV_PER_C    0x18U
+#define API2_RES_SET_ENCODER_COUNTS_PER_DET 0x19U
+#define API2_RES_SET_BLE_CONFIGURED         0x1AU
+
+/* Calibrations (category 0x2) -- WP10 displacement only. */
+#define API2_RES_CAL_S1_GAIN           0x00U
+#define API2_RES_CAL_S1_D0_MM          0x01U
+#define API2_RES_CAL_S1_ZERO_OFFSET_MM 0x02U
+#define API2_RES_CAL_S2_GAIN           0x03U
+#define API2_RES_CAL_S2_D0_MM          0x04U
+#define API2_RES_CAL_S2_ZERO_OFFSET_MM 0x05U
+#define API2_RES_CAL_SHARED_ATTEN      0x06U
+
 #endif /* SVC_API_H */

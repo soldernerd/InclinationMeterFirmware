@@ -256,10 +256,14 @@ typedef struct {
  * save/load (svc_storage_save_blob()/load_blob()), same pattern
  * CalibrationData above already established (a dedicated struct + page,
  * NOT threaded through DeviceSettings' SettingsSection/offsetof
- * mechanism). This is deliberate, not an oversight: DeviceSettings is
- * sent whole in one 60-byte USB HID report (Services/svc_api.c's
- * MAX_PAYLOAD, enforced by a _Static_assert there) and was already near
- * that ceiling -- these three float fields alone would have blown it.
+ * mechanism). This is deliberate, not an oversight: at the time (WP10,
+ * under the v1 API), DeviceSettings was sent whole in one 60-byte USB
+ * HID report and was already near that ceiling -- these three float
+ * fields alone would have blown it. (v2/WP11's Services/svc_api.c has
+ * since replaced that whole-struct transfer with per-field GET/SET, so
+ * this specific size constraint no longer applies to the live protocol
+ * -- but the standalone-struct/dedicated-EEPROM-page choice itself is
+ * still the right one and is unchanged.)
  * See Services/svc_displacement.c for how gain/d0_mm/zero_offset_mm
  * combine with DisplacementSharedCal's atten below to compute
  * x/delta per sensor. First float fields in this codebase's persisted

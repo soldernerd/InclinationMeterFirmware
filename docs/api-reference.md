@@ -6,10 +6,10 @@ Supersedes `docs/api.md` (the v1 reference).
 
 > **Status: in progress.** This document is built out incrementally, one category at a time,
 > alongside firmware implementation (WP11, per `docs/api-v2-spec.md` §8) — it is not written
-> once at the end. **Currently covered: System status (§4), Commands (§5), Measurements
-> (§6).** Calibrations, Settings, Topic groups, Debug messages, Raw data, and Bulk transfers
-> are designed (see `docs/api-v2-spec.md`) but not yet implemented in firmware, and have no
-> resources documented here yet — sending any opcode in those categories today gets
+> once at the end. **Currently covered: System status (§4), Commands (§5), Calibrations (§6),
+> Settings (§7), Measurements (§8).** Topic groups, Debug messages, Raw data, and Bulk
+> transfers are designed (see `docs/api-v2-spec.md`) but not yet implemented in firmware, and
+> have no resources documented here yet — sending any opcode in those categories today gets
 > `UNKNOWN_CATEGORY` (§3). Per a 2026-08-19 project rule: every individual measurement result,
 > device setting, and calibration constant is exposed as its own resource "out of the box";
 > bigger constructs (Topic groups, Bulk transfers, and WP10's high-rate displacement-cycle
@@ -26,7 +26,7 @@ Supersedes `docs/api.md` (the v1 reference).
 
 - **OPCODE** — 16 bits, little-endian. Structure in §2.
 - **LEN** — payload length in bytes, little-endian. No fixed maximum in the protocol itself;
-  see §7's transport notes for the current practical ceiling.
+  see §9's transport notes for the current practical ceiling.
 - **PAYLOAD** — opcode-specific, little-endian. For every response, byte 0 of PAYLOAD is
   always a status code (§3); resource-specific data, if any, follows starting at byte 1.
 - **CRC16** — CRC-16/CCITT-FALSE (poly `0x1021`, init `0xFFFF`, no input/output reflection,
@@ -71,9 +71,9 @@ opcode = (verb << 12) | (category << 8) | resource_index
 |---|---|---|
 | System status | `0x0` | **Implemented** (§4) |
 | Commands | `0x1` | **Implemented** (§5) |
-| Calibrations | `0x2` | Not yet implemented |
-| Settings | `0x3` | Not yet implemented |
-| Measurements | `0x4` | **Implemented** (§6) |
+| Calibrations | `0x2` | **Implemented** (§6) |
+| Settings | `0x3` | **Implemented** (§7) |
+| Measurements | `0x4` | **Implemented** (§8) |
 | Topic groups | `0x5` | Not yet implemented |
 | Debug messages | `0x6` | Not yet implemented |
 | Raw data | `0x7` | Not yet implemented |
@@ -220,7 +220,183 @@ Response:
 
 ---
 
-## 6. Measurements (category `0x4`)
+## 6. Calibrations (category `0x2`)
+
+WP10 displacement-sensor calibration constants. `GET`/`SET`, not subscribable. Never blocks
+beyond the normal EEPROM-write busy window, no exclusivity rules apply. **Legacy REV-A
+calibration fields (PCAP04/SCL3300 scale/zero constants) are deliberately not exposed** — REV
+B hardware doesn't carry those sensors; see `docs/api.md` §8 (the superseded v1 reference) for
+where this was flagged, and this document's status note for the "add back if/when the sensors
+come back" decision.
+
+Every resource shares the same shape:
+
+- **`GET`** — request: no payload (`LEN=0`). Response: status byte + a 4-byte little-endian
+  `float`, IEEE 754. Status codes: `OK` · `BAD_CRC` · `BAD_LENGTH` (nonzero `LEN`).
+- **`SET`** — request: a 4-byte little-endian `float`. Response: status byte only. Status
+  codes: `OK` (queued for EEPROM write — see the note below) · `BAD_CRC` ·
+  `BAD_LENGTH` (`LEN != 4`) · `BUSY_RESOURCE` (another EEPROM write already in progress, or —
+  rarely — this one failed to queue; retry shortly either way) · `INVALID_PARAMETER` (value
+  outside the resource's valid range, §6.1–§6.7 below).
+
+**`SET`'s `OK` means "accepted and queued", not "durably written."** EEPROM writes in this
+firmware are non-blocking and drained over subsequent scheduler ticks; a write that fails
+*after* being queued (rare — exhausted retries) is only observable via a later `GET` still
+returning the old value, or the device's local UI showing a save-failed indicator. There is no
+push notification for this today (Calibrations isn't subscribable) — a host that needs
+certainty should `GET` back the value it just `SET` after a short delay.
+
+### 6.1 Sensor 1 gain — opcode `0x0200` / `0x1200`
+
+`resource=0x00`. `k = atten × gain` (§6.7's `atten` is shared) is a divisor in the
+displacement math (`Services/svc_displacement.c`); must be nonzero.
+
+| Field | Type | Valid range | Default |
+|---|---|---|---|
+| `gain` | `float` | `0.1` – `1000.0` | `10.0` |
+
+### 6.2 Sensor 1 neutral gap (d0) — opcode `0x0201` / `0x1201`
+
+`resource=0x01`.
+
+| Field | Type | Valid range | Default |
+|---|---|---|---|
+| `d0_mm` | `float` | `0.001` – `10.0` | `0.1` |
+
+### 6.3 Sensor 1 zero offset — opcode `0x0202` / `0x1202`
+
+`resource=0x02`.
+
+| Field | Type | Valid range | Default |
+|---|---|---|---|
+| `zero_offset_mm` | `float` | `-10.0` – `10.0` | `0.0` |
+
+### 6.4 Sensor 2 gain — opcode `0x0203` / `0x1203`
+
+`resource=0x03`. Same shape as §6.1, sensor 2.
+
+### 6.5 Sensor 2 neutral gap (d0) — opcode `0x0204` / `0x1204`
+
+`resource=0x04`. Same shape as §6.2, sensor 2.
+
+### 6.6 Sensor 2 zero offset — opcode `0x0205` / `0x1205`
+
+`resource=0x05`. Same shape as §6.3, sensor 2.
+
+### 6.7 Shared attenuation — opcode `0x0206` / `0x1206`
+
+`resource=0x06`. Shared across both sensors (not per-sensor) — see `Services/
+svc_displacement.c` for how it combines with each sensor's own `gain`.
+
+| Field | Type | Valid range | Default |
+|---|---|---|---|
+| `atten` | `float` | `0.1` – `100.0` | `3.0` |
+
+### 6.8 Worked example — get, set, and a rejected value
+
+Get sensor 1's gain:
+```
+Request:  00 02 00 00 A0 EA                    (OPCODE=0x0200, LEN=0, CRC=0xEAA0)
+Response: 00 02 04 00 00 00 00 20 41 11 08      (status=0x00 OK, gain=10.0, CRC=0x0811)
+```
+
+Attempt to set it to exactly `0.0` (below the `0.1` minimum — would make `k = atten × gain`
+zero, a divide-by-zero in the displacement math):
+```
+Request:  00 12 04 00 00 00 00 00 07 60         (OPCODE=0x1200, LEN=4, value=0.0, CRC=0x6007)
+Response: 00 12 01 00 08 FB 51                  (status=0x08 INVALID_PARAMETER, CRC=0x51FB)
+```
+
+---
+
+## 7. Settings (category `0x3`)
+
+Every `DeviceSettings` field (scheduler periods, battery thresholds, and the calibration
+constants each on-board sensor's own driver uses to convert its raw reading — TMP236, LM35,
+the battery-voltage divider). `GET`/`SET`, not subscribable, same non-blocking/busy/`OK`-means-
+queued behavior as Calibrations (§6) — see that section's note, it applies here identically.
+
+Shared behavior:
+
+- **`GET`** — request: no payload. Response: status byte + the field's raw value, little-endian,
+  width per the table below (1, 2, or 4 bytes). Status codes: `OK` · `BAD_CRC` ·
+  `BAD_LENGTH`.
+- **`SET`** — request: the field's value, little-endian, same width as its `GET` response.
+  Response: status byte only. Status codes: `OK` · `BAD_CRC` · `BAD_LENGTH` (wrong width) ·
+  `BUSY_RESOURCE` · `INVALID_PARAMETER` (outside the field's valid range — every field below
+  has one; none accept an arbitrary value of the right width).
+
+**Two fields currently have no effect on device behavior**: `task_processing_ms` and the
+`filter_cutoff_hz_num`/`filter_cutoff_hz_den` pair are real, persisted, individually
+`GET`/`SET`-able settings with no firmware consumer yet (a complementary filter that would use
+the cutoff pair is still future work). `SET` on them succeeds normally; it just doesn't change
+any observable behavior today.
+
+**`battery_critical_mv` and `battery_low_mv` have a cross-field constraint `SET` enforces**:
+`critical` must stay strictly less than `low` (`Services/svc_battery.c` relies on this
+ordering to classify battery state correctly). A `SET` that would invert the pair — even
+though the new value is within that field's own `[min,max]` — is rejected with
+`INVALID_PARAMETER`, checked against whichever value is *currently stored* for the other
+field. No other field in this category has a cross-field constraint.
+
+| # | Resource | Field | Type | Valid range | Default | Notes |
+|---|---|---|---|---|---|---|
+| `0x00` | Sensor task period | `task_sensors_ms` | `uint16` (ms) | 1–60000 | 100 | |
+| `0x01` | Processing task period | `task_processing_ms` | `uint16` (ms) | 1–60000 | — | No consumer yet |
+| `0x02` | Display task period | `task_display_ms` | `uint16` (ms) | 1–60000 | — | |
+| `0x03` | BLE task period | `task_ble_ms` | `uint16` (ms) | 1–60000 | — | |
+| `0x04` | USB task period | `task_usb_ms` | `uint16` (ms) | 1–60000 | — | |
+| `0x05` | Battery task period | `task_battery_ms` | `uint16` (ms) | 1–60000 | — | |
+| `0x06` | Temperature task period | `task_temperature_ms` | `uint16` (ms) | 1–60000 | — | |
+| `0x07` | Stream interval (local UI) | `stream_interval_ms` | `uint16` (ms) | 1–60000 | 200 | No API-layer consumer (v1's STREAM_DATA is gone); still read/written by the device's own SETTINGS screen |
+| `0x08` | Settling threshold | `settling_threshold_umpm` | `int32` (µm/m) | 1–100000 | 10 | |
+| `0x09` | Settling timeout | `settling_timeout_ms` | `uint32` (ms) | 1–60000 | — | |
+| `0x0A` | Filter cutoff numerator | `filter_cutoff_hz_num` | `uint16` | 1–10000 | — | No consumer yet |
+| `0x0B` | Filter cutoff denominator | `filter_cutoff_hz_den` | `uint16` | 1–10000 | — | No consumer yet |
+| `0x0C` | Battery critical threshold | `battery_critical_mv` | `uint16` (mV) | 2500–4200, and `< battery_low_mv` | 3650 | Cross-field constraint, see above |
+| `0x0D` | Battery low threshold | `battery_low_mv` | `uint16` (mV) | 2500–4200, and `> battery_critical_mv` | 3800 | Cross-field constraint, see above |
+| `0x0E` | VBAT scale numerator | `vbat_scale_num` | `uint16` | 1–10000 | — | |
+| `0x0F` | VBAT scale denominator | `vbat_scale_den` | `uint16` | 1–10000 | — | |
+| `0x10` | TMP236 seg1 voltage offset | `tmp236_seg1_voffs_mv` | `uint16` (mV) | 0–3300 | 400 | |
+| `0x11` | TMP236 seg1 slope numerator | `tmp236_seg1_num` | `uint16` | 1–10000 | 200 | |
+| `0x12` | TMP236 seg1 slope denominator | `tmp236_seg1_den` | `uint16` | 1–10000 | 39 | |
+| `0x13` | TMP236 segment boundary | `tmp236_seg_boundary_mv` | `uint16` (mV) | 0–3300 | 2350 | |
+| `0x14` | TMP236 seg2 voltage offset | `tmp236_seg2_voffs_mv` | `uint16` (mV) | 0–3300 | 2350 | |
+| `0x15` | TMP236 seg2 slope numerator | `tmp236_seg2_num` | `uint16` | 1–10000 | 1000 | |
+| `0x16` | TMP236 seg2 slope denominator | `tmp236_seg2_den` | `uint16` | 1–10000 | 197 | |
+| `0x17` | TMP236 seg2 inflection point | `tmp236_seg2_tinfl_cdeg` | `uint16` (0.01°C) | 0–20000 | 10000 | |
+| `0x18` | LM35 scale factor | `lm35_scale_mv_per_c` | `uint16` (mV/°C) | 1–1000 | 10 | |
+| `0x19` | Encoder counts per detent | `encoder_counts_per_detent` | `uint16` | 1–100 | 4 | |
+| `0x1A` | BLE configured flag | `ble_configured` | `uint8` (bool) | 0–1 | 0 | |
+
+Opcode = `0x0300 | resource` for `GET`, `0x1300 | resource` for `SET` (e.g. `battery_critical_mv`,
+resource `0x0C`: `GET`=`0x030C`, `SET`=`0x130C`).
+
+### 7.1 Worked example — get, set, and the cross-field rejection
+
+Get the sensor task period:
+```
+Request:  00 03 00 00 90 DD                    (OPCODE=0x0300, LEN=0, CRC=0xDD90)
+Response: 00 03 03 00 00 64 00 12 16            (status=0x00 OK, value=100 (0x0064), CRC=0x1612)
+```
+
+Set the battery critical threshold to 3650 mV (its own default — within range, and below the
+current `battery_low_mv` default of 3800):
+```
+Request:  0C 13 02 00 42 0E 73 88               (OPCODE=0x130C, LEN=2, value=3650, CRC=0x8873)
+Response: 0C 13 01 00 00 6C 2D                  (status=0x00 OK, CRC=0x2D6C)
+```
+
+Attempt to set it to 4000 mV instead — individually within the field's own 2500–4200 range,
+but at or above the currently-stored `battery_low_mv` (3800), inverting the pair:
+```
+Request:  0C 13 02 00 A0 0F 82 EE               (OPCODE=0x130C, LEN=2, value=4000, CRC=0xEE82)
+Response: 0C 13 01 00 08 64 AC                  (status=0x08 INVALID_PARAMETER, CRC=0xAC64)
+```
+
+---
+
+## 8. Measurements (category `0x4`)
 
 Individual live sensor readings. `GET` (one-shot) and `SUBSCRIBE`/`UNSUBSCRIBE` (periodic
 push) all valid; not `SET`-able. Never blocks, no exclusivity rules apply (unlimited
@@ -231,7 +407,7 @@ Every resource in this category shares the same request/response shape apart fro
 payload itself:
 
 - **`GET`** — request: no payload (`LEN=0`). Response: status byte + the resource's current
-  value (format per-resource, §6.1–§6.9 below). Status codes: `OK` · `BAD_CRC` · `BAD_LENGTH`
+  value (format per-resource, §8.1–§8.9 below). Status codes: `OK` · `BAD_CRC` · `BAD_LENGTH`
   (nonzero `LEN`).
 - **`SUBSCRIBE`** — request: 4-byte little-endian `uint32 interval_ms`, valid range
   `50`–`3600000` (1 hour) inclusive. Response: status byte only (no value — the value arrives
@@ -252,7 +428,7 @@ payload itself:
   is large enough to ever need multi-packet delivery, so there is only ever one page per push.
   `value` is the same format as the `GET` response's value.
 
-### 6.1 Onboard temperature — opcode `0x0400` / `0x3400` / `0x4400`
+### 8.1 Onboard temperature — opcode `0x0400` / `0x3400` / `0x4400`
 
 `resource=0x00`. Source: TMP236 (`Drivers_App/drv_tmp236.c`).
 
@@ -263,7 +439,7 @@ payload itself:
 No validity companion field — firmware has no presence/fault signal for this sensor; a stale
 last-known value and a live one are indistinguishable on the wire.
 
-### 6.2 External temperature — opcode `0x0401` / `0x3401` / `0x4401`
+### 8.2 External temperature — opcode `0x0401` / `0x3401` / `0x4401`
 
 `resource=0x01`. Source: LM35 (`Drivers_App/drv_lm35.c`).
 
@@ -271,37 +447,37 @@ last-known value and a live one are indistinguishable on the wire.
 |---|---|---|---|
 | 0 | `temp_cdeg` | `int16` | Centidegrees C (0.01°C/LSB) |
 
-Same no-validity-field caveat as §6.1.
+Same no-validity-field caveat as §8.1.
 
-### 6.3 BME280 temperature — opcode `0x0402` / `0x3402` / `0x4402`
+### 8.3 BME280 temperature — opcode `0x0402` / `0x3402` / `0x4402`
 
 `resource=0x02`. Source: BME280 environmental sensor (`Drivers_App/drv_bme280.c`), a
-different physical sensor from §6.1/§6.2 — do not conflate the three.
+different physical sensor from §8.1/§8.2 — do not conflate the three.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `temp_cdeg` | `int16` | Centidegrees C (0.01°C/LSB) |
 | 2 | `valid` | `uint8` | 0/1 — `false` until the first successful BME280 conversion after boot |
 
-### 6.4 BME280 pressure — opcode `0x0403` / `0x3403` / `0x4403`
+### 8.4 BME280 pressure — opcode `0x0403` / `0x3403` / `0x4403`
 
 `resource=0x03`.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `pressure_pa` | `uint32` | Pascals |
-| 4 | `valid` | `uint8` | 0/1, same meaning as §6.3 |
+| 4 | `valid` | `uint8` | 0/1, same meaning as §8.3 |
 
-### 6.5 BME280 humidity — opcode `0x0404` / `0x3404` / `0x4404`
+### 8.5 BME280 humidity — opcode `0x0404` / `0x3404` / `0x4404`
 
 `resource=0x04`.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `humidity_centipct` | `uint16` | 0.01 %RH/LSB |
-| 2 | `valid` | `uint8` | 0/1, same meaning as §6.3 |
+| 2 | `valid` | `uint8` | 0/1, same meaning as §8.3 |
 
-### 6.6 Displacement sensor 1, delta — opcode `0x0405` / `0x3405` / `0x4405`
+### 8.6 Displacement sensor 1, delta — opcode `0x0405` / `0x3405` / `0x4405`
 
 `resource=0x05`. Source: WP10 differential-capacitor displacement sensing
 (`Services/svc_displacement.c`) — most-recent-cycle snapshot, not the full per-cycle stream
@@ -312,26 +488,26 @@ different physical sensor from §6.1/§6.2 — do not conflate the three.
 | 0 | `delta_mm` | `float` | Displacement, mm |
 | 4 | `valid` | `uint8` | 0/1 — `false` until at least one displacement cycle has been fully computed after boot |
 
-### 6.7 Displacement sensor 1, residual — opcode `0x0406` / `0x3406` / `0x4406`
+### 8.7 Displacement sensor 1, residual — opcode `0x0406` / `0x3406` / `0x4406`
 
 `resource=0x06`.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
 | 0 | `residual` | `float` | Im(x) from the complex division — diagnostic, should sit near 0 if the physical model holds; not itself part of the displacement result |
-| 4 | `valid` | `uint8` | 0/1, same meaning as §6.6 |
+| 4 | `valid` | `uint8` | 0/1, same meaning as §8.6 |
 
-### 6.8 Displacement sensor 2, delta — opcode `0x0407` / `0x3407` / `0x4407`
+### 8.8 Displacement sensor 2, delta — opcode `0x0407` / `0x3407` / `0x4407`
 
-`resource=0x07`. Same shape as §6.6, sensor 2.
+`resource=0x07`. Same shape as §8.6, sensor 2.
 
-### 6.9 Displacement sensor 2, residual — opcode `0x0408` / `0x3408` / `0x4408`
+### 8.9 Displacement sensor 2, residual — opcode `0x0408` / `0x3408` / `0x4408`
 
-`resource=0x08`. Same shape as §6.7, sensor 2.
+`resource=0x08`. Same shape as §8.7, sensor 2.
 
-### 6.10 Worked example — subscribe, receive a push, unsubscribe
+### 8.10 Worked example — subscribe, receive a push, unsubscribe
 
-Subscribe to BME280 temperature (§6.3) at 1000 ms:
+Subscribe to BME280 temperature (§8.3) at 1000 ms:
 
 ```
 Request:  02 34 04 00 E8 03 00 00 0B 78
@@ -371,7 +547,7 @@ Response: 02 34 01 00 08 AF 05           (status=0x08 INVALID_PARAMETER, CRC=0x0
 
 ---
 
-## 7. Transports
+## 9. Transports
 
 | Transport | Framing | Notes |
 |---|---|---|
@@ -387,7 +563,7 @@ implemented.
 
 ---
 
-## 8. Common error responses (worked examples)
+## 10. Common error responses (worked examples)
 
 These apply to any request, not one specific resource — shown against `GET` Identity
 (§4.1) as a representative example.
@@ -416,6 +592,6 @@ Request:  00 00 01 00 AB BD 22     (OPCODE=0x0000, LEN=1, payload=[0xAB])
 Response: 00 00 01 00 05 99 76     (status=0x05 BAD_LENGTH, CRC=0x7699)
 ```
 
-**Unknown category** — any opcode whose category field is `0x2`, `0x3`, or `0x5`–`0xF` (not yet
-implemented, or not defined) gets `UNKNOWN_CATEGORY` (`0x01`) the same way. (`0x4`,
-Measurements, is implemented — see §6.)
+**Unknown category** — any opcode whose category field is `0x5`–`0xF` (not yet implemented, or
+not defined) gets `UNKNOWN_CATEGORY` (`0x01`) the same way. (`0x2` Calibrations, `0x3`
+Settings, and `0x4` Measurements are all implemented — see §6, §7, §8 respectively.)
