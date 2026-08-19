@@ -314,7 +314,7 @@
 #define VBAT_DIV_HIGH_K     100
 #define VBAT_DIV_LOW_K      33
 
-/* LM35 (for the future TEMP_SENSE_EXT driver) and TMP236 (TEMP_SENSE,
+/* LM35 (TEMP_SENSE_EXT, Drivers_App/drv_lm35.c) and TMP236 (TEMP_SENSE,
  * Drivers_App/drv_tmp236.c) conversion formulas are also EEPROM-backed —
  * see config.h's DEFAULT_LM35_SCALE_MV_PER_C / DEFAULT_TMP236_* for the
  * seed values and system_state.h for the fields. No calibration constant

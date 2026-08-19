@@ -6,11 +6,15 @@ Supersedes `docs/api.md` (the v1 reference).
 
 > **Status: in progress.** This document is built out incrementally, one category at a time,
 > alongside firmware implementation (WP11, per `docs/api-v2-spec.md` §8) — it is not written
-> once at the end. **Currently covered: System status (§4), Commands (§5).** Calibrations,
-> Settings, Measurements, Topic groups, Debug messages, Raw data, and Bulk transfers are
-> designed (see `docs/api-v2-spec.md`) but not yet implemented in firmware, and have no
+> once at the end. **Currently covered: System status (§4), Commands (§5), Measurements
+> (§6).** Calibrations, Settings, Topic groups, Debug messages, Raw data, and Bulk transfers
+> are designed (see `docs/api-v2-spec.md`) but not yet implemented in firmware, and have no
 > resources documented here yet — sending any opcode in those categories today gets
-> `UNKNOWN_CATEGORY` (§3).
+> `UNKNOWN_CATEGORY` (§3). Per a 2026-08-19 project rule: every individual measurement result,
+> device setting, and calibration constant is exposed as its own resource "out of the box";
+> bigger constructs (Topic groups, Bulk transfers, and WP10's high-rate displacement-cycle
+> stream, which would live under Raw data) are deliberately deferred until an actual need for
+> them exists, rather than built speculatively now.
 
 ---
 
@@ -22,7 +26,7 @@ Supersedes `docs/api.md` (the v1 reference).
 
 - **OPCODE** — 16 bits, little-endian. Structure in §2.
 - **LEN** — payload length in bytes, little-endian. No fixed maximum in the protocol itself;
-  see §6's transport notes for the current practical ceiling.
+  see §7's transport notes for the current practical ceiling.
 - **PAYLOAD** — opcode-specific, little-endian. For every response, byte 0 of PAYLOAD is
   always a status code (§3); resource-specific data, if any, follows starting at byte 1.
 - **CRC16** — CRC-16/CCITT-FALSE (poly `0x1021`, init `0xFFFF`, no input/output reflection,
@@ -69,7 +73,7 @@ opcode = (verb << 12) | (category << 8) | resource_index
 | Commands | `0x1` | **Implemented** (§5) |
 | Calibrations | `0x2` | Not yet implemented |
 | Settings | `0x3` | Not yet implemented |
-| Measurements | `0x4` | Not yet implemented |
+| Measurements | `0x4` | **Implemented** (§6) |
 | Topic groups | `0x5` | Not yet implemented |
 | Debug messages | `0x6` | Not yet implemented |
 | Raw data | `0x7` | Not yet implemented |
@@ -216,7 +220,158 @@ Response:
 
 ---
 
-## 6. Transports
+## 6. Measurements (category `0x4`)
+
+Individual live sensor readings. `GET` (one-shot) and `SUBSCRIBE`/`UNSUBSCRIBE` (periodic
+push) all valid; not `SET`-able. Never blocks, no exclusivity rules apply (unlimited
+concurrent requests/subscriptions, any transport, any time — none of these resources are in
+the exclusivity group described in `docs/api-v2-spec.md` §4.4).
+
+Every resource in this category shares the same request/response shape apart from the value
+payload itself:
+
+- **`GET`** — request: no payload (`LEN=0`). Response: status byte + the resource's current
+  value (format per-resource, §6.1–§6.9 below). Status codes: `OK` · `BAD_CRC` · `BAD_LENGTH`
+  (nonzero `LEN`).
+- **`SUBSCRIBE`** — request: 4-byte little-endian `uint32 interval_ms`, valid range
+  `50`–`3600000` (1 hour) inclusive. Response: status byte only (no value — the value arrives
+  as the first push, a separate later packet). Status codes: `OK` · `BAD_CRC` · `BAD_LENGTH`
+  (`LEN != 4`) · `INVALID_PARAMETER` (`interval_ms` outside the valid range). Re-subscribing
+  to an already-subscribed resource on the same transport updates `interval_ms` in place
+  (spec §4.3) — no error, no duplicate subscription, and the running `issue_seq` (below) is
+  **not** reset.
+- **`UNSUBSCRIBE`** — request: no payload (`LEN=0`). Response: status byte only. Status codes:
+  `OK` · `BAD_CRC` · `BAD_LENGTH` (nonzero `LEN`) · `NOT_SUBSCRIBED` (no active subscription
+  for this resource on this transport).
+- **Subscription pushes** — sent under the **same opcode as the `SUBSCRIBE` request** (verb
+  stays `SUBSCRIBE`, spec §3.1), once per `interval_ms`, until unsubscribed or the transport
+  disconnects (disconnecting — or reconnecting — clears all of that transport's subscriptions;
+  a host must re-`SUBSCRIBE` after every reconnect). Payload: `[status=OK][issue_seq][page][value]`.
+  `issue_seq` (`uint8`) increments once per push and wraps at 256 — compare with wraparound-safe
+  (modular) arithmetic, not `seq != prev+1`. `page` is always `0`: no resource in this category
+  is large enough to ever need multi-packet delivery, so there is only ever one page per push.
+  `value` is the same format as the `GET` response's value.
+
+### 6.1 Onboard temperature — opcode `0x0400` / `0x3400` / `0x4400`
+
+`resource=0x00`. Source: TMP236 (`Drivers_App/drv_tmp236.c`).
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `temp_cdeg` | `int16` | Centidegrees C (0.01°C/LSB) |
+
+No validity companion field — firmware has no presence/fault signal for this sensor; a stale
+last-known value and a live one are indistinguishable on the wire.
+
+### 6.2 External temperature — opcode `0x0401` / `0x3401` / `0x4401`
+
+`resource=0x01`. Source: LM35 (`Drivers_App/drv_lm35.c`).
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `temp_cdeg` | `int16` | Centidegrees C (0.01°C/LSB) |
+
+Same no-validity-field caveat as §6.1.
+
+### 6.3 BME280 temperature — opcode `0x0402` / `0x3402` / `0x4402`
+
+`resource=0x02`. Source: BME280 environmental sensor (`Drivers_App/drv_bme280.c`), a
+different physical sensor from §6.1/§6.2 — do not conflate the three.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `temp_cdeg` | `int16` | Centidegrees C (0.01°C/LSB) |
+| 2 | `valid` | `uint8` | 0/1 — `false` until the first successful BME280 conversion after boot |
+
+### 6.4 BME280 pressure — opcode `0x0403` / `0x3403` / `0x4403`
+
+`resource=0x03`.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `pressure_pa` | `uint32` | Pascals |
+| 4 | `valid` | `uint8` | 0/1, same meaning as §6.3 |
+
+### 6.5 BME280 humidity — opcode `0x0404` / `0x3404` / `0x4404`
+
+`resource=0x04`.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `humidity_centipct` | `uint16` | 0.01 %RH/LSB |
+| 2 | `valid` | `uint8` | 0/1, same meaning as §6.3 |
+
+### 6.6 Displacement sensor 1, delta — opcode `0x0405` / `0x3405` / `0x4405`
+
+`resource=0x05`. Source: WP10 differential-capacitor displacement sensing
+(`Services/svc_displacement.c`) — most-recent-cycle snapshot, not the full per-cycle stream
+(the latter is deferred, see this document's status note).
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `delta_mm` | `float` | Displacement, mm |
+| 4 | `valid` | `uint8` | 0/1 — `false` until at least one displacement cycle has been fully computed after boot |
+
+### 6.7 Displacement sensor 1, residual — opcode `0x0406` / `0x3406` / `0x4406`
+
+`resource=0x06`.
+
+| Offset | Field | Type | Meaning |
+|---|---|---|---|
+| 0 | `residual` | `float` | Im(x) from the complex division — diagnostic, should sit near 0 if the physical model holds; not itself part of the displacement result |
+| 4 | `valid` | `uint8` | 0/1, same meaning as §6.6 |
+
+### 6.8 Displacement sensor 2, delta — opcode `0x0407` / `0x3407` / `0x4407`
+
+`resource=0x07`. Same shape as §6.6, sensor 2.
+
+### 6.9 Displacement sensor 2, residual — opcode `0x0408` / `0x3408` / `0x4408`
+
+`resource=0x08`. Same shape as §6.7, sensor 2.
+
+### 6.10 Worked example — subscribe, receive a push, unsubscribe
+
+Subscribe to BME280 temperature (§6.3) at 1000 ms:
+
+```
+Request:  02 34 04 00 E8 03 00 00 0B 78
+          (OPCODE=0x3402, LEN=4, interval_ms=1000, CRC=0x780B)
+Response: 02 34 01 00 00 A7 84
+          (status=0x00 OK, CRC=0x84A7)
+```
+
+First push, ~1000 ms later (temperature 26.50°C, sensor valid):
+
+```
+02 34 06 00 00 00 00 5A 0A 01 70 B1
+(OPCODE=0x3402 -- same as the request, LEN=6, status=0x00 OK, issue_seq=0,
+ page=0, temp_cdeg=0x0A5A=2650, valid=1, CRC=0xB170)
+```
+
+Unsubscribe:
+
+```
+Request:  02 44 00 00 C5 A8              (OPCODE=0x4402, LEN=0, CRC=0xA8C5)
+Response: 02 44 01 00 00 D2 C6           (status=0x00 OK, CRC=0xC6D2)
+```
+
+Unsubscribing again with nothing active:
+
+```
+Request:  02 44 00 00 C5 A8              (identical request)
+Response: 02 44 01 00 09 FB 57           (status=0x09 NOT_SUBSCRIBED, CRC=0x57FB)
+```
+
+Subscribing with an interval below the minimum (10 ms):
+
+```
+Request:  02 34 04 00 0A 00 00 00 D9 48  (OPCODE=0x3402, interval_ms=10)
+Response: 02 34 01 00 08 AF 05           (status=0x08 INVALID_PARAMETER, CRC=0x05AF)
+```
+
+---
+
+## 7. Transports
 
 | Transport | Framing | Notes |
 |---|---|---|
@@ -232,7 +387,7 @@ implemented.
 
 ---
 
-## 7. Common error responses (worked examples)
+## 8. Common error responses (worked examples)
 
 These apply to any request, not one specific resource — shown against `GET` Identity
 (§4.1) as a representative example.
@@ -261,5 +416,6 @@ Request:  00 00 01 00 AB BD 22     (OPCODE=0x0000, LEN=1, payload=[0xAB])
 Response: 00 00 01 00 05 99 76     (status=0x05 BAD_LENGTH, CRC=0x7699)
 ```
 
-**Unknown category** — any opcode whose category field is `0x2`–`0xF` (not yet implemented or
-not defined) gets `UNKNOWN_CATEGORY` (`0x01`) the same way.
+**Unknown category** — any opcode whose category field is `0x2`, `0x3`, or `0x5`–`0xF` (not yet
+implemented, or not defined) gets `UNKNOWN_CATEGORY` (`0x01`) the same way. (`0x4`,
+Measurements, is implemented — see §6.)

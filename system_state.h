@@ -105,18 +105,34 @@ typedef struct {
     /* BME280 environmental sensor (WP9, Drivers_App/drv_bme280.c),
      * shares I2C1 with the EEPROM. bme280_temp_cdeg is a THIRD,
      * independent temperature reading -- not the same sensor as
-     * temperature_cdeg above (that field is the pre-REV-B
-     * SCL3300/PCAP04-era on-board reading; REV B has since gained its
-     * own separate TMP236, see svc_battery.c) or TEMP_SENSE_EXT's future
-     * LM35. Updated once per second by App/app_scheduler.c's
-     * task_bme280() (mirrors task_temperature()'s TMP236 pattern -- no
-     * Services-layer wrapper needed since drv_bme280.c already does all
-     * the compensation math itself); bme280_ok stays false until the
-     * first successful conversion. */
+     * temperature_cdeg above (despite this field's name/position, that's
+     * NOT a stale pre-REV-B SCL3300/PCAP04-era reading -- it was
+     * repurposed and is populated by REV B's own on-board TMP236, see
+     * App/app_scheduler.c's task_temperature() and
+     * Drivers_App/drv_tmp236.c; this comment previously described it as
+     * legacy, which was wrong and got fixed here 2026-08-19, WP11) or
+     * lm35_temp_cdeg below (TEMP_SENSE_EXT). Updated once per second by
+     * App/app_scheduler.c's task_bme280() (mirrors task_temperature()'s
+     * TMP236 pattern -- no Services-layer wrapper needed since
+     * drv_bme280.c already does all the compensation math itself);
+     * bme280_ok stays false until the first successful conversion. */
     int16_t  bme280_temp_cdeg;         /* 0.01 degC / LSB */
     uint32_t bme280_pressure_pa;       /* Pa */
     uint16_t bme280_humidity_centipct; /* 0.01 %RH / LSB */
     bool     bme280_ok;
+
+    /* LM35 external temperature sensor (WP11, Drivers_App/drv_lm35.c) --
+     * TEMP_SENSE_EXT (PB11/ADC1_IN15), previously sampled by hal_adc.c
+     * but never converted/published (raw ADC channel existed, no driver
+     * layer). Updated by the same App/app_scheduler.c task_temperature()
+     * call that updates temperature_cdeg above -- both channels come
+     * from the same shared ADC scan. No validity/"ok" companion field,
+     * matching temperature_cdeg's own precedent: an unpopulated LM35 and
+     * a populated-but-stale reading are indistinguishable from a bare
+     * ADC voltage with no I2C-ACK-style presence signal (unlike
+     * bme280_ok/sensor_pcap04_*_ok above, which come from a real
+     * comms-level ok/fail check). */
+    int16_t  lm35_temp_cdeg;           /* 0.01 degC / LSB */
 
     /* Displacement sensors S1/S2 (WP10), published by
      * Services/svc_displacement.c -- most-recent-cycle snapshot only,

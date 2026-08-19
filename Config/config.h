@@ -63,9 +63,8 @@
 #define DEFAULT_TMP236_SEG2_NUM         1000
 #define DEFAULT_TMP236_SEG2_DEN         197
 #define DEFAULT_TMP236_SEG2_TINFL_CDEG  10000
-/* LM35 (TI datasheet SNIS159H): 10 mV/°C, no offset. Not yet consumed by
- * any driver — TEMP_SENSE_EXT has no driver yet — kept here so the
- * default is defined in the same place as everything else once it is. */
+/* LM35 (TI datasheet SNIS159H): 10 mV/°C, no offset. Consumed by
+ * Drivers_App/drv_lm35.c (WP11). */
 #define DEFAULT_LM35_SCALE_MV_PER_C     10
 
 /* --- Encoder (WP3) ---

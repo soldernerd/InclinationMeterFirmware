@@ -12,17 +12,32 @@
  * previously implemented here. See docs/api-v2-spec.md for the design
  * rationale and docs/api-reference.md for the host-facing contract.
  *
- * Stage 1 of the implementation plan (2026-08-19 branching-strategy
- * discussion): core packet format + dispatcher (spec §2, §3, §5, §6),
- * proven end-to-end with the two simplest categories -- System status
- * (GET only) and Commands (EXECUTE only). No SUBSCRIBE/bulk machinery
- * yet; svc_api_update() is a no-op placeholder until stage 2 needs it.
+ * Stage 1 (2026-08-19): core packet format + dispatcher (spec §2, §3,
+ * §5, §6), proven end-to-end with the two simplest categories -- System
+ * status (GET only) and Commands (EXECUTE only). No SUBSCRIBE/bulk
+ * machinery yet.
+ *
+ * Stage 2 (2026-08-19): Measurements (category 0x4) -- every live sensor
+ * reading exposed as its own individually GET/SUBSCRIBE-able resource
+ * (project rule: single data points always available out of the box;
+ * bigger constructs like Topic groups/Bulk transfers deferred until an
+ * actual need exists). svc_api_update() stays a no-op; subscription
+ * delivery is its own function, svc_api_measurement_subscriptions_update(),
+ * polled by its own scheduler task -- see that function's own comment
+ * for why a shared interval-driven poll would be the wrong shape here.
  *
  * On-the-wire packet: [OPCODE 2B LE][LEN 2B LE][PAYLOAD 0..LEN][CRC16 2B
  * LE], no padding, total 6+LEN. Every response echoes the request's
  * opcode; a full status byte (Api2Status) is always the first byte of
  * the response payload, followed by resource-specific data (if any) only
- * when status is API2_STATUS_OK. */
+ * when status is API2_STATUS_OK. Subscription pushes are also sent under
+ * the request's opcode (verb=SUBSCRIBE) per spec §3.1, payload
+ * [status][issue_seq][page][resource value] -- see
+ * svc_api_measurement_subscriptions_update(). Plain GET responses do NOT
+ * carry issue/page counters (spec §2.3's wording is ambiguous on whether
+ * they're universal; none of this firmware's payloads are large enough
+ * to ever need multi-packet chaining, so there's nothing for a page
+ * counter to distinguish yet -- revisit if that changes). */
 
 #define MAX_PAYLOAD (API2_PACKET_MAX_SIZE - API2_PACKET_HDR_BYTES - API2_PACKET_CRC_BYTES)
 
@@ -57,6 +72,20 @@ typedef struct {
 } ApiTransportState;
 
 static ApiTransportState s_t[API_TRANSPORT_COUNT];
+
+/* Measurements (category 0x4) subscription state -- direct-indexed by
+ * resource index (see svc_api.h's API2_MEASUREMENT_SLOTS comment for why
+ * this is a slot-per-topic array, not a searched list). issue_seq is the
+ * per-subscription rolling counter (spec §2.3) -- reset to 0 whenever a
+ * subscription (re)starts, not shared across resubscriptions. */
+typedef struct {
+    bool     active;
+    uint32_t interval_ms;
+    uint32_t last_push_ms;
+    uint8_t  issue_seq;
+} MeasurementSubSlot;
+
+static MeasurementSubSlot s_meas_subs[API_TRANSPORT_COUNT][API2_MEASUREMENT_SLOTS];
 
 /* ---------------- helpers ---------------- */
 
@@ -218,6 +247,189 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
+/* ---------------- Measurements (GET, SUBSCRIBE, UNSUBSCRIBE) ---------------- */
+
+/* Every read_*() fills `buf` with exactly the resource's value payload
+ * (the bytes that follow the status byte in a GET response, or the
+ * issue/page bytes in a subscription push) and returns its length --
+ * resource-specific shape, not a generic framework concept (some carry a
+ * validity byte, some don't, matching whatever the underlying sensor
+ * actually provides -- see each function's own comment). Max payload
+ * across all of these is 5 bytes (a float + a validity byte), so a fixed
+ * 5-byte scratch buffer is enough for every resource in this table. */
+#define MEAS_VALUE_MAX_LEN 5U
+typedef uint16_t (*MeasurementReadFn)(uint8_t *buf);
+
+static uint16_t read_onboard_temp(uint8_t *buf)
+{
+    int16_t v = g_system_state.temperature_cdeg;
+    memcpy(buf, &v, sizeof v);
+    return sizeof v;
+}
+
+static uint16_t read_external_temp(uint8_t *buf)
+{
+    int16_t v = g_system_state.lm35_temp_cdeg;
+    memcpy(buf, &v, sizeof v);
+    return sizeof v;
+}
+
+static uint16_t read_bme280_temp(uint8_t *buf)
+{
+    int16_t v = g_system_state.bme280_temp_cdeg;
+    memcpy(buf, &v, sizeof v);
+    buf[sizeof v] = g_system_state.bme280_ok ? 1U : 0U;
+    return (uint16_t)(sizeof v + 1U);
+}
+
+static uint16_t read_bme280_pressure(uint8_t *buf)
+{
+    uint32_t v = g_system_state.bme280_pressure_pa;
+    memcpy(buf, &v, sizeof v);
+    buf[sizeof v] = g_system_state.bme280_ok ? 1U : 0U;
+    return (uint16_t)(sizeof v + 1U);
+}
+
+static uint16_t read_bme280_humidity(uint8_t *buf)
+{
+    uint16_t v = g_system_state.bme280_humidity_centipct;
+    memcpy(buf, &v, sizeof v);
+    buf[sizeof v] = g_system_state.bme280_ok ? 1U : 0U;
+    return (uint16_t)(sizeof v + 1U);
+}
+
+static uint16_t read_disp1_delta(uint8_t *buf)
+{
+    float v = g_system_state.disp1_delta_mm;
+    memcpy(buf, &v, sizeof v);
+    buf[sizeof v] = g_system_state.disp_ok ? 1U : 0U;
+    return (uint16_t)(sizeof v + 1U);
+}
+
+static uint16_t read_disp1_residual(uint8_t *buf)
+{
+    float v = g_system_state.disp1_residual;
+    memcpy(buf, &v, sizeof v);
+    buf[sizeof v] = g_system_state.disp_ok ? 1U : 0U;
+    return (uint16_t)(sizeof v + 1U);
+}
+
+static uint16_t read_disp2_delta(uint8_t *buf)
+{
+    float v = g_system_state.disp2_delta_mm;
+    memcpy(buf, &v, sizeof v);
+    buf[sizeof v] = g_system_state.disp_ok ? 1U : 0U;
+    return (uint16_t)(sizeof v + 1U);
+}
+
+static uint16_t read_disp2_residual(uint8_t *buf)
+{
+    float v = g_system_state.disp2_residual;
+    memcpy(buf, &v, sizeof v);
+    buf[sizeof v] = g_system_state.disp_ok ? 1U : 0U;
+    return (uint16_t)(sizeof v + 1U);
+}
+
+typedef struct {
+    uint8_t           resource;
+    MeasurementReadFn read;
+} MeasurementResourceDesc;
+
+static const MeasurementResourceDesc s_meas_resources[] = {
+    { API2_RES_MEAS_ONBOARD_TEMP,    read_onboard_temp },
+    { API2_RES_MEAS_EXTERNAL_TEMP,   read_external_temp },
+    { API2_RES_MEAS_BME280_TEMP,     read_bme280_temp },
+    { API2_RES_MEAS_BME280_PRESSURE, read_bme280_pressure },
+    { API2_RES_MEAS_BME280_HUMIDITY, read_bme280_humidity },
+    { API2_RES_MEAS_DISP1_DELTA,     read_disp1_delta },
+    { API2_RES_MEAS_DISP1_RESIDUAL,  read_disp1_residual },
+    { API2_RES_MEAS_DISP2_DELTA,     read_disp2_delta },
+    { API2_RES_MEAS_DISP2_RESIDUAL,  read_disp2_residual },
+};
+#define MEAS_RESOURCE_COUNT (sizeof(s_meas_resources) / sizeof(s_meas_resources[0]))
+
+static const MeasurementResourceDesc *find_meas_resource(uint8_t res)
+{
+    for (size_t i = 0; i < MEAS_RESOURCE_COUNT; ++i) {
+        if (s_meas_resources[i].resource == res) {
+            return &s_meas_resources[i];
+        }
+    }
+    return 0;
+}
+
+static void dispatch_measurements(ApiTransport t, uint16_t opcode, uint8_t verb,
+                                   uint8_t res, const uint8_t *frame, uint16_t paylen)
+{
+    if (verb != API2_VERB_GET && verb != API2_VERB_SUBSCRIBE && verb != API2_VERB_UNSUBSCRIBE) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    const MeasurementResourceDesc *desc = find_meas_resource(res);
+    if (desc == 0 || res >= API2_MEASUREMENT_SLOTS) {
+        /* The res >= API2_MEASUREMENT_SLOTS half can't actually happen
+         * with today's resource table (all indices are well under 32),
+         * but guards the subscription-slot array below against ever
+         * being indexed out of bounds if a resource is added above
+         * API2_MEASUREMENT_SLOTS without raising that constant too. */
+        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
+        return;
+    }
+    if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (verb == API2_VERB_GET) {
+        if (paylen != 0U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint8_t  val[MEAS_VALUE_MAX_LEN];
+        uint16_t vlen = desc->read(val);
+        send_response(t, opcode, API2_STATUS_OK, val, vlen);
+        return;
+    }
+
+    if (verb == API2_VERB_SUBSCRIBE) {
+        if (paylen != 4U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint32_t interval_ms = (uint32_t)frame[API2_PACKET_HDR_BYTES + 0U]
+                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 1U] << 8)
+                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 2U] << 16)
+                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 3U] << 24);
+        if (interval_ms < API2_MEASUREMENT_MIN_INTERVAL_MS
+            || interval_ms > API2_MEASUREMENT_MAX_INTERVAL_MS) {
+            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+            return;
+        }
+        /* Re-subscribing (already active) updates interval_ms in place
+         * and does NOT reset issue_seq -- spec §4.3: this is the same
+         * subscription continuing with new parameters, not a new one. */
+        MeasurementSubSlot *slot = &s_meas_subs[t][res];
+        if (!slot->active) {
+            slot->issue_seq = 0;
+        }
+        slot->active       = true;
+        slot->interval_ms  = interval_ms;
+        slot->last_push_ms = hal_systick_get_ms();
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        return;
+    }
+
+    /* API2_VERB_UNSUBSCRIBE */
+    if (paylen != 0U) {
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+    MeasurementSubSlot *slot = &s_meas_subs[t][res];
+    if (!slot->active) {
+        send_response(t, opcode, API2_STATUS_NOT_SUBSCRIBED, 0, 0);
+        return;
+    }
+    slot->active = false;
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
 /* ---------------- dispatch ---------------- */
 
 static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint16_t paylen)
@@ -232,6 +444,9 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
             return;
         case API2_CAT_COMMANDS:
             dispatch_commands(t, opcode, verb, res, frame, paylen);
+            return;
+        case API2_CAT_MEASUREMENTS:
+            dispatch_measurements(t, opcode, verb, res, frame, paylen);
             return;
         default:
             /* Every other category (0x2-0x8 defined but not yet built in
@@ -250,9 +465,22 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
 
 /* ---------------- public API ---------------- */
 
+/* Ends every active Measurements subscription on transport `t` -- called
+ * on both connect and disconnect (defensive on connect: a fresh session
+ * should never inherit a prior one's subscriptions regardless of
+ * call-ordering assumptions; required on disconnect: a dropped transport
+ * has nowhere for svc_api_measurement_subscriptions_update() to push
+ * to). */
+static void clear_measurement_subs(ApiTransport t)
+{
+    if (t >= API_TRANSPORT_COUNT) return;
+    memset(s_meas_subs[t], 0, sizeof s_meas_subs[t]);
+}
+
 void svc_api_init(void)
 {
     memset(s_t, 0, sizeof s_t);
+    memset(s_meas_subs, 0, sizeof s_meas_subs);
 }
 
 void svc_api_register_transport(ApiTransport t, ApiSendFn send_fn)
@@ -265,12 +493,14 @@ void svc_api_connected(ApiTransport t)
 {
     if (t >= API_TRANSPORT_COUNT) return;
     s_t[t].connected = true;
+    clear_measurement_subs(t);
 }
 
 void svc_api_disconnected(ApiTransport t)
 {
     if (t >= API_TRANSPORT_COUNT) return;
     s_t[t].connected = false;
+    clear_measurement_subs(t);
 }
 
 void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len)
@@ -343,9 +573,69 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
 
 void svc_api_update(void)
 {
-    /* Nothing to poll yet at stage 1 -- GET/EXECUTE are synchronous
-     * request/response with no periodic push, and there are no
-     * subscriptions or bulk transfers to service. Kept as a scheduler-
-     * callable hook (matches every other svc_*_update()) for stage 2's
-     * subscription delivery. */
+    /* Still nothing to poll here -- GET/EXECUTE/SET are synchronous
+     * request/response with no periodic push, so nothing in Measurements'
+     * one-shot GET path or any other stage-1/stage-2 category needs this.
+     * Measurements' subscription delivery is deliberately its OWN
+     * function (svc_api_measurement_subscriptions_update() below),
+     * polled by its own scheduler task rather than folded in here -- see
+     * that function's comment for why. Kept as a scheduler-callable hook
+     * (matches every other svc_*_update()) for whatever eventually does
+     * need a slower, generic poll (e.g. a future EXECUTE resource with
+     * async completion). */
+}
+
+void svc_api_measurement_subscriptions_update(void)
+{
+    /* A dedicated, every-tick-polled function rather than folded into
+     * svc_api_update() above: svc_api_update() is itself polled at
+     * task_sensors_ms (100 ms default, see App/app_scheduler.c) for
+     * stage-1-era reasons (matching v1's old poll cadence) that have
+     * nothing to do with Measurements -- tying subscription timing
+     * accuracy to that unrelated period would mean a 50 ms subscription
+     * interval (API2_MEASUREMENT_MIN_INTERVAL_MS) silently degrades to
+     * ~100 ms in practice. This function owns its own scheduling instead:
+     * called every tick by its own task, it walks all slots and only
+     * acts on the ones actually due, so subscription timing depends
+     * solely on each slot's own interval_ms. */
+    uint32_t now = hal_systick_get_ms();
+    for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
+        if (!s_t[t].connected) continue;
+        for (uint8_t res = 0; res < API2_MEASUREMENT_SLOTS; ++res) {
+            MeasurementSubSlot *slot = &s_meas_subs[t][res];
+            if (!slot->active) continue;
+            if ((uint32_t)(now - slot->last_push_ms) < slot->interval_ms) continue;
+
+            const MeasurementResourceDesc *desc = find_meas_resource(res);
+            if (desc == 0) {
+                /* Can't happen with today's table (every active slot was
+                 * only ever set by dispatch_measurements() after
+                 * confirming the resource exists), but a resource
+                 * removed from s_meas_resources[] in a future change
+                 * without also clearing any slot that referenced it
+                 * would land here -- skip rather than dereference a null
+                 * read function. */
+                continue;
+            }
+
+            uint16_t opcode = API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_MEASUREMENTS, res);
+            uint8_t  val[MEAS_VALUE_MAX_LEN];
+            uint16_t vlen = desc->read(val);
+
+            /* Push payload: [issue_seq][page=0] + resource value.
+             * send_response() prepends the status byte (always OK -- a
+             * push is only ever sent for a value that read successfully;
+             * there's no failure mode to report mid-stream). page is
+             * always 0: none of today's Measurements payloads are large
+             * enough to ever need multi-packet chaining, so there's only
+             * ever one page per delivery (see this file's top comment). */
+            uint8_t push[2U + MEAS_VALUE_MAX_LEN];
+            push[0] = slot->issue_seq++;
+            push[1] = 0U;   /* page */
+            memcpy(&push[2], val, vlen);
+            send_response(t, opcode, API2_STATUS_OK, push, (uint16_t)(2U + vlen));
+
+            slot->last_push_ms = now;
+        }
+    }
 }

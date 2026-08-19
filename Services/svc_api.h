@@ -128,4 +128,47 @@ typedef enum {
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, 0x00U)
 
+/* ---------------- stage 2: Measurements (category 0x4) ----------------
+ * GET (one-shot) and SUBSCRIBE/UNSUBSCRIBE (periodic push) both valid.
+ * Resource indices are constants (not full opcode macros like stage 1's
+ * System status/Commands above) -- each resource is used with all three
+ * verbs, and the dispatch table in svc_api.c is keyed by resource index
+ * directly, so a full expanded opcode macro per (verb,resource) pair
+ * would just be noise. Compute with API2_OPCODE(verb, API2_CAT_
+ * MEASUREMENTS, API2_RES_MEAS_*) at any call site that needs the literal
+ * opcode -- see docs/api-reference.md for the full table. */
+#define API2_RES_MEAS_ONBOARD_TEMP     0x00U   /* TMP236, Drivers_App/drv_tmp236.c */
+#define API2_RES_MEAS_EXTERNAL_TEMP    0x01U   /* LM35, Drivers_App/drv_lm35.c */
+#define API2_RES_MEAS_BME280_TEMP      0x02U
+#define API2_RES_MEAS_BME280_PRESSURE  0x03U
+#define API2_RES_MEAS_BME280_HUMIDITY  0x04U
+#define API2_RES_MEAS_DISP1_DELTA      0x05U
+#define API2_RES_MEAS_DISP1_RESIDUAL   0x06U
+#define API2_RES_MEAS_DISP2_DELTA      0x07U
+#define API2_RES_MEAS_DISP2_RESIDUAL   0x08U
+
+/* SUBSCRIBE request payload is a single little-endian uint32_t
+ * interval_ms, range-checked against these bounds (INVALID_PARAMETER
+ * outside them) -- MIN avoids a host flooding the device/link with
+ * updates for slow-changing physical quantities, MAX is a generous
+ * sanity ceiling, not a hardware limit. Judgment call, not a hardware
+ * constraint -- easy to revisit. */
+#define API2_MEASUREMENT_MIN_INTERVAL_MS 50U
+#define API2_MEASUREMENT_MAX_INTERVAL_MS 3600000U   /* 1 hour */
+
+/* Direct-indexed by resource index (not searched) -- one slot IS one
+ * topic's subscription state, so "one subscription per topic" (spec
+ * §4.3) falls out of the data structure rather than needing an explicit
+ * dedup check. Sized with headroom over today's 9 resources; scoped to
+ * Measurements only for now since it's the only subscribable category
+ * that exists yet -- generalize when a second one is built. */
+#define API2_MEASUREMENT_SLOTS 32U
+
+/* Polls due subscriptions and pushes updates. Call every scheduler tick
+ * -- matches every interval-driven svc_api.c mechanism so far (WP10's
+ * now-removed DISP_STREAM used the same shape); the actual push rate
+ * per subscription is governed by each slot's own interval_ms, not by
+ * how often this is called. */
+void svc_api_measurement_subscriptions_update(void);
+
 #endif /* SVC_API_H */

@@ -732,14 +732,15 @@ void svc_storage_validate_settings(DeviceSettings *settings)
      * zero divisor (e.g. a future bug in whatever writes this field, or
      * an untrusted SET_SETTINGS payload from svc_api.c) would otherwise
      * fault a consumer. Covers every EEPROM-backed divisor in
-     * DeviceSettings, including filter_cutoff_hz_den/lm35_scale_mv_per_c
-     * below, which have no consumer yet (the complementary filter and
-     * LM35 driver are both future work) — guarded now anyway so whoever
-     * wires either one up inherits protection instead of having to
-     * remember to extend this function first. encoder_counts_per_detent,
-     * vbat_scale_den, and the tmp236_seg*_den pair already have live
-     * consumers: App/app_ui.c divides by the encoder one every UI tick,
-     * Services/svc_battery.c and Drivers_App/drv_tmp236.c by theirs. */
+     * DeviceSettings, including filter_cutoff_hz_den below, which has no
+     * consumer yet (the complementary filter is still future work) —
+     * guarded now anyway so whoever wires it up inherits protection
+     * instead of having to remember to extend this function first.
+     * encoder_counts_per_detent, vbat_scale_den, the tmp236_seg*_den
+     * pair, and lm35_scale_mv_per_c (WP11, Drivers_App/drv_lm35.c) all
+     * already have live consumers: App/app_ui.c divides by the encoder
+     * one every UI tick, Services/svc_battery.c and
+     * Drivers_App/drv_tmp236.c/drv_lm35.c by theirs. */
     if (settings->encoder_counts_per_detent == 0U) {
         settings->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
     }

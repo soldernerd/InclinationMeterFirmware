@@ -3,6 +3,7 @@
 #include "app_leds.h"
 #include "app_ui.h"
 #include "drv_tmp236.h"
+#include "drv_lm35.h"
 #include "drv_bme280.h"
 #include "drv_buzzer.h"
 #include "hal_adc.h"
@@ -33,9 +34,9 @@ typedef struct {
 static void task_adc(void)
 {
     /* Restart the scan as soon as the previous one is consumed. The
-     * three downstream readers (drv_tmp236, svc_battery, optional VREFINT
-     * cross-check) run on their own slower periods and just sample the
-     * latest hal_adc results. */
+     * downstream readers (drv_tmp236, drv_lm35, svc_battery, optional
+     * VREFINT cross-check) run on their own slower periods and just
+     * sample the latest hal_adc results. */
     if (hal_adc_is_ready()) {
         hal_adc_start();
     }
@@ -47,9 +48,19 @@ static void task_temperature(void)
     if (drv_tmp236_get_result(&data) == DRV_OK) {
         g_system_state.temperature_cdeg = data.temp_cdeg;
     }
-    /* drv_tmp236_start_read just calls hal_adc_start; safe to call even if
-     * a scan is already running — hal_adc_start no-ops in that case. */
+    lm35_data_t ext_data;
+    if (drv_lm35_get_result(&ext_data) == DRV_OK) {
+        g_system_state.lm35_temp_cdeg = ext_data.temp_cdeg;
+    }
+    /* drv_tmp236_start_read/drv_lm35_start_read both just call
+     * hal_adc_start; safe to call even if a scan is already running --
+     * hal_adc_start no-ops in that case. Both channels come from the
+     * same shared scan (see hal_adc.h's adc_results_t), so either call
+     * alone would suffice, but each driver triggering its own read
+     * keeps them independently correct rather than one silently relying
+     * on the other. */
     (void)drv_tmp236_start_read();
+    (void)drv_lm35_start_read();
 }
 
 static void task_bme280(void)
@@ -121,15 +132,17 @@ static void task_uart(void)        { svc_uart_update();        }
 static void task_api(void)         { svc_api_update();         }
 static void task_measurement(void)  { svc_measurement_update(); }
 static void task_displacement(void) { svc_displacement_update(); }
+static void task_api_meas_subs(void) { svc_api_measurement_subscriptions_update(); }
 /* task_api_disp_stream (drained Services/svc_displacement.c's output ring
  * into v1 DISP_STREAM USB packets via svc_api_disp_stream_update()) is
  * removed here -- that v1 API-layer function no longer exists (WP11 API
  * v2 breaking replacement). task_displacement above is untouched and
  * still drains the ISR-side input ring into raw cycles; only the v1
- * API-layer consumer of the output ring is gone. Restored, in v2 shape,
- * when the displacement stream is migrated to the Raw data category
- * (folded into stage 2 alongside Measurements/Topic groups per the
- * 2026-08-19 branching-strategy discussion). Until then,
+ * API-layer consumer of the output ring is gone. The v2 equivalent is
+ * explicitly NOT stage 2 (2026-08-19 rule: only single-data-point
+ * Measurements/Settings/Calibrations are built "out of the box" right
+ * now; the high-rate per-cycle displacement stream is a "bigger item"
+ * like Topic groups/Bulk, deferred until actually needed). Until then,
  * svc_displacement_pop() has no caller and the output ring just holds
  * its usual rolling ~24.6 ms window unread, same as it did before
  * DISP_STREAM existed. */
@@ -155,6 +168,11 @@ static SchedulerEntry s_tasks[] = {
     { task_display,     0,                    0 },
     { task_leds,        DEFAULT_TASK_LED_MS, 0 },
     { task_bme280,      DEFAULT_TASK_BME280_MS, 0 },
+    { task_api_meas_subs, SYSTICK_PERIOD_MS, 0 },   /* every tick -- see
+                                                        * svc_api.h's doc
+                                                        * comment on
+                                                        * svc_api_measurement_
+                                                        * subscriptions_update() */
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 
@@ -190,11 +208,14 @@ void app_scheduler_reload_periods(void)
                                                      * svc_displacement.c */
     s_tasks[12].period_ms = g_device_settings.task_display_ms;   /* ui */
     s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* display */
-    /* s_tasks[8] (UART), s_tasks[14] (LEDs), and s_tasks[15] (BME280)
-     * periods are the fixed literals set in the table above — not
-     * user/BLE-configurable like the others (DeviceSettings has no room
-     * left for another field — see config.h's DEFAULT_TASK_UART_MS
-     * comment). */
+    /* s_tasks[8] (UART), s_tasks[14] (LEDs), s_tasks[15] (BME280), and
+     * s_tasks[16] (Measurements subscription delivery) periods are the
+     * fixed literals set in the table above — not user/BLE-configurable
+     * like the others (DeviceSettings has no room left for another field
+     * — see config.h's DEFAULT_TASK_UART_MS comment). s_tasks[16]
+     * specifically must stay fixed at SYSTICK_PERIOD_MS regardless — see
+     * svc_api.h's doc comment on
+     * svc_api_measurement_subscriptions_update(). */
 }
 
 void app_scheduler_init(void)

@@ -38,6 +38,7 @@
 #include "hal_power.h"
 #include "system_state.h"
 #include "drv_tmp236.h"
+#include "drv_lm35.h"
 #include "drv_bme280.h"
 #include "drv_24lc256.h"
 #include "drv_encoder.h"
@@ -175,6 +176,7 @@ int main(void)
   svc_storage_init();
   svc_battery_init();
   drv_tmp236_init();
+  drv_lm35_init();
   drv_24lc256_init();          /* idempotent — svc_storage_init already calls this */
 
   /* BME280 environmental sensor (WP9) -- shares I2C1 with the EEPROM
