@@ -5,7 +5,6 @@
 #include "app_version.h"
 #include "system_state.h"
 #include "svc_battery.h"
-#include "svc_api.h"
 #include "svc_measurement.h"
 #include "svc_ble.h"
 #include "hal_systick.h"
@@ -26,7 +25,8 @@ typedef struct {
     bool     usb_connected;
     bool     battery_critical;
     MeasurementState meas_state;
-    ApiMode  api_mode_usb;
+    /* api_mode_usb (v1 ApiMode) removed -- no v2 equivalent yet, see the
+     * removed stream-mode badge's comment above. */
     Rn4871State ble_state;
     uint8_t  ble_blink_phase;   /* 0/1 — toggles every 500 ms while advertising */
     UiScreen screen;
@@ -91,23 +91,14 @@ static void draw_top_bar(void)
         x = (u8g2_uint_t)(x - 2 - w);
         u8g2_DrawUTF8(&s_u8g2, x, 12, t);
     }
-    ApiMode m_usb = svc_api_get_mode(API_TRANSPORT_USB);
-    if (m_usb == API_MODE_RAW_STREAM) {
-        const char *t = "[RAW]";
-        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
-        x = (u8g2_uint_t)(x - 2 - w);
-        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
-    } else if (m_usb == API_MODE_STREAM) {
-        const char *t = "[STR]";
-        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
-        x = (u8g2_uint_t)(x - 2 - w);
-        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
-    } else if (m_usb == API_MODE_DISP_STREAM) {
-        const char *t = "[DSP]";
-        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
-        x = (u8g2_uint_t)(x - 2 - w);
-        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
-    }
+    /* Stream-mode badge ([RAW]/[STR]/[DSP]) removed here -- v1's ApiMode/
+     * svc_api_get_mode() no longer exist (WP11 API v2 breaking
+     * replacement, stage 1: only System status/Commands categories
+     * implemented so far, no subscription state yet). v2's Measurements/
+     * Topic groups/Raw data categories (stage 2) will need an equivalent
+     * per-transport "what's this transport subscribed to" query before
+     * this badge can come back -- flagged as a real, visible regression
+     * in the meantime, not silently dropped. */
     if (g_system_state.battery_charging) {
         const char *t = "[CHG]";
         u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
@@ -364,7 +355,6 @@ static bool snapshot_changed(void)
         || s_last.usb_connected    != g_system_state.usb_connected
         || s_last.battery_critical != g_system_state.battery_critical
         || s_last.meas_state       != svc_measurement_get_state()
-        || s_last.api_mode_usb     != svc_api_get_mode(API_TRANSPORT_USB)
         || s_last.ble_state        != svc_ble_get_state()
         || s_last.ble_blink_phase  != (uint8_t)((hal_systick_get_ms() / 500U) & 1U)
         || s_last.screen           != g_ui_state.current_screen
@@ -384,7 +374,6 @@ static void snapshot_capture(void)
     s_last.usb_connected    = g_system_state.usb_connected;
     s_last.battery_critical = g_system_state.battery_critical;
     s_last.meas_state       = svc_measurement_get_state();
-    s_last.api_mode_usb     = svc_api_get_mode(API_TRANSPORT_USB);
     s_last.ble_state        = svc_ble_get_state();
     s_last.ble_blink_phase  = (uint8_t)((hal_systick_get_ms() / 500U) & 1U);
     s_last.screen           = g_ui_state.current_screen;

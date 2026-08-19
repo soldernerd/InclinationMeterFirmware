@@ -59,18 +59,30 @@ bool hal_usb_send(const uint8_t *data, uint16_t len)
     if (!hal_usb_is_connected() || data == 0 || len == 0) {
         return false;
     }
-    /* Pad to full HID report size — the descriptor advertises a fixed
-     * 64-byte IN report and host stacks expect that exact length. The
-     * only real caller (svc_api.c's send_packet()) already builds a
-     * full, zero-padded USB_HID_REPORT_SIZE frame, so copy == sizeof
-     * s_tx_buf in practice and this memset is a no-op — kept defensive
-     * for a hypothetical future caller passing len < USB_HID_REPORT_SIZE,
-     * but only zeroing the actual remainder instead of always re-zeroing
-     * all 64 bytes first. */
-    uint16_t copy = len > USB_HID_REPORT_SIZE ? USB_HID_REPORT_SIZE : len;
-    memcpy(s_tx_buf, data, copy);
-    if (copy < sizeof(s_tx_buf)) {
-        memset(s_tx_buf + copy, 0, sizeof(s_tx_buf) - copy);
+    /* v2's svc_api.c (WP11) builds variable-length packets (6+LEN bytes,
+     * no padding) rather than v1's fixed 64-byte frames, so len < 64 is
+     * now the normal case, not just a hypothetical future caller — pad
+     * up to the descriptor's fixed 64-byte IN report size, which host
+     * stacks expect exactly.
+     *
+     * len > USB_HID_REPORT_SIZE, by contrast, is refused rather than
+     * silently truncated: a caller building a packet already checked
+     * against the reassembler's larger ceiling (API2_PACKET_MAX_SIZE,
+     * currently 128) could hand this function more than one physical
+     * report holds, and truncating would send a shorter-than-declared,
+     * CRC-mismatched frame while still reporting success -- exactly the
+     * silent corruption CLAUDE.md 7.6 exists to prevent. Multi-report
+     * chaining for payloads that don't fit isn't built yet (deferred,
+     * see svc_api.h's API2_PACKET_MAX_SIZE comment); until it is, this
+     * must fail loudly instead. send_via_usb() (Services/svc_usb.c)
+     * already escalates a false return into usb_tx_dropped_count, so
+     * this doesn't go silent either. */
+    if (len > USB_HID_REPORT_SIZE) {
+        return false;
+    }
+    memcpy(s_tx_buf, data, len);
+    if (len < sizeof(s_tx_buf)) {
+        memset(s_tx_buf + len, 0, sizeof(s_tx_buf) - len);
     }
 
     /* USBD_CUSTOM_HID_SendReport may return USBD_BUSY when a previous IN

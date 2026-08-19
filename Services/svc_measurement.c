@@ -1,5 +1,4 @@
 #include "svc_measurement.h"
-#include "svc_api.h"
 #include "math_settling.h"
 #include "hal_systick.h"
 #include "system_state.h"
@@ -129,16 +128,29 @@ void svc_measurement_update(void)
         if (s_buf_count >= SETTLING_BUFFER_SIZE) {
             finalise_packet(r.dc_umpm, r.sample_count);
             s_state = MEAS_STATE_COMPLETE;
-            svc_api_notify_single_ready();
+            /* svc_api_notify_single_ready() (v1) no longer exists -- the
+             * host-facing SINGLE_READY-equivalent push belongs to v2's
+             * Measurements category (WP11 API v2, stage 2, not yet
+             * built). No host can retrieve s_packet yet either way in
+             * this stage, so immediately acknowledging (rather than
+             * parking in MEAS_STATE_COMPLETE until a host that doesn't
+             * exist yet would have called svc_measurement_acknowledge())
+             * keeps the local UI's "[SGL]" busy-badge from getting stuck
+             * on after every capture -- svc_measurement_trigger() already
+             * allows re-triggering from COMPLETE just as well as from
+             * IDLE, so this doesn't change re-trigger behavior. */
+            svc_measurement_acknowledge();
             return;
         }
     }
 
     /* Periodic progress notification — every 500 ms during
-     * SETTLING/CAPTURING. svc_api owns the actual transmission and reads
-     * progress via svc_measurement_get_progress_pct(); this timestamp is
-     * currently unused by anything but kept for whoever wires a push
-     * path here instead of svc_api's own poll. */
+     * SETTLING/CAPTURING. v1's svc_api.c polled svc_measurement_get_
+     * progress_pct() on this cadence and pushed it as SINGLE_PROGRESS;
+     * that mechanism no longer exists (WP11 API v2 breaking replacement)
+     * and its v2 equivalent (Measurements category SUBSCRIBE, stage 2)
+     * isn't built yet. This timestamp is currently unused by anything but
+     * kept for whoever wires that push path back in. */
     if ((now - s_last_progress_ms) >= 500U) {
         s_last_progress_ms = now;
     }

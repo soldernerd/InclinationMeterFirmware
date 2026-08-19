@@ -201,6 +201,21 @@ typedef struct {
     /* Same again, but for Services/svc_uart.c's send_via_uart() path
      * (WP5.1) — the wired debug-UART transport's TX DMA already busy. */
     uint16_t uart_tx_dropped_count;
+
+    /* Services/svc_api.c (WP11 API v2) — a received frame whose declared
+     * LEN doesn't fit the bytes actually delivered, or whose CRC-valid
+     * response payload would exceed MAX_PAYLOAD, is dropped with no
+     * response (CLAUDE.md 7.6 escalation). Deliberately a counter, not a
+     * DBG_PRINT call: API_TRANSPORT_UART and the still-unimplemented
+     * DBG_PRINT() debug-log channel share the same physical wire
+     * (USART3, see docs/wp2-5_rebase_status.md's WP5.1 section) —
+     * emitting debug text from svc_api.c, which is transport-agnostic
+     * and runs this same code regardless of which transport triggered
+     * it, would corrupt the UART transport's own live protocol stream
+     * exactly when a UART-connected host is most likely to be actively
+     * testing. Saturates rather than wraps; never cleared once nonzero,
+     * matching every other drop counter here. */
+    uint16_t api_rx_malformed_count;
 } SystemState;
 
 typedef struct {

@@ -1,8 +1,18 @@
-# Device API Reference
+# Device API Reference (v1 — SUPERSEDED)
 
-Implementer's reference for the host-facing command/notification protocol implemented in
-`Services/svc_api.c`/`svc_api.h`. Describes the wire format as it exists in firmware today —
-not a design proposal.
+> **This document is stale as of 2026-08-19 (WP11).** `Services/svc_api.c`/`svc_api.h` were
+> rewritten as a breaking replacement — none of the opcodes, payload layouts, or per-transport
+> `ApiMode` state machine described below exist in firmware anymore. See
+> `docs/api-v2-spec.md` for the v2 design and `docs/api-reference.md` for the current
+> host-facing reference (in progress — built out incrementally alongside implementation, see
+> that document's own status note for exactly which categories are covered so far). Kept here
+> for historical reference only.
+
+---
+
+Implementer's reference for the **v1** host-facing command/notification protocol, as it
+existed in firmware before the WP11 API v2 rewrite. Describes the wire format as it existed
+at the time — not a design proposal, and no longer current.
 
 ---
 
