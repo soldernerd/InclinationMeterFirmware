@@ -161,7 +161,12 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef* timHandle)
     */
     GPIO_InitStruct.Pin = GPIO_PIN_9;
     GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
-    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    /* Pulled down (not NOPULL): CC4E stays cleared until drv_buzzer starts
+     * PWM, so this AF pin is otherwise undriven and was picking up coupled
+     * noise from the adjacent SPI clock, spuriously triggering the buzzer.
+     * TIM3_CH4 is OCPOLARITY_HIGH (idle-low), so pull-down matches its
+     * inactive level and is overridden harmlessly once PWM starts. */
+    GPIO_InitStruct.Pull = GPIO_PULLDOWN;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM3;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
