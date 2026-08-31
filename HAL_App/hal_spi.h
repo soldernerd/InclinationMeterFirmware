@@ -19,4 +19,10 @@ void hal_spi_cs_assert(HalSpiInstance instance);
 void hal_spi_cs_deassert(HalSpiInstance instance);
 bool hal_spi_is_busy(HalSpiInstance instance);
 
+/* Block until the SPI peripheral has finished shifting out every byte
+ * (TX FIFO empty + not BSY). The DMA-complete IRQ fires when the FIFO is
+ * *fed*, not when the wire is idle, so CS must not be released until this
+ * returns or the final bytes are truncated. */
+void hal_spi_wait_tx_done(HalSpiInstance instance);
+
 #endif /* HAL_SPI_H */

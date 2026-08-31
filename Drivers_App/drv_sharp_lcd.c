@@ -2,18 +2,27 @@
 #include "hal_spi.h"
 #include "hal_gpio.h"
 #include "hal_tim.h"
+#include "hal_systick.h"
 #include "pin_config.h"
 #include <string.h>
 
 #define CMD_WRITE_LINE   0x80U
 #define TRAILER          0x00U
 #define ROW_PACKET_SIZE  (1U + LCD_STRIDE)   /* line addr + 50 data = 51 */
+#define TRAILER_BYTES    8U                  /* >> datasheet's single trailing period */
+
+/* Generous SCS timing margins. Datasheet asks for t_sSCS >= 3 us setup and
+ * t_hSCS >= 1 us hold; anything under ~10 ms is immaterial to the update
+ * rate here, so use milliseconds and stop worrying about it. */
+#define SCS_SETUP_US     5000U
+#define SCS_HOLD_US      5000U
+#define DISP_ON_SETTLE_US 10000U
 
 /* One contiguous DMA buffer:
- *   [0x80] [line(1) | 50B data] [line(2) | 50B data] ... [line(240) | 50B data] [0x00]
- * Total = 1 + 240*51 + 1 = 12242 bytes.
+ *   [0x80] [line(1) | 50B data] ... [line(240) | 50B data] [8x 0x00]
+ * Total = 1 + 240*51 + 8 = 12249 bytes.
  */
-#define TX_BUFFER_SIZE  (1U + LCD_HEIGHT * ROW_PACKET_SIZE + 1U)
+#define TX_BUFFER_SIZE  (1U + LCD_HEIGHT * ROW_PACKET_SIZE + TRAILER_BYTES)
 static uint8_t s_tx_buf[TX_BUFFER_SIZE];
 
 static volatile bool s_busy = false;
@@ -38,6 +47,12 @@ static void on_dma_complete(HalSpiInstance instance, bool success)
 {
     (void)success;
     if (instance == HAL_SPI_DISPLAY) {
+        /* The DMA-complete IRQ fires when the FIFO is fed, not when the
+         * last bit has left the pin. Wait for the peripheral to go idle,
+         * then hold CS a generous margin before releasing it, or the
+         * final line and trailer get chopped. */
+        hal_spi_wait_tx_done(HAL_SPI_DISPLAY);
+        hal_systick_delay_us(SCS_HOLD_US);
         hal_spi_cs_deassert(HAL_SPI_DISPLAY);
         s_busy = false;
     }
@@ -50,7 +65,7 @@ static void prime_tx_buffer(void)
     for (uint16_t r = 0; r < LCD_HEIGHT; ++r) {
         s_tx_buf[1U + r * ROW_PACKET_SIZE] = bit_reverse((uint8_t)(r + 1U));
     }
-    s_tx_buf[TX_BUFFER_SIZE - 1U] = TRAILER;
+    memset(&s_tx_buf[1U + LCD_HEIGHT * ROW_PACKET_SIZE], TRAILER, TRAILER_BYTES);
     drv_sharp_lcd_clear_buffer();
 }
 
@@ -67,8 +82,10 @@ void drv_sharp_lcd_init(void)
      * period-elapsed ISR (hal_tim.c). */
     hal_tim_vcom_start();
 
-    /* Power up the display */
+    /* Power up the display, then let its internal supply settle before the
+     * first write (generous margin over the datasheet's power-up time). */
     hal_gpio_set(DISP_ON_PORT, DISP_ON_PIN, true);
+    hal_systick_delay_us(DISP_ON_SETTLE_US);
 
     drv_sharp_lcd_clear_display();
 }
@@ -115,6 +132,8 @@ DrvStatus drv_sharp_lcd_flush_full(void)
     if (s_busy) return DRV_ERR_NOT_READY;
     s_busy = true;
     hal_spi_cs_assert(HAL_SPI_DISPLAY);
+    /* SCS setup time before the first clock -- generous margin. */
+    hal_systick_delay_us(SCS_SETUP_US);
     hal_spi_write_dma(HAL_SPI_DISPLAY, s_tx_buf, (uint16_t)TX_BUFFER_SIZE);
     return DRV_OK;
 }

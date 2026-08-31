@@ -72,6 +72,16 @@ bool hal_spi_is_busy(HalSpiInstance instance)
     return false;
 }
 
+void hal_spi_wait_tx_done(HalSpiInstance instance)
+{
+    if (instance != HAL_SPI_DISPLAY) {
+        return;
+    }
+    /* Drain the TX FIFO, then wait for the shift register to empty. */
+    while ((hspi2.Instance->SR & SPI_SR_FTLVL) != 0U) { }
+    while ((hspi2.Instance->SR & SPI_SR_BSY)   != 0U) { }
+}
+
 /* HAL weak override — fires when DMA TX completes */
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
