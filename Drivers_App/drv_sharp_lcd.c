@@ -97,6 +97,17 @@ void drv_sharp_lcd_clear_buffer(void)
     }
 }
 
+void drv_sharp_lcd_selftest_fill(void)
+{
+    for (uint16_t r = 0; r < LCD_HEIGHT; ++r) {
+        uint8_t  fill = (r < 8U) ? 0xFFU
+                                 : (((r >> 4) & 1U) ? 0xFFU : 0x00U);
+        uint8_t *px = row_pixels(r);
+        memset(px, fill, LCD_STRIDE);
+        px[0] = 0xFFU;   /* left-edge vertical bar */
+    }
+}
+
 void drv_sharp_lcd_clear_display(void)
 {
     drv_sharp_lcd_clear_buffer();
