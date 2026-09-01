@@ -8,7 +8,10 @@
 
 #define CMD_WRITE_LINE   0x80U
 #define TRAILER          0x00U
-#define ROW_PACKET_SIZE  (1U + LCD_STRIDE)   /* line addr + 50 data = 51 */
+/* line addr (1) + 50 data + per-line trailing dummy byte (1) = 52.
+ * The LS027B7DH01 multi-line write needs 8 dummy clocks after every line's
+ * data, not just at the end (see Adafruit_SharpMem / u8g2 ls027 driver). */
+#define ROW_PACKET_SIZE  (1U + LCD_STRIDE + 1U)
 #define TRAILER_BYTES    8U                  /* >> datasheet's single trailing period */
 
 /* Generous SCS timing margins. Datasheet asks for t_sSCS >= 3 us setup and
@@ -19,8 +22,8 @@
 #define DISP_ON_SETTLE_US 10000U
 
 /* One contiguous DMA buffer:
- *   [0x80] [line(1) | 50B data] ... [line(240) | 50B data] [8x 0x00]
- * Total = 1 + 240*51 + 8 = 12249 bytes.
+ *   [0x80] [line(1) | 50B data | 0x00] ... [line(240) | 50B data | 0x00] [8x 0x00]
+ * Total = 1 + 240*52 + 8 = 12489 bytes.
  */
 #define TX_BUFFER_SIZE  (1U + LCD_HEIGHT * ROW_PACKET_SIZE + TRAILER_BYTES)
 static uint8_t s_tx_buf[TX_BUFFER_SIZE];
@@ -64,6 +67,8 @@ static void prime_tx_buffer(void)
     s_tx_buf[0] = CMD_WRITE_LINE;
     for (uint16_t r = 0; r < LCD_HEIGHT; ++r) {
         s_tx_buf[1U + r * ROW_PACKET_SIZE] = bit_reverse((uint8_t)(r + 1U));
+        /* per-line trailing dummy byte, after the 50 data bytes */
+        s_tx_buf[1U + r * ROW_PACKET_SIZE + 1U + LCD_STRIDE] = TRAILER;
     }
     memset(&s_tx_buf[1U + LCD_HEIGHT * ROW_PACKET_SIZE], TRAILER, TRAILER_BYTES);
     drv_sharp_lcd_clear_buffer();

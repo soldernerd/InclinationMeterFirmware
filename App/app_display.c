@@ -7,7 +7,7 @@
 /* Bring-up switch. 1 = bypass u8g2 entirely and just push a hard-coded
  * black/white band pattern to the panel, to sanity-check the
  * SPI / CS-timing / panel-power / VCOM path. Set back to 0 for the real UI. */
-#define LCD_SELFTEST 1
+#define LCD_SELFTEST 0
 
 #if !LCD_SELFTEST
 static u8g2_t s_u8g2;
