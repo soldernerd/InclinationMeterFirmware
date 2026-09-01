@@ -44,7 +44,26 @@ bool hal_power_woke_from_standby(void)
 
 void hal_power_enter_standby(void)
 {
+    /* Clear any wake flag latched by an earlier edge before sleeping.
+     * The WKUP pins are enabled by hal_power_configure_wakeup_pins()
+     * just before this call; if one of them (notably the encoder
+     * switches on PA0/PC5, which idle at their active HIGH level) saw an
+     * edge during the session, WUFx is already set. A pending WUFx makes
+     * HAL_PWR_EnterSTANDBYMode() return immediately instead of sleeping,
+     * leaving the MCU running with every rail powered down — a
+     * dead-looking zombie state with no path back on, which is exactly
+     * "powers off but never wakes on USB". Clearing here, after the pins
+     * are enabled and immediately before entry, lets a fresh edge (USB
+     * VBUS rising on WKUP4) be the thing that wakes it. */
+    __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF);
+
     HAL_PWR_EnterSTANDBYMode();
-    /* Unreachable: Standby mode resets the MCU on wake rather than
-     * returning here. */
+
+    /* Normally unreachable: Standby resets the MCU on wake. If control
+     * DOES return here, Standby did not engage — the rails are already
+     * down and there is no way back to a working state from this context,
+     * so reboot. On the fresh boot, svc_battery re-derives state: if USB
+     * is now present it charges instead of shutting down; if not, it
+     * retries the shutdown. Beats silently running with the display dark. */
+    NVIC_SystemReset();
 }
