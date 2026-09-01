@@ -9,18 +9,22 @@ static HalGpioExtiCallback s_exti_callbacks[16] = {0};
  * here in case the MX init order changes in future. */
 void hal_gpio_init(void)
 {
-    /* Keep the 3V3 rail on. !3V3_EN! is active-LOW — CubeMX's own GPIO init
-     * defaults it HIGH (rail off) as a safe boot state; drive it LOW here. */
-    LL_GPIO_ResetOutputPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN);
+    /* 3V3 peripheral rail: OFF for WP1. Nothing in the WP1 firmware path
+     * uses it (no EEPROM/sensors/BLE brought up), and the MCU runs from a
+     * separate always-on supply, so gating it here is safe and drops
+     * whatever leakage the unpowered peripherals were drawing. !3V3_EN! is
+     * active-LOW, so drive HIGH = rail off (also CubeMX's boot default).
+     * Re-enable (drive LOW) once a WP needs a 3V3 peripheral. */
+    LL_GPIO_SetOutputPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN);
 
     /* 5V rail: the display (and, later, buzzer/temp sensors) needs this.
      * No power-sequencing module exists yet — asserted unconditionally at
-     * boot alongside 3V3 as a stopgap, not a real reference-counted design. */
+     * boot as a stopgap, not a real reference-counted design. */
     LL_GPIO_SetOutputPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN);
 
-    /* Let both rails settle before anything downstream (SPI, display) uses
-     * them — comfortable margin over typical LDO start-up time, imperceptible
-     * at boot. */
+    /* Let the 5V rail settle before anything downstream (SPI, display) uses
+     * it — comfortable margin over typical regulator start-up time,
+     * imperceptible at boot. */
     HAL_Delay(20);
 
     /* Display CS idle LOW (Sharp LCD: CS active HIGH) */
