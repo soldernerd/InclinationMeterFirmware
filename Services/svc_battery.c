@@ -31,6 +31,18 @@ static bool             s_charge_enabled  = false;
 static bool         s_shutdown_armed   = false;
 static uint32_t     s_shutdown_start_ms = 0;
 
+/* Below this, a 1S-LiPo-powered device would already be in hardware UVLO —
+ * a reading this low is an ADC/VREF fault (e.g. the 3V3/VREF rail drooping
+ * as an external bench supply is dragged down), not the real pack voltage.
+ * Such samples must NOT drive the power-off decision. */
+#define BATTERY_VBAT_IMPLAUSIBLE_MV   2500U
+
+/* Consecutive genuinely-critical svc_battery_update() ticks (task_battery_ms
+ * apart, 1 s default) required before the 2 s shutdown timer may even arm.
+ * Filters single/double bad scans near the low-battery region. */
+#define BATTERY_CRITICAL_STREAK_MIN  3U
+static uint8_t s_critical_streak = 0;
+
 /* Startup grace period: don't trust any battery classification until we've
  * actually seen this many valid ADC scans. s_soc_pct/s_vbat_mv start at 0,
  * which reads as "critical" — without this gate a slow-to-calibrate or
@@ -90,6 +102,7 @@ void svc_battery_init(void)
     s_charge_complete    = false;
     s_charge_enabled     = false;
     s_shutdown_armed     = false;
+    s_critical_streak    = 0;
     s_valid_sample_count = 0;
 }
 
@@ -195,12 +208,27 @@ static void classify_battery_state(void)
 
 static void update_shutdown_arm(void)
 {
-    /* Give the display ~2 s to show a low-battery warning first. Only
-     * triggers when there's no USB power to charge from; if USB appears
-     * at any point (including mid-countdown, including right after
-     * waking from a previous low-power entry while still critical) we
-     * charge instead of shutting down. */
-    if (s_state == BATTERY_CRITICAL && !s_usb_connected) {
+    /* Only a *plausible* sub-critical reading counts toward shutdown. A
+     * zero / sub-UVLO value is an ADC/VREF fault (classify_battery_state()
+     * still flags it CRITICAL for display honesty, but it must not power
+     * the device off), and it takes BATTERY_CRITICAL_STREAK_MIN of these
+     * in a row before the timer is even allowed to arm. */
+    bool real_critical = (s_state == BATTERY_CRITICAL)
+                         && (s_vbat_mv >= BATTERY_VBAT_IMPLAUSIBLE_MV)
+                         && (s_vbat_mv <  g_device_settings.battery_critical_mv);
+
+    if (real_critical) {
+        if (s_critical_streak < 255U) {
+            s_critical_streak++;
+        }
+    } else {
+        s_critical_streak = 0;
+    }
+
+    /* Give the display ~2 s to show the "Shutting down..." warning first.
+     * Only triggers when there's no USB power to charge from; if USB
+     * appears at any point (including mid-countdown) we charge instead. */
+    if (s_critical_streak >= BATTERY_CRITICAL_STREAK_MIN && !s_usb_connected) {
         if (!s_shutdown_armed) {
             s_shutdown_armed    = true;
             s_shutdown_start_ms = hal_systick_get_ms();
