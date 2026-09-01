@@ -148,9 +148,12 @@ int main(void)
   g_system_state.woke_from_standby = hal_power_woke_from_standby();
   hal_spi_init(HAL_SPI_DISPLAY);
   hal_i2c_init(HAL_I2C_MAIN);
-  if (!hal_adc_init()) {
-    Error_Handler();
-  }
+  /* ADC calibration failure is NOT boot-halting (CLAUDE.md 7.6 escalation):
+   * a wake-from-Standby with the 3V3/VREF rail still settling used to brick
+   * the device here in Error_Handler(). hal_adc_init() already retries; if
+   * it still fails, flag it and carry on — svc_battery/drv_tmp236 gate on
+   * ADC .valid and simply report nothing until a later scan succeeds. */
+  g_system_state.adc_ok = hal_adc_init();
   hal_tim_init();
 
   /* Storage must come before scheduler init — it populates

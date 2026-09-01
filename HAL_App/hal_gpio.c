@@ -14,7 +14,11 @@ void hal_gpio_init(void)
      * (Also asserted pre-HAL_Init() in main.c via raw LL calls — this is a
      * defensive re-assertion, not the first time the rail comes up.)
      * WP1 briefly gated this off to chase current draw; WP2 needs it for the
-     * EEPROM / TMP236 / battery ADC front-end, so it stays on from here. */
+     * EEPROM / TMP236 / battery ADC front-end, so it stays on from here.
+     * NOTE: MX_GPIO_Init() drives this pin HIGH (rail OFF) during CubeMX
+     * peripheral init, so this line is where the rail actually comes (back)
+     * up on every boot — and on a fast Standby wake it's coming up from a
+     * fully-drained cap, hence the generous settle below. */
     LL_GPIO_ResetOutputPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN);
 
     /* 5V rail: the display, buzzer, and both temp sensors need this.
@@ -22,10 +26,11 @@ void hal_gpio_init(void)
      * boot as a stopgap, not a real reference-counted design. */
     LL_GPIO_SetOutputPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN);
 
-    /* Let the 5V rail settle before anything downstream (SPI, display) uses
-     * it — comfortable margin over typical regulator start-up time,
-     * imperceptible at boot. */
-    HAL_Delay(20);
+    /* Let both rails settle before anything downstream uses them. VREF+ for
+     * the ADC is on the 3V3 rail (REV B); hal_adc_init()'s calibration runs
+     * shortly after this and fails on a low VREF. Generous margin — tens of
+     * ms is imperceptible at boot and covers a drained-cap Standby wake. */
+    HAL_Delay(50);
 
     /* Display CS idle LOW (Sharp LCD: CS active HIGH) */
     LL_GPIO_ResetOutputPin(DISP_CS_PORT, DISP_CS_PIN);

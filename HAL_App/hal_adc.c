@@ -27,8 +27,19 @@ bool hal_adc_init(void)
     /* hadc1 already initialised by MX_ADC1_Init (CubeMX). Calibration is
      * required before the first conversion on STM32G0 — a failure here
      * means every subsequent reading (battery voltage, both temperature
-     * channels) would be silently wrong, so the caller must check this. */
-    bool ok = (HAL_ADCEx_Calibration_Start(&hadc1) == HAL_OK);
+     * channels) would be silently wrong, so the caller must check this.
+     *
+     * Retry a few times: on a fast wake from Standby the 3V3 rail (= VREF+
+     * on REV B) may still be settling when we first get here, and
+     * calibration on a low VREF fails. A short spaced retry rides that
+     * out; a hard, persistent failure still returns false. */
+    bool ok = false;
+    for (uint8_t attempt = 0; attempt < 5U && !ok; ++attempt) {
+        if (attempt != 0U) {
+            HAL_Delay(10);
+        }
+        ok = (HAL_ADCEx_Calibration_Start(&hadc1) == HAL_OK);
+    }
     s_ready   = false;
     s_started = false;
     return ok;

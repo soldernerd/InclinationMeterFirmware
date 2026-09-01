@@ -68,6 +68,10 @@ typedef struct {
     bool     sensor_pcap04_1_ok;
     bool     sensor_pcap04_2_ok;
 
+    bool     adc_ok;             /* ADC calibrated OK at boot; if false,
+                                  * battery/temperature readings are absent
+                                  * (not a boot-halting condition) */
+
     bool     calibration_valid;
 } SystemState;
 
