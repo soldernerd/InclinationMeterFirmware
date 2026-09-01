@@ -28,16 +28,16 @@
 #define DEFAULT_FILTER_CUTOFF_HZ_DEN    2
 
 /* --- Battery ---
- * Voltage-based thresholds (2026-08-17, user-specified): >=3.80V normal,
- * 3.65V-3.80V low, <3.65V critical. Replaced the previous SOC%-based
- * low/critical thresholds — those and the raw voltage check were two
- * different views of the same underlying measurement (battery voltage),
- * which was redundant; voltage is the more direct, sensor-agnostic
- * quantity so it's now the sole classification input (see
- * Services/svc_battery.c). SOC% is still computed/exposed for display,
- * just no longer used for state classification. */
-#define DEFAULT_BATTERY_CRITICAL_MV     3650
-#define DEFAULT_BATTERY_LOW_MV          3800
+ * Voltage-based thresholds (2026-09-01, user-specified):
+ *   >= 3.70V  normal
+ *   < 3.70V   start charging (if USB present) — battery_charge_start_mv
+ *   < 3.60V   low-battery warning on the display — battery_low_mv
+ *   < 3.40V   critical: 2s warning then Standby power-off — battery_critical_mv
+ * Voltage is the sole classification input (see Services/svc_battery.c);
+ * SOC% is still computed/exposed for display, not used for classification. */
+#define DEFAULT_BATTERY_CRITICAL_MV     3400
+#define DEFAULT_BATTERY_LOW_MV          3600
+#define DEFAULT_BATTERY_CHARGE_START_MV 3700
 
 /* --- ADC/sensor scaling calibration (2026-08-17) ---
  * General project rule: no numeric calibration constant lives only in
@@ -64,13 +64,15 @@
 
 /* --- EEPROM --- */
 #define EEPROM_MAGIC                    0xA55A
-#define EEPROM_SETTINGS_VERSION         0x0003  /* bumped: added
-                                                   * vbat_scale_num/den,
-                                                   * tmp236_seg1/seg2_*,
-                                                   * lm35_scale_mv_per_c —
-                                                   * all calibration
-                                                   * constants moved out
-                                                   * of flash into EEPROM */
+#define EEPROM_SETTINGS_VERSION         0x0004  /* 0x0003: calibration
+                                                   * constants moved into
+                                                   * EEPROM. 0x0004: added
+                                                   * battery_charge_start_mv,
+                                                   * retuned battery
+                                                   * thresholds — a stored
+                                                   * v3 blob is discarded
+                                                   * and reseeded from the
+                                                   * new DEFAULT_* values. */
 #define EEPROM_CALIBRATION_VERSION      0x0001
 #define EEPROM_SETTINGS_ADDR            0x0000
 #define EEPROM_CALIBRATION_ADDR         0x0100

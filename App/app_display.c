@@ -44,7 +44,8 @@ static void draw_low_battery_screen(uint16_t vbat_mv)
     u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2), 100, line1);
 
     u8g2_SetFont(&s_u8g2, u8g2_font_ncenB10_tr);
-    const char *line2 = "Shutting down...";
+    const char *line2 = g_system_state.battery_critical ? "Shutting down..."
+                                                        : "Connect charger";
     w = u8g2_GetUTF8Width(&s_u8g2, line2);
     u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2), 130, line2);
 
@@ -134,7 +135,7 @@ void app_display_update(void)
     if (drv_sharp_lcd_is_busy()) {
         return;
     }
-    if (g_system_state.battery_critical) {
+    if (g_system_state.battery_low) {
         draw_low_battery_screen(svc_battery_get_vbat_mv());
     } else {
         draw_status_screen();

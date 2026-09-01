@@ -73,6 +73,7 @@ static void fill_default_settings(DeviceSettings *s)
     s->filter_cutoff_hz_den     = DEFAULT_FILTER_CUTOFF_HZ_DEN;
     s->battery_critical_mv      = DEFAULT_BATTERY_CRITICAL_MV;
     s->battery_low_mv           = DEFAULT_BATTERY_LOW_MV;
+    s->battery_charge_start_mv  = DEFAULT_BATTERY_CHARGE_START_MV;
     s->vbat_scale_num           = DEFAULT_VBAT_SCALE_NUM;
     s->vbat_scale_den           = DEFAULT_VBAT_SCALE_DEN;
     s->tmp236_seg1_voffs_mv     = DEFAULT_TMP236_SEG1_VOFFS_MV;

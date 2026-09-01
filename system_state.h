@@ -17,8 +17,9 @@ typedef struct {
     uint32_t settling_timeout_ms;
     uint16_t filter_cutoff_hz_num;
     uint16_t filter_cutoff_hz_den;
-    uint16_t battery_critical_mv;   /* below this: BATTERY_CRITICAL */
-    uint16_t battery_low_mv;        /* below this (and >= critical): BATTERY_LOW */
+    uint16_t battery_critical_mv;     /* below this: BATTERY_CRITICAL (power-off) */
+    uint16_t battery_low_mv;          /* below this (and >= critical): BATTERY_LOW (warning) */
+    uint16_t battery_charge_start_mv; /* below this, with USB present: enable charging */
 
     /* ADC/sensor scaling calibration — see config.h's DEFAULT_* for the
      * seed values and what each feeds. No calibration constant lives
@@ -53,6 +54,8 @@ typedef struct {
 
     uint8_t  battery_soc_pct;
     bool     battery_charging;
+    bool     battery_low;         /* Vbat below battery_low_mv (implies the warning
+                                    * screen); also true whenever battery_critical is */
     bool     battery_critical;
 
     bool     ble_connected;

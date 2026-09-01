@@ -155,14 +155,14 @@ static void read_battery_voltage(void)
 static void update_charge_enable(void)
 {
     /* Only start charging once Vbat has actually dropped to
-     * battery_low_mv — avoids keeping an already-near-full LiPo topped
-     * off, which degrades its life over time. Once started, stay latched
-     * on (don't oscillate as Vbat rises back above the threshold
+     * battery_charge_start_mv — avoids keeping an already-near-full LiPo
+     * topped off, which degrades its life over time. Once started, stay
+     * latched on (don't oscillate as Vbat rises back above the threshold
      * mid-charge) until the TP4056 reports complete or USB disappears. */
     if (!s_usb_connected || s_charge_complete) {
         s_charge_enabled = false;
     } else if (!startup_grace_active() && s_vbat_mv > 0 &&
-               s_vbat_mv < g_device_settings.battery_low_mv) {
+               s_vbat_mv < g_device_settings.battery_charge_start_mv) {
         s_charge_enabled = true;
     }
     hal_gpio_set(CHARGE_EN_PORT, CHARGE_EN_PIN, !s_charge_enabled);
@@ -222,6 +222,7 @@ void svc_battery_update(void)
     /* Reflect into shared state */
     g_system_state.battery_soc_pct  = s_soc_pct;
     g_system_state.battery_charging = s_charging;
+    g_system_state.battery_low      = (s_state == BATTERY_LOW || s_state == BATTERY_CRITICAL);
     g_system_state.battery_critical = (s_state == BATTERY_CRITICAL);
     g_system_state.usb_connected    = s_usb_connected;
 
