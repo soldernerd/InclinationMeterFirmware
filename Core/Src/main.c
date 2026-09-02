@@ -100,10 +100,14 @@ int main(void)
   LL_GPIO_SetPinOutputType(GPIOC, LL_GPIO_PIN_6, LL_GPIO_OUTPUT_PUSHPULL);
   LL_GPIO_SetPinPull(GPIOC, LL_GPIO_PIN_6, LL_GPIO_PULL_NO);
   LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_6);
-  /* ~5 ms at default 16 MHz HSI for LDO to stabilise. The loop runs at
-   * a few cycles per iteration; 80,000 is conservative. This is HSI (always
-   * ~16 MHz), not HSE — unaffected by REV B's HSE 8 MHz crystal. */
-  for (volatile uint32_t i = 0; i < 80000U; ++i) { __asm__("nop"); }
+  /* Give the 3V3 rail a real head start before HAL_Init()/clock/peripheral
+   * init add load. The LP5907 feeds sizeable bulk capacitance; on a fast
+   * wake from Standby (drained caps, weak battery-node supply) the inrush
+   * to charge it can otherwise sag VDD into brown-out. ~25 ms at 16 MHz
+   * HSI, a few cycles per iteration. MX_GPIO_Init() now keeps PC6 LOW
+   * (PC6.PinState=RESET in the .ioc), so the rail stays up continuously
+   * from here — no toggle-off-and-on during CubeMX peripheral init. */
+  for (volatile uint32_t i = 0; i < 400000U; ++i) { __asm__("nop"); }
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/

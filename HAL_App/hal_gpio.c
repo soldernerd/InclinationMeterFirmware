@@ -21,15 +21,20 @@ void hal_gpio_init(void)
      * fully-drained cap, hence the generous settle below. */
     LL_GPIO_ResetOutputPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN);
 
+    /* Let the 3V3 rail (large bulk caps, also VREF+ for the ADC on REV B)
+     * fully settle BEFORE adding the 5V boost converter's inrush on top.
+     * Stacking both rails' inrush on a weak battery-node supply after a
+     * Standby wake is what browns the MCU out. */
+    HAL_Delay(50);
+
     /* 5V rail: the display, buzzer, and both temp sensors need this.
      * No power-sequencing module exists yet — asserted unconditionally at
      * boot as a stopgap, not a real reference-counted design. */
     LL_GPIO_SetOutputPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN);
 
-    /* Let both rails settle before anything downstream uses them. VREF+ for
-     * the ADC is on the 3V3 rail (REV B); hal_adc_init()'s calibration runs
-     * shortly after this and fails on a low VREF. Generous margin — tens of
-     * ms is imperceptible at boot and covers a drained-cap Standby wake. */
+    /* Let the 5V rail settle before anything downstream (SPI, display) uses
+     * it. hal_adc_init()'s calibration also runs shortly after this and
+     * needs a stable 3V3/VREF. */
     HAL_Delay(50);
 
     /* Display CS idle LOW (Sharp LCD: CS active HIGH) */
