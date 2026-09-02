@@ -72,6 +72,14 @@ typedef struct {
                                   * battery/temperature readings are absent
                                   * (not a boot-halting condition) */
 
+    bool     display_ok;         /* False if the Sharp LCD's SPI2 peripheral
+                                  * wedged and a flush had to be abandoned —
+                                  * see drv_sharp_lcd_update(). Self-clears
+                                  * back to true once a flush completes
+                                  * cleanly again. Not boot-halting; the
+                                  * on-screen content is simply stale/absent
+                                  * while false. */
+
     bool     calibration_valid;
 } SystemState;
 

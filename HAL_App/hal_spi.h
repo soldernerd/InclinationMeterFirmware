@@ -12,6 +12,13 @@ typedef enum {
 typedef void (*HalSpiDmaCallback)(HalSpiInstance instance, bool success);
 
 void hal_spi_init(HalSpiInstance instance);
+
+/* Full hardware re-init (HAL_SPI_DeInit + MX_SPIx_Init) for recovery after
+ * a wedged peripheral (e.g. SPI_SR_BSY stuck set past drv_sharp_lcd's
+ * drain timeout) — a software flag reset alone doesn't clear that, only
+ * actually cycling the peripheral (and its clock, via Msp Deinit/Init)
+ * does. Safe to call any time the instance is idle. */
+void hal_spi_reinit(HalSpiInstance instance);
 void hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t len);
 void hal_spi_write_dma(HalSpiInstance instance, const uint8_t *data, uint16_t len);
 void hal_spi_register_dma_callback(HalSpiInstance instance, HalSpiDmaCallback cb);

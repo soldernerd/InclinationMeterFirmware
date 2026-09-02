@@ -1,4 +1,5 @@
 #include "svc_battery.h"
+#include "drv_sharp_lcd.h"
 #include "hal_adc.h"
 #include "hal_gpio.h"
 #include "hal_power.h"
@@ -108,13 +109,18 @@ void svc_battery_init(void)
 
 void svc_battery_enter_low_power(void)
 {
-    /* Let any in-flight EEPROM write finish rather than tearing it mid-
-     * cycle — bounded wait so a genuinely stuck I2C bus can't block
-     * shutdown forever. */
+    /* Let any in-flight EEPROM write and/or display flush finish rather
+     * than cutting them off mid-transaction (PWR_5V_EN below powers the
+     * display's SPI2 bus, so a display flush still in flight would get an
+     * uncontrolled mid-transfer power loss otherwise) — bounded wait so a
+     * genuinely stuck I2C bus or wedged SPI2 can't block shutdown forever;
+     * drv_sharp_lcd_update() has its own 50ms give-up on a wedge, well
+     * inside this bound. */
     uint32_t wait_start_ms = hal_systick_get_ms();
-    while (svc_storage_is_busy() &&
+    while ((svc_storage_is_busy() || drv_sharp_lcd_is_busy()) &&
            (uint32_t)(hal_systick_get_ms() - wait_start_ms) < 250U) {
         svc_storage_update();
+        drv_sharp_lcd_update();
     }
 
     /* Both LEDs and both switched rails off. The MCU's own supply

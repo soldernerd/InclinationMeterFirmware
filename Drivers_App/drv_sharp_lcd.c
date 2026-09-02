@@ -4,6 +4,7 @@
 #include "hal_tim.h"
 #include "hal_systick.h"
 #include "pin_config.h"
+#include "system_state.h"
 #include <string.h>
 
 #define CMD_WRITE_LINE   0x80U
@@ -45,6 +46,13 @@ static volatile bool s_busy = false;
 static volatile bool s_awaiting_drain = false;
 static uint32_t      s_drain_start_ms = 0;
 
+/* True from drv_sharp_lcd_init() until DISP_ON_SETTLE_US has actually
+ * elapsed — pumped (non-blocking) from drv_sharp_lcd_update() instead of
+ * a blocking delay inside init(). s_busy stays true the whole time so any
+ * flush attempted before the display is settled is correctly refused. */
+static volatile bool s_pending_power_settle = false;
+static uint32_t      s_settle_deadline_ms   = 0;
+
 static inline uint8_t *row_pixels(uint16_t row)
 {
     return &s_tx_buf[1U + row * ROW_PACKET_SIZE + 1U];
@@ -81,6 +89,19 @@ static void on_dma_complete(HalSpiInstance instance, bool success)
 
 void drv_sharp_lcd_update(void)
 {
+    if (s_pending_power_settle) {
+        /* Non-blocking wait for the display's internal supply to settle
+         * after DISP_ON was asserted — s_busy stays true (set in init())
+         * the whole time, so any flush attempted meanwhile is correctly
+         * refused rather than hitting the wire early. */
+        if ((int32_t)(hal_systick_get_ms() - s_settle_deadline_ms) < 0) {
+            return;
+        }
+        s_pending_power_settle = false;
+        s_busy                 = false;
+        return;   /* next drv_sharp_lcd_flush_full() call proceeds normally */
+    }
+
     if (!s_awaiting_drain) {
         return;
     }
@@ -88,6 +109,16 @@ void drv_sharp_lcd_update(void)
     bool timed_out = (uint32_t)(hal_systick_get_ms() - s_drain_start_ms) > SPI_DRAIN_TIMEOUT_MS;
     if (!idle && !timed_out) {
         return;   /* still shifting out — check again next pump */
+    }
+    if (timed_out) {
+        /* SPI2 genuinely wedged (SPI_SR_BSY stuck) — a software flag
+         * reset alone won't clear that. Cycle the peripheral so the next
+         * flush has a real chance of working, and surface the fault
+         * rather than silently going dark forever. */
+        hal_spi_reinit(HAL_SPI_DISPLAY);
+        g_system_state.display_ok = false;
+    } else {
+        g_system_state.display_ok = true;   /* self-heals once a flush drains cleanly */
     }
     /* Either genuinely drained, or we gave up rather than wedge the
      * display forever (same policy as drv_24lc256.c's write-cycle poll).
@@ -113,24 +144,29 @@ static void prime_tx_buffer(void)
 
 void drv_sharp_lcd_init(void)
 {
-    s_busy           = false;
-    s_awaiting_drain = false;
+    s_busy                 = true;    /* held busy until the settle wait clears it */
+    s_awaiting_drain       = false;
     prime_tx_buffer();
 
     hal_spi_init(HAL_SPI_DISPLAY);
     hal_spi_register_dma_callback(HAL_SPI_DISPLAY, on_dma_complete);
+    g_system_state.display_ok = true;
 
     /* PD3 VCOM square wave (5 Hz, within the datasheet's 1-10 Hz window) —
      * no hardware PWM channel on REV B, toggled manually in the TIM6
      * period-elapsed ISR (hal_tim.c). */
     hal_tim_vcom_start();
 
-    /* Power up the display, then let its internal supply settle before the
-     * first write (generous margin over the datasheet's power-up time). */
+    /* Power up the display and let its internal supply settle before the
+     * first write (generous margin over the datasheet's power-up time) —
+     * non-blocking: drv_sharp_lcd_update(), pumped from the scheduler,
+     * clears s_busy once DISP_ON_SETTLE_US has actually elapsed. The
+     * caller's own first draw+flush (app_display_init()) just gets
+     * refused with DRV_ERR_NOT_READY until then; the next scheduler tick
+     * redraws and sends the real content, so nothing is lost. */
     hal_gpio_set(DISP_ON_PORT, DISP_ON_PIN, true);
-    hal_systick_delay_us(DISP_ON_SETTLE_US);
-
-    drv_sharp_lcd_clear_display();
+    s_settle_deadline_ms   = hal_systick_get_ms() + (DISP_ON_SETTLE_US / 1000U);
+    s_pending_power_settle = true;
 }
 
 void drv_sharp_lcd_clear_buffer(void)

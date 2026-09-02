@@ -2,6 +2,7 @@
 #include "hal_gpio.h"
 #include "stm32g0xx_hal.h"
 #include "pin_config.h"
+#include "spi.h"
 
 extern SPI_HandleTypeDef hspi2;
 
@@ -21,6 +22,18 @@ void hal_spi_init(HalSpiInstance instance)
         s_cb[HAL_SPI_DISPLAY]   = 0;
     }
     /* HAL_SPI_SCL3300 — WP1 stub, implemented in WPx */
+}
+
+void hal_spi_reinit(HalSpiInstance instance)
+{
+    if (instance != HAL_SPI_DISPLAY) {
+        return;
+    }
+    /* Full peripheral cycle (clock off/on via Msp Deinit/Init) — clears a
+     * stuck SPI_SR_BSY that a software-only flag reset cannot. */
+    (void)HAL_SPI_DeInit(&hspi2);
+    MX_SPI2_Init();
+    s_busy[HAL_SPI_DISPLAY] = false;
 }
 
 void hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t len)
