@@ -14,11 +14,14 @@
 #define ROW_PACKET_SIZE  (1U + LCD_STRIDE + 1U)
 #define TRAILER_BYTES    8U                  /* >> datasheet's single trailing period */
 
-/* Generous SCS timing margins. Datasheet asks for t_sSCS >= 3 us setup and
- * t_hSCS >= 1 us hold; anything under ~10 ms is immaterial to the update
- * rate here, so use milliseconds and stop worrying about it. */
-#define SCS_SETUP_US     5000U
-#define SCS_HOLD_US      5000U
+/* SCS timing margins: datasheet asks for t_sSCS >= 3 us setup and
+ * t_hSCS >= 1 us hold. 2x the datasheet minimum is comfortable headroom
+ * without being needlessly long — both of these run in thread context
+ * (drv_sharp_lcd_flush_full() / drv_sharp_lcd_update(), never an ISR), but
+ * task_display() pumps drv_sharp_lcd_update() from the single-threaded
+ * scheduler loop, so every microsecond here delays every other task. */
+#define SCS_SETUP_US     6U
+#define SCS_HOLD_US      2U
 #define DISP_ON_SETTLE_US 10000U
 
 /* Give up waiting for the SPI shift register to drain after this long and
