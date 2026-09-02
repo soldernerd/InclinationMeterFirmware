@@ -26,4 +26,12 @@ DrvStatus drv_sharp_lcd_flush(void);
 DrvStatus drv_sharp_lcd_flush_full(void);
 bool      drv_sharp_lcd_is_busy(void);
 
+/* Pumps the post-DMA CS-release state machine — must be called regularly
+ * from normal (non-ISR) context, e.g. once per scheduler tick. Finishing
+ * a flush (draining the SPI shift register, holding CS, deasserting it)
+ * happens here instead of inside the DMA-complete ISR; see the comment on
+ * on_dma_complete() in drv_sharp_lcd.c for why that used to be able to
+ * hang the whole MCU. */
+void      drv_sharp_lcd_update(void);
+
 #endif /* DRV_SHARP_LCD_H */

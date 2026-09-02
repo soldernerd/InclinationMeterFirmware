@@ -19,10 +19,16 @@ void hal_spi_cs_assert(HalSpiInstance instance);
 void hal_spi_cs_deassert(HalSpiInstance instance);
 bool hal_spi_is_busy(HalSpiInstance instance);
 
-/* Block until the SPI peripheral has finished shifting out every byte
- * (TX FIFO empty + not BSY). The DMA-complete IRQ fires when the FIFO is
- * *fed*, not when the wire is idle, so CS must not be released until this
- * returns or the final bytes are truncated. */
-void hal_spi_wait_tx_done(HalSpiInstance instance);
+/* Non-blocking, single-shot check: true once the SPI peripheral has
+ * finished shifting out every byte (TX FIFO empty + not BSY). The
+ * DMA-complete IRQ fires when the FIFO is *fed*, not when the wire is
+ * idle, so CS must not be released until this reports true or the final
+ * bytes are truncated. Never spin-wait on this from ISR context — poll it
+ * from a scheduler-pumped update function instead (see
+ * drv_sharp_lcd_update()), since this bit is not guaranteed to clear
+ * promptly and DMA1_Channel1_IRQn runs at the highest NVIC priority in
+ * this system (above SysTick), so blocking here in that ISR previously
+ * froze the whole MCU rather than just the display. */
+bool hal_spi_tx_idle(HalSpiInstance instance);
 
 #endif /* HAL_SPI_H */

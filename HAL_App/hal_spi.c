@@ -77,14 +77,13 @@ bool hal_spi_is_busy(HalSpiInstance instance)
     return false;
 }
 
-void hal_spi_wait_tx_done(HalSpiInstance instance)
+bool hal_spi_tx_idle(HalSpiInstance instance)
 {
     if (instance != HAL_SPI_DISPLAY) {
-        return;
+        return true;
     }
-    /* Drain the TX FIFO, then wait for the shift register to empty. */
-    while ((hspi2.Instance->SR & SPI_SR_FTLVL) != 0U) { }
-    while ((hspi2.Instance->SR & SPI_SR_BSY)   != 0U) { }
+    /* TX FIFO empty and shift register not busy — single poll, no loop. */
+    return (hspi2.Instance->SR & (SPI_SR_FTLVL | SPI_SR_BSY)) == 0U;
 }
 
 /* HAL weak override — fires when DMA TX completes */

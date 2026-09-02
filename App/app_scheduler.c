@@ -2,6 +2,7 @@
 #include "app_display.h"
 #include "app_leds.h"
 #include "drv_tmp236.h"
+#include "drv_sharp_lcd.h"
 #include "hal_adc.h"
 #include "hal_systick.h"
 #include "svc_battery.h"
@@ -54,6 +55,9 @@ static void task_storage(void)
 
 static void task_display(void)
 {
+    /* Finish releasing CS on any flush whose DMA phase already completed,
+     * before deciding whether to kick off a new one this tick. */
+    drv_sharp_lcd_update();
     app_display_update();
 }
 

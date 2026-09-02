@@ -21,6 +21,11 @@
 #define SCS_HOLD_US      5000U
 #define DISP_ON_SETTLE_US 10000U
 
+/* Give up waiting for the SPI shift register to drain after this long and
+ * release CS anyway, same "don't wedge forever" policy as drv_24lc256.c's
+ * write-cycle poll — see drv_sharp_lcd_update(). */
+#define SPI_DRAIN_TIMEOUT_MS  50U
+
 /* One contiguous DMA buffer:
  *   [0x80] [line(1) | 50B data | 0x00] ... [line(240) | 50B data | 0x00] [8x 0x00]
  * Total = 1 + 240*52 + 8 = 12489 bytes.
@@ -29,6 +34,13 @@
 static uint8_t s_tx_buf[TX_BUFFER_SIZE];
 
 static volatile bool s_busy = false;
+
+/* True once the DMA has fed the whole frame into the SPI FIFO and we're
+ * waiting for the shift register to actually drain + a CS hold margin
+ * before releasing CS — pumped from drv_sharp_lcd_update(), never from
+ * ISR context (see on_dma_complete()). */
+static volatile bool s_awaiting_drain = false;
+static uint32_t      s_drain_start_ms = 0;
 
 static inline uint8_t *row_pixels(uint16_t row)
 {
@@ -50,15 +62,37 @@ static void on_dma_complete(HalSpiInstance instance, bool success)
 {
     (void)success;
     if (instance == HAL_SPI_DISPLAY) {
-        /* The DMA-complete IRQ fires when the FIFO is fed, not when the
-         * last bit has left the pin. Wait for the peripheral to go idle,
-         * then hold CS a generous margin before releasing it, or the
-         * final line and trailer get chopped. */
-        hal_spi_wait_tx_done(HAL_SPI_DISPLAY);
-        hal_systick_delay_us(SCS_HOLD_US);
-        hal_spi_cs_deassert(HAL_SPI_DISPLAY);
-        s_busy = false;
+        /* ISR context (DMA1_Channel1_IRQn, NVIC priority 0 — the highest
+         * in this system, above SysTick's priority 3, so SysTick cannot
+         * preempt it). MUST NOT block here: the DMA-complete IRQ fires
+         * when the FIFO is fed, not when the wire is idle, and this used
+         * to spin-wait right here for the shift register to drain. If
+         * SPI_SR_BSY ever failed to clear promptly, that loop never
+         * returned, SysTick froze with it, and the whole MCU hung — not
+         * just the display. Just record that a drain is needed and hand
+         * off to drv_sharp_lcd_update(), pumped from the scheduler. */
+        s_drain_start_ms = hal_systick_get_ms();
+        s_awaiting_drain = true;
     }
+}
+
+void drv_sharp_lcd_update(void)
+{
+    if (!s_awaiting_drain) {
+        return;
+    }
+    bool idle      = hal_spi_tx_idle(HAL_SPI_DISPLAY);
+    bool timed_out = (uint32_t)(hal_systick_get_ms() - s_drain_start_ms) > SPI_DRAIN_TIMEOUT_MS;
+    if (!idle && !timed_out) {
+        return;   /* still shifting out — check again next pump */
+    }
+    /* Either genuinely drained, or we gave up rather than wedge the
+     * display forever (same policy as drv_24lc256.c's write-cycle poll).
+     * Hold CS a margin before release either way. */
+    hal_systick_delay_us(SCS_HOLD_US);
+    hal_spi_cs_deassert(HAL_SPI_DISPLAY);
+    s_awaiting_drain = false;
+    s_busy           = false;
 }
 
 static void prime_tx_buffer(void)
@@ -76,7 +110,8 @@ static void prime_tx_buffer(void)
 
 void drv_sharp_lcd_init(void)
 {
-    s_busy = false;
+    s_busy           = false;
+    s_awaiting_drain = false;
     prime_tx_buffer();
 
     hal_spi_init(HAL_SPI_DISPLAY);
