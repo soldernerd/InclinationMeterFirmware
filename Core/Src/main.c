@@ -145,7 +145,7 @@ int main(void)
    * bleed the battery while "off") and the EEPROM. 25 ms: comfortable
    * margin over LP5907 bulk-cap charge time without the previous
    * brown-out-driven padding. */
-  hal_gpio_set(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, true);
+  hal_gpio_set(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, false);   /* !3V3_EN! active-LOW: LOW = rail ON */
   HAL_Delay(25);
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 3.3V rail settled */
 
