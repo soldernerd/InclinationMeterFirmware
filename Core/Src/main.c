@@ -44,6 +44,7 @@
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
+#include "pin_config.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
@@ -128,6 +129,19 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  /* LED_PWR/LED_STS as close to "first thing this firmware does" as
+   * structurally possible: MX_GPIO_Init() just above is what actually
+   * configures PB13/PB14 as outputs (and, as a side effect of its own
+   * generated init, briefly forces them LOW) — app_leds_init() used to
+   * run 11 steps and ~100ms of blocking delays later (HAL_Delay(50) x2,
+   * HSE/PLL lock already behind us by now, ADC calibration retries,
+   * EEPROM I2C traffic, scheduler init), so a hang anywhere in that
+   * stretch left zero visible indication the MCU was even alive. Lit
+   * here, LED_PWR staying on proves we got at least this far; LED_STS
+   * (toggled at each checkpoint below, then handed off to the scheduler's
+   * 2 Hz task_leds() once app_scheduler_run() starts) going static
+   * pinpoints roughly where a hang happens without needing a debugger. */
+  app_leds_init();
   MX_DMA_Init();
   MX_TIM3_Init();
   MX_SPI1_Init();
@@ -141,8 +155,12 @@ int main(void)
   MX_USB_DRD_FS_PCD_Init();
   MX_I2C3_Init();
   /* USER CODE BEGIN 2 */
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: MX_*_Init() block done */
+
   hal_gpio_init();
   hal_systick_init();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: rail sequencing done */
+
   /* Record whether this boot resumed from Standby mode (all RAM/state was
    * lost either way — this is a fresh boot regardless) and clear the PWR
    * wake flags. No branching needed here: svc_battery_update() re-derives
@@ -159,17 +177,19 @@ int main(void)
    * ADC .valid and simply report nothing until a later scan succeeds. */
   g_system_state.adc_ok = hal_adc_init();
   hal_tim_init();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: ADC calibration done */
 
   /* Storage must come before scheduler init — it populates
    * g_device_settings (and g_calibration) which the scheduler reads
    * for its task periods. */
   svc_storage_init();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: EEPROM load/seed done */
+
   svc_battery_init();
   drv_tmp236_init();
   drv_24lc256_init();          /* idempotent — svc_storage_init already calls this */
 
   app_scheduler_init();
-  app_leds_init();
   app_display_init();
 
   hal_adc_start();             /* kick off the first ADC scan */

@@ -43,9 +43,12 @@ void hal_gpio_init(void)
     /* Display starts off — drv_sharp_lcd_init() will turn it on */
     LL_GPIO_ResetOutputPin(DISP_ON_PORT, DISP_ON_PIN);
 
-    /* LEDs off */
-    LL_GPIO_ResetOutputPin(LED_PWR_PORT, LED_PWR_PIN);
-    LL_GPIO_ResetOutputPin(LED_STS_PORT, LED_STS_PIN);
+    /* LEDs: deliberately NOT touched here. app_leds_init() now runs in
+     * main() right after MX_GPIO_Init(), before this function, so LED_PWR
+     * is already lit as the earliest possible proof of life — resetting
+     * it here would just turn it back off until the scheduler starts.
+     * LED state is app_leds.c's alone from here on (app_leds_init() /
+     * app_leds_task()). */
 
     /* CHARGE_EN safe default: disabled (active-LOW, so HIGH = don't
      * charge). CubeMX's own reset-state default happens to leave this pin
