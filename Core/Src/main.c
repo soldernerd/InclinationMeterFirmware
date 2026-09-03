@@ -154,7 +154,7 @@ int main(void)
    * 30 ms here so everything — including that 3.3V recovery — is fully
    * settled before the ADC/VREF work in step 7. */
   hal_gpio_set(PWR_5V_EN_PORT, PWR_5V_EN_PIN, true);
-  HAL_Delay(30);
+  HAL_Delay(40);   /* 30 ms was just enough on the scope; 40 for margin */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 5V rail settled */
 
   /* 7. Internal ADC — no digital bus, no external chip to wait on beyond
