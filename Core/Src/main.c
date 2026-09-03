@@ -142,16 +142,19 @@ int main(void)
 
   /* 5. 3.3V rail. Needed in WP2 for the battery-sense divider (its
    * low-side gate needs this rail live so the divider doesn't otherwise
-   * bleed the battery while "off") and the EEPROM. 25 ms: comfortable
-   * margin over LP5907 bulk-cap charge time without the previous
-   * brown-out-driven padding. */
+   * bleed the battery while "off") and the EEPROM. Scoped: the rail is
+   * fully up within a couple of ms of the enable; 5 ms is ample. */
   hal_gpio_set(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, false);   /* !3V3_EN! active-LOW: LOW = rail ON */
-  HAL_Delay(25);
+  HAL_Delay(5);
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 3.3V rail settled */
 
-  /* 6. 5V rail. Needed for the display and both temp sensors. */
+  /* 6. 5V rail. Needed for the display and both temp sensors. Bringing it
+   * (and the -5V inverter off it) up transiently sags the shared battery
+   * node, dipping 3.3V ~0.7 V for ~23 ms before it recovers (scoped).
+   * 30 ms here so everything — including that 3.3V recovery — is fully
+   * settled before the ADC/VREF work in step 7. */
   hal_gpio_set(PWR_5V_EN_PORT, PWR_5V_EN_PIN, true);
-  HAL_Delay(25);
+  HAL_Delay(30);
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 5V rail settled */
 
   /* 7. Internal ADC — no digital bus, no external chip to wait on beyond
