@@ -89,26 +89,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  /* !3V3_EN! (PC6) must be LOW before HAL_Init() touches peripherals — REV B
-   * inverted this signal's polarity vs. the old board's active-high LDO_EN
-   * (PC0): !3V3_EN! is active LOW (Low = on, High = off). On reset the MCU
-   * runs from VBAT directly (LP5907 is gated by this pin) — assert it ASAP
-   * so the 3.3 V rail comes up before SysTick needs it. We use LL inline
-   * functions here because nothing else has been initialised yet. */
-  LL_IOP_GRP1_EnableClock(LL_IOP_GRP1_PERIPH_GPIOC);
-  LL_GPIO_SetPinMode(GPIOC, LL_GPIO_PIN_6, LL_GPIO_MODE_OUTPUT);
-  LL_GPIO_SetPinSpeed(GPIOC, LL_GPIO_PIN_6, LL_GPIO_SPEED_FREQ_LOW);
-  LL_GPIO_SetPinOutputType(GPIOC, LL_GPIO_PIN_6, LL_GPIO_OUTPUT_PUSHPULL);
-  LL_GPIO_SetPinPull(GPIOC, LL_GPIO_PIN_6, LL_GPIO_PULL_NO);
-  LL_GPIO_ResetOutputPin(GPIOC, LL_GPIO_PIN_6);
-  /* Give the 3V3 rail a real head start before HAL_Init()/clock/peripheral
-   * init add load. The LP5907 feeds sizeable bulk capacitance; on a fast
-   * wake from Standby (drained caps, weak battery-node supply) the inrush
-   * to charge it can otherwise sag VDD into brown-out. ~25 ms at 16 MHz
-   * HSI, a few cycles per iteration. MX_GPIO_Init() now keeps PC6 LOW
-   * (PC6.PinState=RESET in the .ioc), so the rail stays up continuously
-   * from here — no toggle-off-and-on during CubeMX peripheral init. */
-  for (volatile uint32_t i = 0; i < 400000U; ++i) { __asm__("nop"); }
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -117,81 +97,105 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  /* Deliberate boot order (agreed 2026-09-03): each step is a checkpoint
+   * you can observe on LED_STS without a debugger attached — if it stops
+   * toggling, that names the stretch that's hanging.
+   *   1. GPIO init                    5. 3V3 rail + settle
+   *   2. LED_PWR on                   6. 5V rail + settle
+   *   3. HSE/PLL + timers             7. internal ADC (no digital bus)
+   *   4. LED_STS starts as a heartbeat 8. digital-bus peripherals, gated
+   *      (checkpoint toggles here,       on their rail: I2C1/EEPROM (3V3),
+   *      real 2 Hz blink once the        SPI2/display (5V)
+   *      scheduler starts)
+   * !3V3_EN! is touched exactly once now (step 5) — no more pre-HAL_Init
+   * head-start spin: that existed only for the brown-out theory, which is
+   * ruled out (BOR is off in the option bytes; raising supply voltage to
+   * normal made no difference either). */
   /* USER CODE END Init */
 
-  /* Configure the system clock */
-  SystemClock_Config();
-
-  /* USER CODE BEGIN SysInit */
-
-  /* USER CODE END SysInit */
-
-  /* Initialize all configured peripherals */
+  /* 1. GPIO */
   MX_GPIO_Init();
-  /* LED_PWR/LED_STS as close to "first thing this firmware does" as
-   * structurally possible: MX_GPIO_Init() just above is what actually
-   * configures PB13/PB14 as outputs (and, as a side effect of its own
-   * generated init, briefly forces them LOW) — app_leds_init() used to
-   * run 11 steps and ~100ms of blocking delays later (HAL_Delay(50) x2,
-   * HSE/PLL lock already behind us by now, ADC calibration retries,
-   * EEPROM I2C traffic, scheduler init), so a hang anywhere in that
-   * stretch left zero visible indication the MCU was even alive. Lit
-   * here, LED_PWR staying on proves we got at least this far; LED_STS
-   * (toggled at each checkpoint below, then handed off to the scheduler's
-   * 2 Hz task_leds() once app_scheduler_run() starts) going static
-   * pinpoints roughly where a hang happens without needing a debugger. */
+
+  /* 2. LED_PWR on — the only thing this depends on is PB13 being
+   * configured as an output, done by MX_GPIO_Init() just above. Proof of
+   * life before anything that could actually hang. */
   app_leds_init();
-  MX_DMA_Init();
-  MX_TIM3_Init();
-  MX_SPI1_Init();
-  MX_SPI2_Init();
-  MX_ADC1_Init();
-  MX_I2C1_Init();
-  MX_SPI3_Init();
-  MX_TIM6_Init();
-  MX_USART3_UART_Init();
-  MX_USART6_UART_Init();
-  MX_USB_DRD_FS_PCD_Init();
-  MX_I2C3_Init();
-  /* USER CODE BEGIN 2 */
-  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: MX_*_Init() block done */
-
-  hal_gpio_init();
+  hal_gpio_init();              /* remaining pin defaults — no rails, no LEDs (see hal_gpio.c) */
   hal_systick_init();
-  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: rail sequencing done */
-
-  /* Record whether this boot resumed from Standby mode (all RAM/state was
-   * lost either way — this is a fresh boot regardless) and clear the PWR
-   * wake flags. No branching needed here: svc_battery_update() re-derives
-   * battery/USB state fresh every tick, so a critical-battery-but-VBUS-
-   * present wake naturally starts charging instead of re-entering low
-   * power without any special-cased logic — see svc_battery.c. */
   g_system_state.woke_from_standby = hal_power_woke_from_standby();
-  hal_spi_init(HAL_SPI_DISPLAY);
-  hal_i2c_init(HAL_I2C_MAIN);
+
+  /* 3. External crystal + PLL, then timers. HAL_RCC_ClockConfig() re-syncs
+   * SysTick to the new SystemCoreClock internally, so HAL_Delay() below
+   * (steps 5-6) is accurate regardless of running on HSI up to this point. */
+  SystemClock_Config();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: HSE/PLL locked */
+
+  MX_DMA_Init();                /* must precede any peripheral that DMAs (SPI2, I2C1 below) */
+  MX_TIM3_Init();                /* buzzer PWM base — not used until WP3, harmless to configure now */
+  MX_TIM6_Init();                /* VCOM base timer — drv_sharp_lcd_init() starts it later */
+  hal_tim_init();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: timers configured */
+
+  /* 4. LED_STS heartbeat starts here (checkpoint toggles through the rest
+   * of this function); app_scheduler_run() hands it off to the real 2 Hz
+   * task_leds() once the scheduler is alive. */
+
+  /* 5. 3.3V rail. Needed in WP2 for the battery-sense divider (its
+   * low-side gate needs this rail live so the divider doesn't otherwise
+   * bleed the battery while "off") and the EEPROM. 25 ms: comfortable
+   * margin over LP5907 bulk-cap charge time without the previous
+   * brown-out-driven padding. */
+  hal_gpio_set(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, true);
+  HAL_Delay(25);
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 3.3V rail settled */
+
+  /* 6. 5V rail. Needed for the display and both temp sensors. */
+  hal_gpio_set(PWR_5V_EN_PORT, PWR_5V_EN_PIN, true);
+  HAL_Delay(25);
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 5V rail settled */
+
+  /* 7. Internal ADC — no digital bus, no external chip to wait on beyond
+   * VREF+/VDDA (always-on rail) already being stable. */
+  MX_ADC1_Init();
   /* ADC calibration failure is NOT boot-halting (CLAUDE.md 7.6 escalation):
    * a wake-from-Standby with the 3V3/VREF rail still settling used to brick
    * the device here in Error_Handler(). hal_adc_init() already retries; if
    * it still fails, flag it and carry on — svc_battery/drv_tmp236 gate on
    * ADC .valid and simply report nothing until a later scan succeeds. */
   g_system_state.adc_ok = hal_adc_init();
-  hal_tim_init();
+  drv_tmp236_init();             /* no-op: reads via the same internal ADC, no bus of its own */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: ADC calibration done */
 
+  /* 8a. I2C1 / EEPROM — needs the 3.3V rail (step 5) up. */
+  MX_I2C1_Init();
+  hal_i2c_init(HAL_I2C_MAIN);
   /* Storage must come before scheduler init — it populates
    * g_device_settings (and g_calibration) which the scheduler reads
    * for its task periods. */
   svc_storage_init();
+  drv_24lc256_init();            /* idempotent — svc_storage_init already calls this */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: EEPROM load/seed done */
 
-  svc_battery_init();
-  drv_tmp236_init();
-  drv_24lc256_init();          /* idempotent — svc_storage_init already calls this */
-
-  app_scheduler_init();
+  /* 8b. SPI2 / display — needs the 5V rail (step 6) up. */
+  MX_SPI2_Init();
+  hal_spi_init(HAL_SPI_DISPLAY);
   app_display_init();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: display init kicked off */
 
+  /* Remaining CubeMX peripherals: not yet used by any current WP (external
+   * ADC/DAC front end on SPI1/SPI3, RN4871 BLE UART, USB, a third I2C bus).
+   * Deferred to last on purpose — WP2/WP1's own init is what matters for
+   * "did we get far enough to work", not this boilerplate. */
+  MX_SPI1_Init();
+  MX_SPI3_Init();
+  MX_USART3_UART_Init();
+  MX_USART6_UART_Init();
+  MX_USB_DRD_FS_PCD_Init();
+  MX_I2C3_Init();
+
+  /* USER CODE BEGIN 2 */
+  svc_battery_init();
+  app_scheduler_init();
   hal_adc_start();             /* kick off the first ADC scan */
   /* USER CODE END 2 */
 

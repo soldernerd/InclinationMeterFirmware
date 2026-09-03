@@ -54,8 +54,14 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13|GPIO_PIN_14, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(_3V3_ENABLE__GPIO_Port, _3V3_ENABLE__Pin, GPIO_PIN_RESET);
+  /* !3V3_EN! starts HIGH (rail OFF) here — deliberate boot order (2026-09-03,
+   * supersedes the RESET/"stay on continuously" value from the brown-out
+   * mitigation, since BOR is off in the option bytes and raising supply
+   * voltage made no difference either): main.c turns the rail on exactly
+   * once, explicitly, at a well-defined point (after GPIO/LEDs/clocks,
+   * before anything that reads the battery-sense divider or talks to the
+   * EEPROM), not implicitly here as a side effect of GPIO init. */
+  HAL_GPIO_WritePin(_3V3_ENABLE__GPIO_Port, _3V3_ENABLE__Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GPIO_PIN_10, GPIO_PIN_RESET);

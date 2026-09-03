@@ -6,37 +6,14 @@ static HalGpioExtiCallback s_exti_callbacks[16] = {0};
 
 /* Pin mode/pull/speed are configured by MX_GPIO_Init() (CubeMX generated).
  * Initial output levels are set there too. We only enforce runtime defaults
- * here in case the MX init order changes in future. */
+ * here in case the MX init order changes in future.
+ *
+ * !3V3_EN! / !5V_EN! (the two switched power rails) are deliberately NOT
+ * touched here — main() owns bringing them up, once each, at a well-defined
+ * point in the boot sequence (after GPIO/LEDs/clocks, before anything that
+ * needs them), not as a side effect of this function. See main.c. */
 void hal_gpio_init(void)
 {
-    /* Keep the 3V3 rail on. !3V3_EN! is active-LOW — CubeMX's own GPIO init
-     * defaults it HIGH (rail off) as a safe boot state; drive it LOW here.
-     * (Also asserted pre-HAL_Init() in main.c via raw LL calls — this is a
-     * defensive re-assertion, not the first time the rail comes up.)
-     * WP1 briefly gated this off to chase current draw; WP2 needs it for the
-     * EEPROM / TMP236 / battery ADC front-end, so it stays on from here.
-     * NOTE: MX_GPIO_Init() drives this pin HIGH (rail OFF) during CubeMX
-     * peripheral init, so this line is where the rail actually comes (back)
-     * up on every boot — and on a fast Standby wake it's coming up from a
-     * fully-drained cap, hence the generous settle below. */
-    LL_GPIO_ResetOutputPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN);
-
-    /* Let the 3V3 rail (large bulk caps, also VREF+ for the ADC on REV B)
-     * fully settle BEFORE adding the 5V boost converter's inrush on top.
-     * Stacking both rails' inrush on a weak battery-node supply after a
-     * Standby wake is what browns the MCU out. */
-    HAL_Delay(50);
-
-    /* 5V rail: the display, buzzer, and both temp sensors need this.
-     * No power-sequencing module exists yet — asserted unconditionally at
-     * boot as a stopgap, not a real reference-counted design. */
-    LL_GPIO_SetOutputPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN);
-
-    /* Let the 5V rail settle before anything downstream (SPI, display) uses
-     * it. hal_adc_init()'s calibration also runs shortly after this and
-     * needs a stable 3V3/VREF. */
-    HAL_Delay(50);
-
     /* Display CS idle LOW (Sharp LCD: CS active HIGH) */
     LL_GPIO_ResetOutputPin(DISP_CS_PORT, DISP_CS_PIN);
 
