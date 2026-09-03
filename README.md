@@ -4,7 +4,13 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1 — Firmware scaffolding + Hello World display.** Builds clean (zero warnings, `-Wall -Wextra -Werror`). Hardware verification pending.
+**WP1–WP3 implemented on the `wp3` branch** (REV B hardware): display bring-up, power
+management/battery monitoring/EEPROM storage, and the rotary-encoder + buzzer + multi-screen
+UI local interaction layer. Builds clean (zero warnings, `-Wall -Wextra -Werror`) and has
+been through multiple rounds of structured code review. **Not yet flashed to real
+hardware** — see `docs/wp2-5_rebase_status.md` for the full per-branch history, review
+findings, and what's still unverified against real silicon. `master` itself currently
+reflects WP1 only; `wp2`/`wp3` are feature branches pending their own review/merge.
 
 ## Hardware
 

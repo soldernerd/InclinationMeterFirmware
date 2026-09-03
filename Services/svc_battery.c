@@ -125,7 +125,7 @@ void svc_battery_enter_low_power(void)
      * inside this bound. */
     uint32_t wait_start_ms = hal_systick_get_ms();
     while ((svc_storage_is_busy() || drv_sharp_lcd_is_busy()) &&
-           (uint32_t)(hal_systick_get_ms() - wait_start_ms) < 250U) {
+           hal_systick_elapsed_ms(wait_start_ms) < 250U) {
         svc_storage_update();
         drv_sharp_lcd_update();
     }
@@ -256,7 +256,7 @@ static void update_shutdown_arm(void)
         if (!s_shutdown_armed) {
             s_shutdown_armed    = true;
             s_shutdown_start_ms = hal_systick_get_ms();
-        } else if ((hal_systick_get_ms() - s_shutdown_start_ms) >= 2000U) {
+        } else if (hal_systick_elapsed_ms(s_shutdown_start_ms) >= 2000U) {
             svc_battery_enter_low_power();   /* never returns */
         }
     } else {

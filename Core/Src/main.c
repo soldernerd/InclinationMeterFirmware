@@ -39,11 +39,15 @@
 #include "system_state.h"
 #include "drv_tmp236.h"
 #include "drv_24lc256.h"
+#include "drv_encoder.h"
+#include "drv_buzzer.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
 #include "app_display.h"
 #include "app_leds.h"
+#include "app_ui.h"
+#include "svc_input.h"
 #include "pin_config.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
@@ -184,6 +188,17 @@ int main(void)
   hal_spi_init(HAL_SPI_DISPLAY);
   app_display_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: display init kicked off */
+
+  /* 8c. Local UI layer (WP3): rotary encoders (EXTI on GPIO from step 1),
+   * push-switch polling, buzzer PWM (TIM3 from step 4 + 5V rail from
+   * step 6), and the UI state machine. All before the scheduler starts
+   * pumping task_input / task_buzzer / task_ui. */
+  drv_encoder_init(ENCODER_1);
+  drv_encoder_init(ENCODER_2);
+  drv_buzzer_init();
+  svc_input_init();
+  app_ui_init();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: UI layer up */
 
   /* Remaining CubeMX peripherals: not yet used by any current WP (external
    * ADC/DAC front end on SPI1/SPI3, RN4871 BLE UART, USB, a third I2C bus).

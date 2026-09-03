@@ -4,7 +4,18 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Field groups below are laid out contiguously per EEPROM page — see
+ * config.h's EEPROM_*_SETTINGS_ADDR/VERSION and
+ * Services/svc_storage.c's SettingsSection table, which slices this
+ * struct into independently-versioned/CRC'd pages by exactly these
+ * group boundaries (offsetof(first field) .. offsetof(last field) +
+ * sizeof(last field)). Keep each group's fields adjacent — inserting an
+ * unrelated field in the middle of a group would silently pull it into
+ * that group's EEPROM page. No calibration constant lives only in
+ * flash; these are always read from here, not a #define, past first
+ * boot — see config.h's DEFAULT_* for the seed values. */
 typedef struct {
+    /* --- Scheduler/Timing page --- */
     uint16_t task_sensors_ms;
     uint16_t task_processing_ms;
     uint16_t task_display_ms;
@@ -17,16 +28,20 @@ typedef struct {
     uint32_t settling_timeout_ms;
     uint16_t filter_cutoff_hz_num;
     uint16_t filter_cutoff_hz_den;
+
+    /* --- Battery page --- */
     uint16_t battery_critical_mv;     /* below this: BATTERY_CRITICAL (power-off) */
     uint16_t battery_low_mv;          /* below this (and >= critical): BATTERY_LOW (warning) */
     uint16_t battery_charge_start_mv; /* below this, with USB present: enable charging */
-
-    /* ADC/sensor scaling calibration — see config.h's DEFAULT_* for the
-     * seed values and what each feeds. No calibration constant lives
-     * only in flash; these are always read from here, not a #define,
-     * past first boot. */
-    uint16_t vbat_scale_num;
+    uint16_t vbat_scale_num;         /* ADC divider scale — part of the battery page */
     uint16_t vbat_scale_den;
+    uint16_t battery_page_reserved;  /* pad: keeps DeviceSettings a multiple of 4 bytes
+                                      * (the struct has int32/uint32 members, so it aligns
+                                      * to 4 — see svc_storage.c's "ends exactly at the
+                                      * struct's end" static assert). Reuse this slot for
+                                      * the next battery-page field. */
+
+    /* --- TMP236 (on-board temp sensor) page --- */
     uint16_t tmp236_seg1_voffs_mv;
     uint16_t tmp236_seg1_num;
     uint16_t tmp236_seg1_den;
@@ -35,8 +50,15 @@ typedef struct {
     uint16_t tmp236_seg2_num;
     uint16_t tmp236_seg2_den;
     uint16_t tmp236_seg2_tinfl_cdeg;
+
+    /* --- LM35 (external temp sensor) page --- */
     uint16_t lm35_scale_mv_per_c;
-    uint16_t checksum;
+
+    /* --- Encoder page (WP3) ---
+     * Raw quadrature transitions per mechanical detent — see
+     * App/app_ui.c's consume_detents(). Unconfirmed against real
+     * hardware, same as the calibration fields above. */
+    uint16_t encoder_counts_per_detent;
 } DeviceSettings;
 
 typedef struct {
@@ -81,6 +103,45 @@ typedef struct {
                                   * while false. */
 
     bool     calibration_valid;
+
+    /* Local UI input (WP3), published by Services/svc_input.c. Raw
+     * quadrature transition counts, not mechanical-detent counts — see
+     * Drivers_App/drv_encoder.h. App/app_ui.c is the UI layer that
+     * translates these (and the press events) into navigation/edit
+     * actions, deciding on its own how many raw counts make one
+     * mechanical "click." */
+    int32_t  encoder1_count;
+    int32_t  encoder2_count;
+    bool     encoder1_sw_pressed;        /* current level */
+    bool     encoder2_sw_pressed;
+    bool     encoder1_sw_press_event;    /* latched on press edge; the
+                                           * consumer (app_ui.c) clears it
+                                           * after acting on it — buttons
+                                           * aren't EXTI-capable on this
+                                           * pinout (see pin_config.h), so
+                                           * svc_input.c polls and can't
+                                           * hand the consumer a real
+                                           * one-shot interrupt event */
+    bool     encoder2_sw_press_event;
+
+    /* True while a settings EEPROM write has failed and hasn't been
+     * superseded by a successful one yet. Set from three places in
+     * Services/svc_storage.c / App/app_ui.c: (1) commit_edit() sets it
+     * synchronously if svc_storage_save_settings() can't even be
+     * queued; (2) svc_storage_update() sets it (asynchronously, possibly
+     * many ticks later) if a multi-page settings save fails partway
+     * through after retries are exhausted — the save isn't atomic across
+     * its 5 EEPROM pages, so this is the only signal that a "successful"
+     * queue didn't actually finish; (3) svc_storage_init()'s boot-time
+     * per-page reseed-to-defaults write can also fail and sets it. Only
+     * svc_storage_update() clears it, at the point a full multi-page
+     * save genuinely completes — not commit_edit()'s optimistic
+     * synchronous-queue-success clear, which can't see a later failure.
+     * No DBG_PRINT infra exists in this codebase yet (WP1.5 was never
+     * wired up), so this is the escalation-to-system-state half of
+     * CLAUDE.md's "No Silent Failures" rule; App/app_display.c's
+     * SETTINGS screen renders it. */
+    bool     settings_save_failed;
 } SystemState;
 
 typedef struct {

@@ -239,6 +239,38 @@
                                               * ENC_1SW above (encoder 2's
                                               * push switch). */
 
+/* Encoder A/B quadrature signals (WP3, REV B pinout — old REV A prototype
+ * had these on PA0-PA3/PC4/PC5, all reassigned; see
+ * docs/pinout_migration_wp2-5.md). RC-filtered + 74HC14 Schmitt-trigger
+ * *buffered* (NOT inverted, unlike ENC_1SW/ENC_2SW above — confirmed
+ * CMOS-driven, no pull needed). Both edges of both A and B are EXTI-driven
+ * (GPIO_MODE_IT_RISING_FALLING, Core/Src/gpio.c) so Drivers_App/
+ * drv_encoder.c does a full 4x quadrature decode rather than the REV A
+ * prototype's simpler A-edge-only approach. */
+#define ENC_1A_PORT         GPIOC
+#define ENC_1A_PIN          GPIO_PIN_4      /* PC4, EXTI4 */
+#define ENC_1B_PORT         GPIOB
+#define ENC_1B_PIN          GPIO_PIN_0      /* PB0, EXTI0 */
+#define ENC_2A_PORT         GPIOB
+#define ENC_2A_PIN          GPIO_PIN_1      /* PB1, EXTI1 */
+#define ENC_2B_PORT         GPIOB
+#define ENC_2B_PIN          GPIO_PIN_2      /* PB2, EXTI2 */
+
+/* Buzzer (WP3): Same Sky CPT-9019A-SMT-TR piezo transducer, externally
+ * driven (no internal oscillator) — needs a continuous drive square wave,
+ * not just a logic level. Datasheet's frequency-response curve peaks
+ * loudest around ~5.5 kHz (~84 dB); driven at ~2 kHz instead (~73 dB, a
+ * secondary response peak) per user preference — less piercing. Moved
+ * from the REV A prototype's TIM1_CH2/PB3 to TIM3_CH4/PC9 on REV B.
+ * HAL_App/hal_tim.c drives it via PWM, prescaler 63 -> 1 MHz tick
+ * (confirmed APB1 = HCLK = 64 MHz, no prescaler, in
+ * SystemClock_Config()), ARR = (1,000,000 / freq_hz) - 1. Needs 5V_EN
+ * (see PWR_5V_EN above) — already asserted unconditionally at boot. Not a
+ * plain-GPIO macro here since it's always driven via the TIM3 AF path
+ * (Core/Src/tim.c's HAL_TIM_MspPostInit); listed for documentation only. */
+#define BUZZER_PORT         GPIOC
+#define BUZZER_PIN          GPIO_PIN_9      /* PC9, TIM3_CH4 (AF1) */
+
 /* I2C1 — EEPROM (and BME280 in future WPs) */
 #define I2C1_SCL_PORT       GPIOB
 #define I2C1_SCL_PIN        GPIO_PIN_6      /* PB6, I2C1_SCL AF6 — unchanged */
@@ -311,12 +343,10 @@
 /* Reserved for later work packages:
  *   SCL3300 / PCAP04            — removed from REV B hardware, no longer applicable
  *   RN4871 UART                 — WP5 (USART6 now, was USART2)
- *   Encoder A/B quadrature       — WP3 (PC4/PB0/PB1/PB2). Push switches
- *                                  ENC_1SW/ENC_2SW are already defined above
- *                                  for their WKUP1/WKUP5 role.
- *   Buzzer TIM3_CH4              — WP3 (PC9, was TIM1)
  *   USB DP/DM                   — WP4 (PA11/PA12, unchanged, standard pins)
  *   External ADC/DAC front end (SPI1/SPI3) — unidentified, future WP
- */
+ *
+ * Encoder A/B quadrature and buzzer TIM3_CH4 were WP3 scope — now
+ * implemented, see their #defines above. */
 
 #endif /* PIN_CONFIG_H */
