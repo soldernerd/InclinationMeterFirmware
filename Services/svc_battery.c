@@ -56,6 +56,13 @@ static uint8_t s_critical_streak = 0;
 #define BATTERY_STARTUP_MIN_SAMPLES  10U
 static uint8_t s_valid_sample_count = 0;
 
+/* Charge-enable needs far less confidence than the shutdown path: two
+ * confirmed ADC readings are enough to know we're below the charge-start
+ * threshold, and a spurious enable on an already-full pack is harmless
+ * (the TP4056 just terminates). Waiting the full BATTERY_STARTUP_MIN_SAMPLES
+ * here delayed charge start by ~10 s after a USB wake. */
+#define BATTERY_CHARGE_MIN_SAMPLES   2U
+
 static uint16_t adc_to_vbat_mv(uint16_t vbat_raw, uint16_t vrefint_raw)
 {
     /* Vbat_mv = V_ADC_mv × vbat_scale_num / vbat_scale_den (100k/33k
@@ -180,7 +187,7 @@ static void update_charge_enable(void)
      * mid-charge) until the TP4056 reports complete or USB disappears. */
     if (!s_usb_connected || s_charge_complete) {
         s_charge_enabled = false;
-    } else if (!startup_grace_active() && s_vbat_mv > 0 &&
+    } else if (s_valid_sample_count >= BATTERY_CHARGE_MIN_SAMPLES && s_vbat_mv > 0 &&
                s_vbat_mv < g_device_settings.battery_charge_start_mv) {
         s_charge_enabled = true;
     }
@@ -194,10 +201,21 @@ static void classify_battery_state(void)
          * still be zero-initialized defaults, not real data. Assume NORMAL
          * rather than risk tripping the shutdown latch during startup. */
         s_state = BATTERY_NORMAL;
-    } else if (s_usb_connected && s_charge_complete) {
-        s_state = BATTERY_FULL;
-    } else if (s_usb_connected && s_charging) {
-        s_state = BATTERY_CHARGING;
+    } else if (s_usb_connected) {
+        /* On external power the pack is being recovered, not run down.
+         * Never fall through to the LOW/CRITICAL voltage checks here: a
+         * low pack voltage is exactly why USB is plugged in, and
+         * update_shutdown_arm() won't power off with USB present anyway,
+         * so showing "shutting down" would be wrong. Use s_charge_enabled
+         * (our own latch) not just s_charging (the TP4056 CHRG line),
+         * which lags the enable by a tick or two. */
+        if (s_charge_complete) {
+            s_state = BATTERY_FULL;
+        } else if (s_charging || s_charge_enabled) {
+            s_state = BATTERY_CHARGING;
+        } else {
+            s_state = BATTERY_NORMAL;   /* USB in, pack healthy, not charging by policy */
+        }
     } else if (s_vbat_mv == 0) {
         /* Zero past the startup grace period is a sense-line/ADC fault,
          * not a real reading — treat as critical rather than silently
