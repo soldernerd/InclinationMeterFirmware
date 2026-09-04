@@ -31,6 +31,7 @@ static volatile uint32_t  s_usb_err_count     = 0;
 static volatile uint32_t  s_usb_pmaovr_count  = 0;
 static volatile uint32_t  s_usb_ctr_count     = 0;
 static volatile uint32_t  s_usb_wkup_count    = 0;
+static volatile uint32_t  s_usb_attach_toggles = 0;
 
 void hal_usb_isr_tick(void)
 {
@@ -67,6 +68,7 @@ void hal_usb_get_debug(HalUsbDebug *out)
     out->pmaovr_count    = s_usb_pmaovr_count;
     out->ctr_count       = s_usb_ctr_count;
     out->wkup_count      = s_usb_wkup_count;
+    out->attach_toggles  = s_usb_attach_toggles;
 }
 
 void hal_usb_init(void)
@@ -152,8 +154,10 @@ void hal_usb_update(void)
         if (USBD_Start(&hUsbDeviceFS) == USBD_OK) {
             s_attached = true;
         }
+        s_usb_attach_toggles++;
     } else if (!vbus && s_attached) {
         USBD_Stop(&hUsbDeviceFS);
         s_attached = false;
+        s_usb_attach_toggles++;
     }
 }

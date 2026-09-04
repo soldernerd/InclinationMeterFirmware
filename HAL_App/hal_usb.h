@@ -42,6 +42,10 @@ typedef struct {
     uint32_t ctr_count;     /* ISTR.CTR seen at IRQ entry (a transfer        */
                             /*   completed on some endpoint, incl. EP0)      */
     uint32_t wkup_count;    /* ISTR.WKUP seen at IRQ entry                   */
+    uint32_t attach_toggles; /* USBD_Start()/Stop() calls from hal_usb_update */
+                              /*   since boot — climbing fast while VBUS      */
+                              /*   reads steady plugged in means PA2 is       */
+                              /*   bouncing and we're repeatedly detaching    */
 } HalUsbDebug;
 
 void hal_usb_get_debug(HalUsbDebug *out);

@@ -251,12 +251,17 @@ static void draw_status_screen(void)
     {
         HalUsbDebug u;
         hal_usb_get_debug(&u);
-        snprintf(line, sizeof line, "USB a%u v%u st%u pu%u",
+        snprintf(line, sizeof line, "a%u v%u st%u pu%u fnr%u tog%lu",
                  (unsigned)u.attached, (unsigned)u.vbus_pin,
-                 (unsigned)u.dev_state, (unsigned)u.dppu);
+                 (unsigned)u.dev_state, (unsigned)u.dppu,
+                 (unsigned)u.fnr, (unsigned long)u.attach_toggles);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        snprintf(line, sizeof line, "USB fnr%u irq%lu",
-                 (unsigned)u.fnr, (unsigned long)u.irq_count);
+        /* tog = USBD_Start()/Stop() calls since boot. Climbing fast while
+         * the device stays visibly plugged in means VBUS_SENSE (PA2) is
+         * bouncing and we're repeatedly detaching/reattaching — which would
+         * explain resets/setups never completing despite the pull-up being
+         * asserted (each Start() only stays up for a few ms). */
+        snprintf(line, sizeof line, "irq%lu", (unsigned long)u.irq_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
         snprintf(line, sizeof line, "CRS ok%u isr0x%lX",
                  (unsigned)(u.crs_isr & 1U), (unsigned long)u.crs_isr);
