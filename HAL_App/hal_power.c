@@ -68,91 +68,45 @@ void hal_power_enter_standby(void)
     NVIC_SystemReset();
 }
 
-void hal_power_jump_to_system_bootloader(void)
+void hal_power_reboot_to_dfu(void)
 {
-    /* Classic STM32 "jump to the ROM system bootloader" sequence, called
-     * directly from wherever the caller decides to (App/app_ui.c's
-     * "Reboot to DFU" menu action) — no prior reset needed. Undoes
-     * whatever this boot has set up (clocks, interrupts, SysTick), remaps
-     * system Flash to address 0x0, then loads the bootloader's own
-     * initial SP and reset vector from there and jumps.
-     * __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH() is the vendor-verified way to
-     * do the remap on this exact part — deliberately not hand-computing a
-     * raw system-memory address, which differs across STM32 families and
-     * would be easy to get wrong.
+    /* NOT a software jump into system memory. Four rounds of that
+     * approach (fixing, in order: the bootloader needing interrupts
+     * enabled; USB/CRS peripherals left in a dirty state; SCB->VTOR not
+     * following the SYSCFG remap; a Cortex-M0+ NVIC array-bounds bug that
+     * silently invalidated all three of the earlier fixes) never
+     * stopped the ROM bootloader from immediately falling back to this
+     * application every single time, for a reason never conclusively
+     * identified — plausibly the bootloader's own boot-address-selection
+     * logic re-checking nBOOT0/nBOOT_SEL (which say "boot main flash")
+     * independent of how it was actually entered, per scattered STM32G0
+     * community reports of the same "jump works but doesn't stay
+     * resident" symptom on this newer boot-config scheme.
      *
-     * Interrupts: disabled up front so nothing fires mid-sequence while
-     * clocks/NVIC are being torn down, but explicitly RE-enabled just
-     * before the jump (after MSP is already pointed at the bootloader's
-     * own stack, so anything that does fire lands safely). The bootloader
-     * expects to be entered the way a real reset leaves the core — PRIMASK
-     * clear, interrupts enabled — since that's the only way it's ever
-     * normally reached; it has no reason to re-enable them itself. Leaving
-     * interrupts globally disabled here means its own USB stack can never
-     * see an interrupt, so it never notices a host talking to it, decides
-     * nothing is happening, and falls back to jumping into the application
-     * instead — exactly "no reboot but jumps back to normal operation".
-     * Every NVIC line was cleared just above, so nothing stale is pending
-     * to fire once this re-enables.
-     *
-     * USB_DRD_FS / CRS: confirmed by experiment that the ROM bootloader's
-     * own USB works perfectly on this hardware (a blank chip's native
-     * System-Memory boot enumerated and stayed resident for a full DFU
-     * flash) — so a jump that still falls back to the app isn't a
-     * hardware problem, it's this function leaving the bootloader a dirty
-     * slate. HAL_RCC_DeInit() resets the clock TREE but doesn't force-
-     * reset individual peripherals, so whatever CNTR/BCDR/CRS state our
-     * own (not-yet-working) USB stack left behind was still sitting there
-     * when the bootloader initialised its own USB on top of it — unlike a
-     * genuine power-on reset, which starts every peripheral register at
-     * its true default. Force-reset both explicitly so the bootloader
-     * gets the same clean slate a real reset would have given it. Never
-     * returns. */
-    __disable_irq();
-    SysTick->CTRL = 0U;
-    HAL_RCC_DeInit();
-    /* Cortex-M0+ (this core) has exactly ONE NVIC ICER/ICPR register —
-     * CMSIS declares NVIC->ICER and NVIC->ICPR as [1], not [8] (the
-     * bigger M3/M4/M7 layout most "jump to bootloader" examples online
-     * are written against). A loop copied from one of those writes 7
-     * words past the end of each 1-element array into reserved System
-     * Control Space addresses — undefined behavior, and the actual
-     * explanation for every one of the last several fixes (interrupt
-     * re-enable, USB/CRS reset, VTOR) making no observable difference:
-     * none of that code ever ran, because this was already corrupting
-     * something (or faulting) before reaching it. */
-    NVIC->ICER[0] = 0xFFFFFFFFU;
-    NVIC->ICPR[0] = 0xFFFFFFFFU;
+     * Meanwhile a real experiment already proved the ONE path that
+     * definitely works on this exact board: mass-erase main flash, and
+     * the chip's own boot ROM address-selection logic (independent of
+     * nBOOT0/nBOOT_SEL — this is a documented, unconditional safety net
+     * for a genuinely blank device) boots straight into System Memory,
+     * which then enumerated over USB and stayed resident for a full DFU
+     * flash. FLASH_ACR.PROGEMPTY is the bit that path relies on — ST's
+     * own HAL_FLASHEx_ForceFlashEmpty() exists specifically to fake that
+     * bit's value "for all next reset that do not launch Option Byte
+     * Loader" (its own docstring) WITHOUT actually erasing anything.
+     * Force it, then do a genuine reset: the boot ROM sees what it thinks
+     * is a blank chip and takes the exact same proven-working path,
+     * regardless of nBOOT0/nBOOT_SEL. The application itself is left
+     * completely intact in flash the whole time — nothing here erases or
+     * touches it. A power-on reset (not just this warm one) always re-
+     * evaluates the real flash content and clears this back to "not
+     * empty" once genuine firmware exists again, so there's no way to
+     * get permanently stuck: worst case, declining to flash and instead
+     * power-cycling (rather than warm-resetting) gets back to the
+     * application immediately. Never returns. */
+    HAL_FLASH_Unlock();
+    HAL_FLASHEx_ForceFlashEmpty(FLASH_PROG_EMPTY);
+    HAL_FLASH_Lock();
 
-    __HAL_RCC_USB_FORCE_RESET();
-    __HAL_RCC_CRS_FORCE_RESET();
-    __HAL_RCC_USB_RELEASE_RESET();
-    __HAL_RCC_CRS_RELEASE_RESET();
-
-    __HAL_RCC_SYSCFG_CLK_ENABLE();
-    __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
-
-    /* SCB->VTOR is a separate register from the SYSCFG remap above and
-     * does NOT follow it automatically — it's an absolute address the
-     * core uses for every exception/interrupt vector fetch from here on.
-     * Our app never sets it explicitly (SystemInit()'s VTOR write is
-     * conditional on USER_VECT_TAB_ADDRESS, which this project doesn't
-     * define), so if it isn't already exactly 0x00000000, the very next
-     * interrupt the bootloader takes (SysTick, USB, ...) vectors through
-     * whatever table VTOR was ACTUALLY left pointing at — quite possibly
-     * our own application's — rather than the bootloader's. Set it
-     * explicitly rather than assume it was already correct. */
-    SCB->VTOR = 0x00000000U;
-
-    typedef void (*BootJumpFn)(void);
-    uint32_t   bootloader_sp   = *(volatile uint32_t *)0x00000000U;
-    BootJumpFn bootloader_jump = (BootJumpFn)(*(volatile uint32_t *)0x00000004U);
-
-    __set_MSP(bootloader_sp);
-    __DSB();
-    __ISB();
-    __enable_irq();
-    bootloader_jump();
-
-    for (;;) { }   /* never reached */
+    NVIC_SystemReset();
+    for (;;) { }   /* NVIC_SystemReset() does not return */
 }

@@ -266,19 +266,15 @@ void app_ui_update(void)
         } else {
             /* Action row (UI_SETTING_REBOOT_DFU): rotating does nothing;
              * this second RIGHT press (the first got us into "editing" /
-             * confirm state below) performs the action immediately — a
-             * direct runtime jump into the ROM bootloader, right from
-             * here, no reset in between. (An earlier version persisted a
-             * flag in EEPROM and reset first, on the theory that a fresh
-             * reboot gives the bootloader a cleaner slate; that turned
-             * out to be unnecessary complexity — the flag mysteriously
-             * didn't survive the reset anyway — and jumping directly from
-             * a known-good running app, which is the standard approach,
-             * sidesteps the whole question.) Never returns. */
+             * confirm state below) performs the action immediately — see
+             * hal_power_reboot_to_dfu()'s comment for the mechanism
+             * (faking "blank flash" for the next reset, not a software
+             * jump — several rounds of the latter never stayed resident
+             * in the bootloader on this board). Never returns. */
             if (e1_press) {
                 beep_confirm();
                 if ((UiSettingIndex)g_ui_state.settings_cursor == UI_SETTING_REBOOT_DFU) {
-                    hal_power_jump_to_system_bootloader();
+                    hal_power_reboot_to_dfu();
                 }
             }
         }

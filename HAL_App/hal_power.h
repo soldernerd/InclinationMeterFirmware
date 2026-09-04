@@ -35,16 +35,15 @@ bool hal_power_woke_from_standby(void);
  * for disabling whatever rails/peripherals should be off first. */
 void hal_power_enter_standby(void);
 
-/* Jumps into the STM32 ROM system bootloader (USB DFU / UART) instead of
- * continuing this firmware — App/app_ui.c's "Reboot to DFU" menu action
- * calls this directly, right from the running application, no prior
- * reset needed. (An earlier version persisted a request across a reset
- * instead — via a TAMP backup register, then retained RAM, then EEPROM —
- * on the theory that a fresh reboot gives the bootloader a cleaner
- * slate; each mechanism's "survives the reset" assumption turned out
- * wrong on this board for reasons never root-caused, and it was all
- * unnecessary anyway: this function already fully undoes clock/interrupt
- * state before jumping, which is what actually matters.) Never returns. */
-void hal_power_jump_to_system_bootloader(void);
+/* Reboots into the STM32 ROM system bootloader (USB DFU / UART) instead
+ * of continuing this firmware — App/app_ui.c's "Reboot to DFU" menu
+ * action calls this directly. Forces FLASH_ACR.PROGEMPTY so the next
+ * reset's own boot-address-selection logic believes main flash is
+ * blank (a documented, unconditional path to System Memory boot,
+ * independent of the nBOOT0/nBOOT_SEL option bytes) and then performs a
+ * genuine reset — see the .c file's comment for why this replaced an
+ * earlier software-jump implementation that never worked. Does not
+ * erase or otherwise touch the application in flash. Never returns. */
+void hal_power_reboot_to_dfu(void);
 
 #endif /* HAL_POWER_H */
