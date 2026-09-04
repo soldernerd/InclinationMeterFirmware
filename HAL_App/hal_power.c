@@ -111,10 +111,18 @@ void hal_power_jump_to_system_bootloader(void)
     __disable_irq();
     SysTick->CTRL = 0U;
     HAL_RCC_DeInit();
-    for (uint8_t i = 0U; i < 8U; i++) {
-        NVIC->ICER[i] = 0xFFFFFFFFU;
-        NVIC->ICPR[i] = 0xFFFFFFFFU;
-    }
+    /* Cortex-M0+ (this core) has exactly ONE NVIC ICER/ICPR register —
+     * CMSIS declares NVIC->ICER and NVIC->ICPR as [1], not [8] (the
+     * bigger M3/M4/M7 layout most "jump to bootloader" examples online
+     * are written against). A loop copied from one of those writes 7
+     * words past the end of each 1-element array into reserved System
+     * Control Space addresses — undefined behavior, and the actual
+     * explanation for every one of the last several fixes (interrupt
+     * re-enable, USB/CRS reset, VTOR) making no observable difference:
+     * none of that code ever ran, because this was already corrupting
+     * something (or faulting) before reaching it. */
+    NVIC->ICER[0] = 0xFFFFFFFFU;
+    NVIC->ICPR[0] = 0xFFFFFFFFU;
 
     __HAL_RCC_USB_FORCE_RESET();
     __HAL_RCC_CRS_FORCE_RESET();
