@@ -13,8 +13,8 @@ UiState g_ui_state = {
     .edit_value       = 0,
 };
 
-static int32_t s_enc1_base;
-static int32_t s_enc2_base;
+static int32_t s_enc1_pos;
+static int32_t s_enc2_pos;
 
 /* ---- per-setting metadata ----
  * Single shared table (label/unit/step/min/max) — App/app_display.c
@@ -69,27 +69,36 @@ static int32_t clamp(int32_t v, int32_t lo, int32_t hi)
     return v;
 }
 
-/* Converts a continuously-accumulating raw quadrature count into whole
- * mechanical detents since the last call, without losing a partial
- * detent between calls (the remainder stays banked in *base).
+/* Converts the continuously-accumulating raw quadrature count into whole
+ * mechanical detents moved since the last call. *last_pos holds the last
+ * reported detent index (0 at init).
  *
- * Divisor comes from g_device_settings.encoder_counts_per_detent
- * (EEPROM-backed, DEFAULT_ENCODER_COUNTS_PER_DETENT seed in config.h) —
- * NOT confirmed against this board's actual encoder part (2026-08-17
- * user note: "not even sure about the edges per dent"), which is
- * exactly why it's a settings field and not a flash constant: it can be
- * corrected after hardware bring-up without a reflash. Not re-validated
- * here on every call: Services/svc_storage.c's svc_storage_init() is the
- * single gate this value passes through (runs before app_ui_init(), and
- * nothing else in this codebase writes this field), so it's already
- * guaranteed nonzero by the time this runs. */
-static int16_t consume_detents(int32_t current_count, int32_t *base)
+ * encoder_counts_per_detent is EEPROM-backed and NOT confirmed against
+ * this board's actual encoder part (2026-08-17 user note: "not even sure
+ * about the edges per dent") — that's why it's a settings field, tunable
+ * after bring-up without a reflash. */
+static int16_t consume_detents(int32_t current_count, int32_t *last_pos)
 {
-    int32_t per_detent = (int32_t)g_device_settings.encoder_counts_per_detent;
-    int32_t delta = current_count - *base;
-    int32_t detents = delta / per_detent;
-    *base += detents * per_detent;
-    return (int16_t)detents;
+    /* Snap the raw quadrature count to the NEAREST whole detent index and
+     * report how many detents that moved since last call. Round-to-nearest
+     * (not truncate) means a click registers as the knob passes the
+     * half-way point between mechanical detents, regardless of where in
+     * the Gray cycle the encoder happened to rest at power-on — so the
+     * first turn always counts, no "2 turns to react". It's also self-
+     * correcting: because pos is derived from the absolute count, a single
+     * missed or bounced edge can't permanently shift the phase.
+     *
+     * per_detent comes from g_device_settings.encoder_counts_per_detent
+     * (EEPROM-backed; svc_storage_init() guarantees it nonzero before
+     * app_ui_init() runs). */
+    int32_t per  = (int32_t)g_device_settings.encoder_counts_per_detent;
+    int32_t half = per / 2;
+    int32_t pos  = (current_count >= 0)
+                     ? ( (current_count + half) / per)
+                     : -(((-current_count) + half) / per);
+    int16_t steps = (int16_t)(pos - *last_pos);
+    *last_pos = pos;
+    return steps;
 }
 
 /* ---- helpers ---- */
@@ -163,8 +172,8 @@ void app_ui_init(void)
 {
     /* drv_encoder_init()/drv_buzzer_init() already run in main.c, before
      * svc_input_init() — not repeated here. */
-    s_enc1_base = 0;
-    s_enc2_base = 0;
+    s_enc1_pos = 0;
+    s_enc2_pos = 0;
 
     g_ui_state.current_screen   = UI_SCREEN_LIVE;
     g_ui_state.previous_screen  = UI_SCREEN_LIVE;
@@ -175,8 +184,8 @@ void app_ui_init(void)
 
 void app_ui_update(void)
 {
-    int16_t e1_steps = consume_detents(g_system_state.encoder1_count, &s_enc1_base);
-    int16_t e2_steps = consume_detents(g_system_state.encoder2_count, &s_enc2_base);
+    int16_t e1_steps = consume_detents(g_system_state.encoder1_count, &s_enc1_pos);
+    int16_t e2_steps = consume_detents(g_system_state.encoder2_count, &s_enc2_pos);
     bool    e1_press = g_system_state.encoder1_sw_press_event;
     bool    e2_press = g_system_state.encoder2_sw_press_event;
     g_system_state.encoder1_sw_press_event = false;

@@ -3,9 +3,8 @@
 #include "hal_systick.h"
 #include <stdbool.h>
 
-static volatile bool     s_active         = false;
-static          uint32_t s_beep_start_ms  = 0;
-static          uint16_t s_beep_duration_ms = 0;
+static volatile bool s_active            = false;
+static uint32_t      s_beep_deadline_ms  = 0;   /* absolute stop time */
 
 void drv_buzzer_init(void)
 {
@@ -27,17 +26,26 @@ void drv_buzzer_off(void)
 
 void drv_buzzer_beep(BuzzerTone tone, uint16_t duration_ms)
 {
-    drv_buzzer_on(tone);
-    s_beep_start_ms    = hal_systick_get_ms();
-    s_beep_duration_ms = duration_ms;
+    uint32_t deadline = hal_systick_get_ms() + duration_ms;
+
+    if (!s_active) {
+        drv_buzzer_on(tone);
+        s_beep_deadline_ms = deadline;
+        return;
+    }
+
+    /* A beep is already sounding — only ever push the stop time LATER,
+     * never earlier. Rapid UI events (a press beep followed by a rotation
+     * beep, or a fast encoder spin) then blend into one continuous click
+     * instead of chopping the first one short. */
+    if ((int32_t)(deadline - s_beep_deadline_ms) > 0) {
+        s_beep_deadline_ms = deadline;
+    }
 }
 
 void drv_buzzer_update(void)
 {
-    if (!s_active) {
-        return;
-    }
-    if (hal_systick_elapsed_ms(s_beep_start_ms) >= s_beep_duration_ms) {
+    if (s_active && (int32_t)(hal_systick_get_ms() - s_beep_deadline_ms) >= 0) {
         drv_buzzer_off();
     }
 }
