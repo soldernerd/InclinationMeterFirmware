@@ -103,6 +103,20 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
     HAL_NVIC_SetPriority(USB_UCPD1_2_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(USB_UCPD1_2_IRQn);
   /* USER CODE BEGIN USB_DRD_FS_MspInit 1 */
+    /* STM32G0B1RET6 is LQFP64: it has NO dedicated PA11/PA12 pins. USB
+     * DM/DP only reach a package pin via the PA9/PA10 pads, and only when
+     * the SYSCFG remap is enabled (this is why the .ioc lists the signals
+     * as "PA11 [PA9]" / "PA12 [PA10]"). Without this the USB peripheral is
+     * fully configured but its data lines are on no pin — VBUS is seen but
+     * enumeration never starts. CubeMX normally emits this in MX_GPIO_Init;
+     * it was lost in the hand-port / regen, so set it here where USB is
+     * brought up (SYSCFG clock is already enabled in HAL_MspInit).
+     * NB: gpio.c still configures PA9 as input / PA10 as output — harmless
+     * dead config once the pads carry PA11/PA12, to be cleaned on the next
+     * real regen. */
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    SYSCFG->CFGR1 |= (SYSCFG_CFGR1_PA11_RMP | SYSCFG_CFGR1_PA12_RMP);
+
     /* The USB clock is HSI48 (RCC_USBCLKSOURCE_HSI48 above). Free-running
      * HSI48 is not within USB full-speed frequency tolerance, so enumeration
      * fails: the device pulls D+ high (Windows Device Manager refreshes on
