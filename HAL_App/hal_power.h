@@ -2,6 +2,7 @@
 #define HAL_POWER_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 /* Configures the 3 wake-up pins that can bring the MCU out of Standby
  * mode — ENC_1SW (WKUP1), VBUS_SENSE (WKUP4), ENC_2SW (WKUP5), all
@@ -51,5 +52,12 @@ void hal_power_request_dfu_reboot(void);
  * immediately and normal boot continues — the common case, and cheap
  * (a couple of register reads). */
 void hal_power_check_dfu_request_and_jump(void);
+
+/* The raw value hal_power_check_dfu_request_and_jump() read out of
+ * TAMP->BKP0R on THIS boot, captured before the compare/clear — so it's
+ * populated whether or not a DFU jump was requested. Temporary bring-up
+ * visibility (rendered on the STATUS screen) for confirming the backup
+ * register actually survives a software reset on this part/board. */
+uint32_t hal_power_last_bkp0r(void);
 
 #endif /* HAL_POWER_H */

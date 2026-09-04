@@ -73,6 +73,13 @@ void hal_power_enter_standby(void)
  * does clear the backup domain, unlike a software reset). */
 #define DFU_REBOOT_MAGIC   0x44465521U   /* loosely "DFU!" */
 
+static uint32_t s_last_bkp0r_seen = 0U;
+
+uint32_t hal_power_last_bkp0r(void)
+{
+    return s_last_bkp0r_seen;
+}
+
 static void backup_domain_unlock(void)
 {
     __HAL_RCC_PWR_CLK_ENABLE();
@@ -91,7 +98,8 @@ void hal_power_request_dfu_reboot(void)
 void hal_power_check_dfu_request_and_jump(void)
 {
     backup_domain_unlock();
-    if (TAMP->BKP0R != DFU_REBOOT_MAGIC) {
+    s_last_bkp0r_seen = TAMP->BKP0R;
+    if (s_last_bkp0r_seen != DFU_REBOOT_MAGIC) {
         return;   /* normal boot — the common case */
     }
     TAMP->BKP0R = 0U;   /* one-shot: don't loop back into DFU on the next reset */
