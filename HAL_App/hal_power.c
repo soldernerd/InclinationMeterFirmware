@@ -93,7 +93,21 @@ void hal_power_jump_to_system_bootloader(void)
      * nothing is happening, and falls back to jumping into the application
      * instead — exactly "no reboot but jumps back to normal operation".
      * Every NVIC line was cleared just above, so nothing stale is pending
-     * to fire once this re-enables. Never returns. */
+     * to fire once this re-enables.
+     *
+     * USB_DRD_FS / CRS: confirmed by experiment that the ROM bootloader's
+     * own USB works perfectly on this hardware (a blank chip's native
+     * System-Memory boot enumerated and stayed resident for a full DFU
+     * flash) — so a jump that still falls back to the app isn't a
+     * hardware problem, it's this function leaving the bootloader a dirty
+     * slate. HAL_RCC_DeInit() resets the clock TREE but doesn't force-
+     * reset individual peripherals, so whatever CNTR/BCDR/CRS state our
+     * own (not-yet-working) USB stack left behind was still sitting there
+     * when the bootloader initialised its own USB on top of it — unlike a
+     * genuine power-on reset, which starts every peripheral register at
+     * its true default. Force-reset both explicitly so the bootloader
+     * gets the same clean slate a real reset would have given it. Never
+     * returns. */
     __disable_irq();
     SysTick->CTRL = 0U;
     HAL_RCC_DeInit();
@@ -101,6 +115,11 @@ void hal_power_jump_to_system_bootloader(void)
         NVIC->ICER[i] = 0xFFFFFFFFU;
         NVIC->ICPR[i] = 0xFFFFFFFFU;
     }
+
+    __HAL_RCC_USB_FORCE_RESET();
+    __HAL_RCC_CRS_FORCE_RESET();
+    __HAL_RCC_USB_RELEASE_RESET();
+    __HAL_RCC_CRS_RELEASE_RESET();
 
     __HAL_RCC_SYSCFG_CLK_ENABLE();
     __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
