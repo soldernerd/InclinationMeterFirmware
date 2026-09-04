@@ -191,12 +191,19 @@ void app_ui_update(void)
     g_system_state.encoder1_sw_press_event = false;
     g_system_state.encoder2_sw_press_event = false;
 
-    /* WP3: the LEFT encoder's rotation currently just mirrors the RIGHT
-     * one (was "reserved for future scroll") so both knobs can be
-     * exercised. All the rotation branches below act on e1_steps. */
-    e1_steps = (int16_t)(e1_steps + e2_steps);
-
-    /* LEFT encoder push — universal "back / cancel" */
+    /* ---- LEFT encoder: screen-level navigation ----
+     * Rotate = move between screens (LIVE <-> STATUS <-> SETTINGS).
+     * Ignored while editing a value so you can't accidentally jump away
+     * mid-edit. Push = back / cancel. */
+    if (!g_ui_state.settings_editing) {
+        if (e2_steps > 0) {
+            switch_screen(next_screen(g_ui_state.current_screen));
+            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
+        } else if (e2_steps < 0) {
+            switch_screen(prev_screen(g_ui_state.current_screen));
+            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
+        }
+    }
     if (e2_press) {
         drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
         if (g_ui_state.settings_editing) {
@@ -206,9 +213,11 @@ void app_ui_update(void)
         }
     }
 
-    /* RIGHT encoder rotate (or LEFT, mirrored above) — context-dependent */
+    /* ---- RIGHT encoder: navigation WITHIN the current screen ----
+     * SETTINGS+editing: rotate changes the value, push commits.
+     * SETTINGS not editing: rotate moves the cursor, push enters edit.
+     * LIVE / STATUS: nothing to navigate within. */
     if (g_ui_state.current_screen == UI_SCREEN_SETTINGS && g_ui_state.settings_editing) {
-        /* Editing a value */
         if (e1_steps != 0) {
             const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)g_ui_state.settings_cursor);
             int32_t delta = (int32_t)e1_steps * m->step;
@@ -221,7 +230,6 @@ void app_ui_update(void)
             drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
         }
     } else if (g_ui_state.current_screen == UI_SCREEN_SETTINGS) {
-        /* Settings screen, not editing — rotate moves cursor */
         if (e1_steps > 0) {
             g_ui_state.settings_cursor = (uint8_t)((g_ui_state.settings_cursor + 1U)
                                                    % UI_SETTING_COUNT);
@@ -238,15 +246,6 @@ void app_ui_update(void)
             enter_edit_mode();
             drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
         }
-    } else {
-        /* LIVE / STATUS — encoder1 cycles between screens */
-        if (e1_steps > 0) {
-            switch_screen(next_screen(g_ui_state.current_screen));
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
-        } else if (e1_steps < 0) {
-            switch_screen(prev_screen(g_ui_state.current_screen));
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
-        }
-        /* RIGHT encoder push on LIVE/STATUS does nothing in WP3 */
     }
+    /* LIVE / STATUS: RIGHT encoder rotate/push do nothing in WP3. */
 }

@@ -224,7 +224,7 @@ static void draw_settings_screen(void)
         y += 16;
     }
 
-    u8g2_DrawUTF8(&s_u8g2, 8, 200, "turn: navigate   [RIGHT] select/edit   [LEFT] back");
+    u8g2_DrawUTF8(&s_u8g2, 8, 200, "LEFT: screen   RIGHT: item/value   RIGHT press: enter");
 
     /* Makes g_system_state.settings_save_failed actually visible — a
      * prior review pass added the flag (escalating a failed EEPROM
