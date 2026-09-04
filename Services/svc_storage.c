@@ -430,6 +430,19 @@ bool svc_storage_request_dfu_reboot(void)
         return false;
     }
     s_dfu_last_write_ok = (memcmp(rb, buf, sizeof buf) == 0);
+
+    /* Extra settle margin before the caller resets. blocking_write_page()
+     * already waits out the EEPROM's own write cycle (10 ms, 2x the
+     * datasheet's 5 ms TWC) and the verification read above only ran
+     * after that completed — but every other EEPROM write in this
+     * codebase is followed by the device just continuing to run, never
+     * an immediate reset. This is the first one that resets right after
+     * a write, so give it generous extra headroom on the theory that
+     * *something* about resetting this soon needs more margin than a
+     * write that's simply followed by normal operation. */
+    uint32_t settle_start = hal_systick_get_ms();
+    while (hal_systick_elapsed_ms(settle_start) < 100U) { }
+
     return s_dfu_last_write_ok;
 }
 
