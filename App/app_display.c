@@ -252,14 +252,17 @@ static void draw_status_screen(void)
      *   (BCDR.DPPU), fnr=USB frame number (moves only while host SOF is
      *   received), tog=USBD_Start()/Stop() calls since boot (climbing fast
      *   while still plugged in would mean VBUS_SENSE/PA2 is bouncing).
-     * irq=USB IRQ entries since boot; err/wkup=ISTR.ERR/WKUP seen at IRQ
-     *   entry (pma/ctr tracked but always 0 so far — dropped from display).
+     * irq=USB IRQ entries since boot; gO/gB=SYSCFG->IT_LINE_SR[8] bit-2
+     *   (USB) gate open/blocked counts — HAL_PCD_IRQHandler's very first
+     *   check, before touching ISTR at all. A single snapshot of that
+     *   register can't tell "blocked on 95% of entries, this one happened
+     *   to be open" from "reliably open"; these two running totals can. If
+     *   gB dominates gO, this gate is eating every event (not even
+     *   clearing ISTR.RESET) before our PCD_*Callback hooks ever run —
+     *   explains hw (raw ISTR.RESET seen) climbing while rst/setup never do.
      * rst/setup/susp=PCD_Reset/SetupStage/Suspend callback entries; hw=raw
      *   ISTR.RESET seen at IRQ entry, BEFORE HAL_PCD_IRQHandler runs at all
-     *   — compare against rst.
-     * crs=CRS SYNCOKF (HSI48 locked to host SOF); itln8=raw
-     *   SYSCFG->IT_LINE_SR[8], the shared-IRQ status HAL_PCD_IRQHandler
-     *   gates on before touching anything (bit 2 = USB). */
+     *   — compare against rst. */
     {
         HalUsbDebug u;
         hal_usb_get_debug(&u);
@@ -268,26 +271,28 @@ static void draw_status_screen(void)
                  (unsigned)u.dev_state, (unsigned)u.dppu,
                  (unsigned)u.fnr, (unsigned long)u.attach_toggles);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        snprintf(line, sizeof line, "irq%lu err%lu wkup%lu",
-                 (unsigned long)u.irq_count, (unsigned long)u.err_count,
-                 (unsigned long)u.wkup_count);
+        snprintf(line, sizeof line, "irq%lu gO%lu gB%lu",
+                 (unsigned long)u.irq_count,
+                 (unsigned long)u.it_line_gate_open_count,
+                 (unsigned long)u.it_line_gate_blocked_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
         snprintf(line, sizeof line, "rst%lu(hw%lu) setup%lu susp%lu",
                  (unsigned long)u.reset_count, (unsigned long)u.reset_flag_seen,
                  (unsigned long)u.setup_count, (unsigned long)u.suspend_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        /* crs=CRS SYNCOKF (never seen set so far, in any reading — CRS has
-         * not received one single valid USB SOF sync to lock onto).
+        /* crsE=sticky OR of every CRS->ISR read since boot (bit0 SYNCOKF) —
+         * catches a transient lock a single live read could miss; not just
+         * "never seen set in whatever reading happened to run".
          * hsi48on/rdy = RCC->CR HSI48ON/HSI48RDY — confirms the oscillator
          * itself is enabled and stable. usbsel = RCC->CCIPR2 USBSEL field,
          * expected 0 (HSI48); a nonzero value would mean the USB peripheral
-         * is clocked from something else entirely. */
-        /* usv=PWR->CR2 VDDUSB-supply-valid. If 0, the analog transceiver
+         * is clocked from something else entirely.
+         * usv=PWR->CR2 VDDUSB-supply-valid. If 0, the analog transceiver
          * runs under-supplied: coarse SE0/reset detection can still work,
          * but real differential signal levels (needed to decode any actual
          * packet) may not — matching resets-work/data-never-decodes. */
-        snprintf(line, sizeof line, "crs%u hsi48%u%u sel%u usv%u",
-                 (unsigned)(u.crs_isr & 1U), (unsigned)u.hsi48_on,
+        snprintf(line, sizeof line, "crsE%u hsi48%u%u sel%u usv%u",
+                 (unsigned)(u.crs_isr_ever & 1U), (unsigned)u.hsi48_on,
                  (unsigned)u.hsi48_rdy, (unsigned)u.usb_clk_sel,
                  (unsigned)u.vddusb_valid);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);

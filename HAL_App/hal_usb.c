@@ -34,6 +34,9 @@ static volatile uint32_t  s_usb_wkup_count    = 0;
 static volatile uint32_t  s_usb_attach_toggles = 0;
 static volatile uint32_t  s_usb_reset_flag_seen = 0;
 static volatile uint32_t  s_usb_it_line_sr8      = 0;
+static volatile uint32_t  s_usb_it_line_gate_open_count    = 0;
+static volatile uint32_t  s_usb_it_line_gate_blocked_count = 0;
+static volatile uint32_t  s_crs_isr_ever = 0;
 
 void hal_usb_isr_tick(void)
 {
@@ -44,12 +47,14 @@ void hal_usb_isr_tick(void)
      * Also sampling raw ISTR.RESET and SYSCFG->IT_LINE_SR[8] here:
      * HAL_PCD_IRQHandler's very first thing is
      *   if ((SYSCFG->IT_LINE_SR[8] & (0x1UL << 2)) == 0U) { return; }
-     * i.e. it refuses to touch ISTR at all unless that status bit is set.
-     * If reset_flag_seen climbs (a real bus reset IS happening at the wire)
-     * while reset_count (via PCD_ResetCallback) stays 0 and it_line_sr8
-     * never has bit 2 set, that gate is exactly what's eating every event
-     * before our code ever sees it — explains a storm with zero resets/
-     * setups ever counted despite the host actually trying to enumerate. */
+     * i.e. it refuses to touch ISTR at all unless that status bit is set —
+     * not even ISTR.RESET gets cleared when it's blocked. it_line_sr8 alone
+     * is a last-value-wins snapshot: it can't distinguish "blocked on 95% of
+     * entries, this one happened to be open" from "reliably open". The two
+     * running totals below can — if gate_blocked dominates gate_open, this
+     * is exactly what eats every event before HAL_PCD_IRQHandler (and hence
+     * our PCD_*Callback hooks) ever sees it, explaining reset_flag_seen
+     * climbing while reset_count/setup_count never do. */
     uint32_t istr = USB_DRD_FS->ISTR;
     if (istr & USB_ISTR_ERR)    { s_usb_err_count++; }
     if (istr & USB_ISTR_PMAOVR) { s_usb_pmaovr_count++; }
@@ -57,6 +62,11 @@ void hal_usb_isr_tick(void)
     if (istr & USB_ISTR_WKUP)   { s_usb_wkup_count++; }
     if (istr & USB_ISTR_RESET)  { s_usb_reset_flag_seen++; }
     s_usb_it_line_sr8 = SYSCFG->IT_LINE_SR[8];
+    if (s_usb_it_line_sr8 & (0x1UL << 2)) {
+        s_usb_it_line_gate_open_count++;
+    } else {
+        s_usb_it_line_gate_blocked_count++;
+    }
     s_usb_irq_count++;
 }
 void hal_usb_note_reset(void)   { s_usb_reset_count++; }
@@ -85,29 +95,49 @@ void hal_usb_get_debug(HalUsbDebug *out)
     out->attach_toggles  = s_usb_attach_toggles;
     out->reset_flag_seen = s_usb_reset_flag_seen;
     out->it_line_sr8     = s_usb_it_line_sr8;
+    out->it_line_gate_open_count    = s_usb_it_line_gate_open_count;
+    out->it_line_gate_blocked_count = s_usb_it_line_gate_blocked_count;
     out->hsi48_on        = (RCC->CR & RCC_CR_HSI48ON)  ? 1U : 0U;
     out->hsi48_rdy       = (RCC->CR & RCC_CR_HSI48RDY) ? 1U : 0U;
     out->usb_clk_sel     = (uint8_t)((RCC->CCIPR2 & RCC_CCIPR2_USBSEL) >> RCC_CCIPR2_USBSEL_Pos);
     out->vddusb_valid    = (PWR->CR2 & PWR_CR2_USV) ? 1U : 0U;
+    s_crs_isr_ever |= CRS->ISR;
+    out->crs_isr_ever   = s_crs_isr_ever;
 }
 
 void hal_usb_init(void)
 {
     /* hUsbDeviceFS / USB middleware are initialised by MX_USB_Device_Init
-     * in usb_device.c (called from main()), which also calls USBD_Start().
+     * in usb_device.c (called from main()), which also calls USBD_Start()
+     * unconditionally, regardless of whether VBUS is actually present.
      *
-     * Detach again here: on this board USB DM/DP sit on the PA9/PA10 pads
-     * (SYSCFG PA11/PA12 remap, LQFP64). With the stack started but no host
-     * connected, those lines float and the USB peripheral raises bus
-     * reset/error interrupts continuously at NVIC priority 0, starving the
-     * cooperative scheduler (the LED heartbeat freezes). The device is
-     * attached only while VBUS is present — see hal_usb_update(), pumped
-     * from task_usb every scheduler tick.
+     * USB DM/DP sit on PA11/PA12, the real dedicated pins (no SYSCFG remap
+     * — see usbd_conf.c's HAL_PCD_MspInit comment for why one was tried and
+     * reverted). With the stack started but no host connected, those lines
+     * float and the USB peripheral raises bus reset/error interrupts
+     * continuously at NVIC priority 0, starving the cooperative scheduler
+     * (the LED heartbeat freezes). The device is meant to be attached only
+     * while VBUS is present — see hal_usb_update(), pumped from task_usb
+     * every scheduler tick.
+     *
+     * If VBUS is already present at this exact boot (the common case when
+     * testing: power-cycling or resetting while already plugged into a
+     * host), don't blindly call USBD_Stop() — that would deassert D+'s
+     * pull-up microseconds after MX_USB_Device_Init() asserted it, a
+     * needless attach/detach blip right at the host's most sensitive
+     * moment (initial connect debounce) for no benefit, since
+     * hal_usb_update() would just start it right back up on the very next
+     * scheduler tick anyway. Only stop it when there's actually no host to
+     * glitch.
      *
      * s_rx_cb is NOT reset here: svc_usb_init() registers its callback
      * before calling this and must not have it clobbered. */
-    USBD_Stop(&hUsbDeviceFS);
-    s_attached = false;
+    if (hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN)) {
+        s_attached = true;
+    } else {
+        USBD_Stop(&hUsbDeviceFS);
+        s_attached = false;
+    }
 }
 
 void hal_usb_register_rx_callback(HalUsbRxCallback cb)

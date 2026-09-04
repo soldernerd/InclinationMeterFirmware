@@ -50,7 +50,24 @@ typedef struct {
                                /*  HAL_PCD_IRQHandler runs at all — compare   */
                                /*  against reset_count (via the callback)     */
     uint32_t it_line_sr8;      /* raw SYSCFG->IT_LINE_SR[8] (shared IRQ       */
-                               /*  status for USB_UCPD1_2) at IRQ entry       */
+                               /*  status for USB_UCPD1_2), LAST value seen   */
+                               /*  at IRQ entry only — see the gate counters  */
+                               /*  below for why a single snapshot can't be   */
+                               /*  trusted to prove this is open or closed.   */
+    uint32_t it_line_gate_open_count;   /* IRQ entries where IT_LINE_SR[8]    */
+                               /*  bit 2 (USB) WAS set — HAL_PCD_IRQHandler   */
+                               /*  went on to read/process ISTR.             */
+    uint32_t it_line_gate_blocked_count; /* IRQ entries where that bit was   */
+                               /*  clear — HAL_PCD_IRQHandler returned        */
+                               /*  immediately, touching nothing, not even    */
+                               /*  clearing ISTR.RESET. it_line_sr8 alone is  */
+                               /*  a last-value-wins sample that can't tell   */
+                               /*  "blocked on 95% of entries, this one       */
+                               /*  happened to be open" from "reliably open"  */
+                               /*  — these two running totals can. If         */
+                               /*  blocked dominates, this gate is why        */
+                               /*  reset_flag_seen climbs while reset_count/  */
+                               /*  setup_count never do. */
     uint8_t  hsi48_on;         /* RCC->CR HSI48ON                             */
     uint8_t  hsi48_rdy;        /* RCC->CR HSI48RDY                            */
     uint8_t  usb_clk_sel;      /* RCC->CCIPR2 USBSEL field (0=HSI48 expected)  */
@@ -58,6 +75,10 @@ typedef struct {
                                /*  the analog transceiver runs under-supplied: */
                                /*  coarse SE0/reset still "works", but real   */
                                /*  differential signal levels may not         */
+    uint32_t crs_isr_ever;     /* sticky OR of every CRS->ISR read since boot */
+                               /*  (bit 0 SYNCOKF) — defends against a single */
+                               /*  live crs_isr read missing a transient lock */
+                               /*  that came and went between polls.          */
 } HalUsbDebug;
 
 void hal_usb_get_debug(HalUsbDebug *out);
