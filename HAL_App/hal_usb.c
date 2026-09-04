@@ -16,12 +16,33 @@
 #include "usbd_def.h"
 #include "usbd_core.h"
 #include "usbd_customhid.h"
+#include "stm32g0xx_hal.h"
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
-static HalUsbRxCallback s_rx_cb       = 0;
-static uint8_t          s_tx_buf[USB_HID_REPORT_SIZE];
-static bool             s_attached    = false;
+static HalUsbRxCallback   s_rx_cb        = 0;
+static uint8_t            s_tx_buf[USB_HID_REPORT_SIZE];
+static bool               s_attached     = false;
+static volatile uint32_t  s_usb_irq_count = 0;
+
+void hal_usb_isr_tick(void)
+{
+    s_usb_irq_count++;
+}
+
+void hal_usb_get_debug(HalUsbDebug *out)
+{
+    if (!out) {
+        return;
+    }
+    out->attached  = s_attached ? 1U : 0U;
+    out->vbus_pin  = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN) ? 1U : 0U;
+    out->dev_state = (uint8_t)hUsbDeviceFS.dev_state;
+    out->dppu      = (USB_DRD_FS->BCDR & USB_BCDR_DPPU) ? 1U : 0U;
+    out->fnr       = (uint16_t)(USB_DRD_FS->FNR & USB_FNR_FN);
+    out->crs_isr   = CRS->ISR;
+    out->irq_count = s_usb_irq_count;
+}
 
 void hal_usb_init(void)
 {

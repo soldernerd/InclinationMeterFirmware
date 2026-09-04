@@ -8,6 +8,7 @@
 #include "svc_api.h"
 #include "svc_measurement.h"
 #include "hal_systick.h"
+#include "hal_usb.h"   /* WP4 bring-up: USB diag block on the STATUS screen */
 #include "config.h"
 #include "u8g2.h"
 #include <stdio.h>
@@ -239,7 +240,28 @@ static void draw_status_screen(void)
                   g_system_state.usb_connected ? "USB:       connected"
                                                : "USB:       offline");       y += 18;
     snprintf(line, sizeof line, "Uptime:    %s", up_str);
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
+
+    /* ---- WP4 USB bring-up diagnostics (temporary) ----
+     * a=VBUS-gated attach latch, v=raw PA2, st=USBD dev_state
+     *   (1 DEFAULT / 2 ADDRESSED / 3 CONFIGURED / 4 SUSPENDED),
+     * pu=D+ pull-up (BCDR.DPPU), fnr=USB frame number (moves only while
+     *   host SOF is being received), irq=USB IRQ entries since boot,
+     * crs ok=CRS SYNCOKF (HSI48 locked to host SOF), isr=raw CRS->ISR. */
+    {
+        HalUsbDebug u;
+        hal_usb_get_debug(&u);
+        snprintf(line, sizeof line, "USB a%u v%u st%u pu%u",
+                 (unsigned)u.attached, (unsigned)u.vbus_pin,
+                 (unsigned)u.dev_state, (unsigned)u.dppu);
+        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
+        snprintf(line, sizeof line, "USB fnr%u irq%lu",
+                 (unsigned)u.fnr, (unsigned long)u.irq_count);
+        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
+        snprintf(line, sizeof line, "CRS ok%u isr0x%lX",
+                 (unsigned)(u.crs_isr & 1U), (unsigned long)u.crs_isr);
+        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
+    }
 }
 
 /* ---- SETTINGS screen ---- */
