@@ -1,6 +1,61 @@
 #include "hal_power.h"
 #include "stm32g0xx_hal.h"
 
+/* RTC is used for exactly one narrow purpose: giving
+ * hal_power_reboot_to_dfu() a self-triggered Standby wake-up (see that
+ * function's comment for why). Never configured by CubeMX on this project
+ * (no .ioc RTC section, no Core/Src/rtc.c) — HAL_RTC_MspInit below is the
+ * one place enabling it, following the same pattern CubeMX itself would
+ * generate into a dedicated rtc.c/MX_RTC_Init() if it had been ticked in
+ * the .ioc. */
+static RTC_HandleTypeDef s_hrtc;
+
+void HAL_RTC_MspInit(RTC_HandleTypeDef *hrtc)
+{
+    if (hrtc->Instance != RTC) {
+        return;
+    }
+    __HAL_RCC_RTC_ENABLE();
+}
+
+static bool rtc_init_for_standby_wakeup(void)
+{
+    /* LSI, not LSE: Y1 (the 32.768 kHz RTC crystal on PC14/PC15) is
+     * unpopulated on this board — CLAUDE.md Open Item 2, already the
+     * project-wide resolution for anything RTC-related. Accuracy doesn't
+     * matter here; the wakeup timer below runs off raw RTCCLK, not the
+     * calendar prescalers, and we only need it to fire once, roughly a
+     * millisecond out. */
+    RCC_OscInitTypeDef losc = {0};
+    losc.OscillatorType = RCC_OSCILLATORTYPE_LSI;
+    losc.LSIState       = RCC_LSI_ON;
+    if (HAL_RCC_OscConfig(&losc) != HAL_OK) {
+        return false;
+    }
+
+    RCC_PeriphCLKInitTypeDef pclk = {0};
+    pclk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
+    pclk.RTCClockSelection    = RCC_RTCCLKSOURCE_LSI;
+    if (HAL_RCCEx_PeriphCLKConfig(&pclk) != HAL_OK) {
+        return false;
+    }
+    __HAL_RCC_RTC_ENABLE();
+
+    /* Calendar (Hour/Async/SyncPrediv) is configured but never used — no
+     * SetTime/SetDate call, since nothing here reads back a date. Only the
+     * wakeup timer (armed separately, right before Standby entry) matters. */
+    s_hrtc.Instance            = RTC;
+    s_hrtc.Init.HourFormat     = RTC_HOURFORMAT_24;
+    s_hrtc.Init.AsynchPrediv   = 127;
+    s_hrtc.Init.SynchPrediv    = 255;
+    s_hrtc.Init.OutPut         = RTC_OUTPUT_DISABLE;
+    s_hrtc.Init.OutPutRemap    = RTC_OUTPUT_REMAP_NONE;
+    s_hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
+    s_hrtc.Init.OutPutType     = RTC_OUTPUT_TYPE_OPENDRAIN;
+    s_hrtc.Init.OutPutPullUp   = RTC_OUTPUT_PULLUP_NONE;
+    return HAL_RTC_Init(&s_hrtc) == HAL_OK;
+}
+
 void hal_power_configure_wakeup_pins(void)
 {
     /* One call per pin — HAL_PWR_EnableWakeUpPin() only touches the bits
@@ -70,42 +125,66 @@ void hal_power_enter_standby(void)
 
 void hal_power_reboot_to_dfu(void)
 {
-    /* NOT a software jump into system memory. Four rounds of that
-     * approach (fixing, in order: the bootloader needing interrupts
-     * enabled; USB/CRS peripherals left in a dirty state; SCB->VTOR not
-     * following the SYSCFG remap; a Cortex-M0+ NVIC array-bounds bug that
-     * silently invalidated all three of the earlier fixes) never
-     * stopped the ROM bootloader from immediately falling back to this
-     * application every single time, for a reason never conclusively
-     * identified — plausibly the bootloader's own boot-address-selection
-     * logic re-checking nBOOT0/nBOOT_SEL (which say "boot main flash")
-     * independent of how it was actually entered, per scattered STM32G0
-     * community reports of the same "jump works but doesn't stay
-     * resident" symptom on this newer boot-config scheme.
+    /* NOT a software jump into system memory — that approach (four rounds
+     * of fixes: interrupts disabled, dirty USB/CRS state, SCB->VTOR not
+     * following the SYSCFG remap, an NVIC array-bounds bug) never once
+     * stayed resident in System Memory.
      *
-     * Meanwhile a real experiment already proved the ONE path that
-     * definitely works on this exact board: mass-erase main flash, and
-     * the chip's own boot ROM address-selection logic (independent of
-     * nBOOT0/nBOOT_SEL — this is a documented, unconditional safety net
-     * for a genuinely blank device) boots straight into System Memory,
-     * which then enumerated over USB and stayed resident for a full DFU
-     * flash. FLASH_ACR.PROGEMPTY is the bit that path relies on — ST's
-     * own HAL_FLASHEx_ForceFlashEmpty() exists specifically to fake that
-     * bit's value "for all next reset that do not launch Option Byte
-     * Loader" (its own docstring) WITHOUT actually erasing anything.
-     * Force it, then do a genuine reset: the boot ROM sees what it thinks
-     * is a blank chip and takes the exact same proven-working path,
-     * regardless of nBOOT0/nBOOT_SEL. The application itself is left
-     * completely intact in flash the whole time — nothing here erases or
-     * touches it. A power-on reset (not just this warm one) always re-
-     * evaluates the real flash content and clears this back to "not
-     * empty" once genuine firmware exists again, so there's no way to
-     * get permanently stuck: worst case, declining to flash and instead
-     * power-cycling (rather than warm-resetting) gets back to the
-     * application immediately. Never returns. */
+     * v0.4.25/26 replaced it with FLASH_ACR.PROGEMPTY + NVIC_SystemReset():
+     * force the "flash is blank" bit ST's own HAL_FLASHEx_ForceFlashEmpty()
+     * exists for, reusing the exact mechanism a real mass-erase test had
+     * already proven boots straight into System Memory and stays there for
+     * a full DFU flash. That STILL landed back on the live screen — same
+     * symptom as the software jump, despite being a completely different
+     * mechanism. The reason: the boot-address decision (nBOOT0/nBOOT_SEL,
+     * and this blank-chip override) is only RE-EVALUATED on a power-on
+     * reset or on exiting Standby mode (RM0444 §2.5 — "the BOOT0 pin and
+     * nBOOT1 bit are re-sampled when exiting from Standby mode"). A plain
+     * NVIC_SystemReset() (AIRCR.SYSRESETREQ) is neither — on this newer
+     * STM32 generation it's explicitly a "system reset" that leaves boot
+     * configuration exactly as it was already latched at the last real
+     * power-up, so forcing PROGEMPTY and then software-resetting can never
+     * have worked, no matter how correct the FLASH_ACR write itself was.
+     *
+     * Fix: force PROGEMPTY (unchanged, still the right mechanism), then
+     * get there via a Standby-mode bounce instead of a bare reset — this
+     * project already uses real Standby entry for shutdown
+     * (hal_power_enter_standby() above) and it demonstrably causes a full
+     * reset-vector restart on wake, so it's a proven path to the kind of
+     * reset that actually re-samples boot configuration. The one thing
+     * Standby needs is a wake source, and the existing WKUP pins are all
+     * wrong for this: VBUS_SENSE (WKUP4) is already asserted precisely
+     * because a host is plugged in for the DFU flash, and a level-
+     * triggered wake source that's already active at entry makes
+     * HAL_PWR_EnterSTANDBYMode() abort into a dead-looking "running but
+     * every rail is down" state instead of actually sleeping (see that
+     * function's own comment) — never resetting at all. So this arms the
+     * RTC wakeup timer instead: an internal source under firmware's own
+     * control, immune to any pin already sitting at its wake level,
+     * configured for the shortest possible period (raw RTCCLK/16, no
+     * counts — a fraction of a millisecond on LSI) so the bounce is
+     * effectively instant and needs no calendar/timekeeping setup.
+     *
+     * The application itself is left completely intact in flash the whole
+     * time — nothing here erases or touches it. A genuine power-on reset
+     * always re-evaluates real flash content and clears PROGEMPTY back to
+     * "not empty" once real firmware exists again, so there's no way to
+     * get permanently stuck: worst case, a power cycle instead of this
+     * menu action gets back to the application immediately. Never
+     * returns — falls through to the old reset-only behavior only if the
+     * RTC/Standby setup itself fails, which is still strictly no worse
+     * than v0.4.25/26. */
     HAL_FLASH_Unlock();
     HAL_FLASHEx_ForceFlashEmpty(FLASH_PROG_EMPTY);
     HAL_FLASH_Lock();
+
+    if (rtc_init_for_standby_wakeup() &&
+        HAL_RTCEx_SetWakeUpTimer_IT(&s_hrtc, 0, RTC_WAKEUPCLOCK_RTCCLK_DIV16) == HAL_OK) {
+        HAL_PWR_DisableWakeUpPin(PWR_WAKEUP_PIN1 | PWR_WAKEUP_PIN4 | PWR_WAKEUP_PIN5);
+        __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF);
+        HAL_PWR_EnterSTANDBYMode();
+        /* Unreachable if Standby actually engaged. Falls through below. */
+    }
 
     NVIC_SystemReset();
     for (;;) { }   /* NVIC_SystemReset() does not return */

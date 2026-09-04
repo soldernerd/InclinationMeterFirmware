@@ -37,13 +37,19 @@ void hal_power_enter_standby(void);
 
 /* Reboots into the STM32 ROM system bootloader (USB DFU / UART) instead
  * of continuing this firmware — App/app_ui.c's "Reboot to DFU" menu
- * action calls this directly. Forces FLASH_ACR.PROGEMPTY so the next
- * reset's own boot-address-selection logic believes main flash is
- * blank (a documented, unconditional path to System Memory boot,
- * independent of the nBOOT0/nBOOT_SEL option bytes) and then performs a
- * genuine reset — see the .c file's comment for why this replaced an
- * earlier software-jump implementation that never worked. Does not
- * erase or otherwise touch the application in flash. Never returns. */
+ * action calls this directly. Forces FLASH_ACR.PROGEMPTY so the boot-
+ * address-selection logic believes main flash is blank (a documented,
+ * unconditional path to System Memory boot, independent of the
+ * nBOOT0/nBOOT_SEL option bytes), then bounces through a real Standby-
+ * mode entry/exit (via an internal RTC-wakeup-timer wake source) rather
+ * than a bare NVIC_SystemReset() — boot configuration is only re-sampled
+ * on a power-on reset or on exiting Standby, not on a plain software
+ * reset, which is why an earlier version of this function that forced
+ * the same bit but reset the ordinary way never actually landed in
+ * System Memory. See the .c file's comment for the full history,
+ * including why the encoder/VBUS wake-up pins can't be used here. Does
+ * not erase or otherwise touch the application in flash. Never
+ * returns. */
 void hal_power_reboot_to_dfu(void);
 
 #endif /* HAL_POWER_H */
