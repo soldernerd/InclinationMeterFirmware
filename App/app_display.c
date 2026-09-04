@@ -260,6 +260,16 @@ static void draw_status_screen(void)
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
         snprintf(line, sizeof line, "CRS ok%u isr0x%lX",
                  (unsigned)(u.crs_isr & 1U), (unsigned long)u.crs_isr);
+        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
+        /* rst = bus resets seen, setup = SETUP packets (e.g. GET_DESCRIPTOR)
+         * actually RECEIVED and processed, susp = suspend events. If rst>0
+         * but setup=0, the host never got a valid SETUP transaction through
+         * — EP0/PMA problem. If setup>0 but we never reach st3 (CONFIGURED),
+         * the host is getting SETUP requests but failing on the data that
+         * comes back. */
+        snprintf(line, sizeof line, "rst%lu setup%lu susp%lu",
+                 (unsigned long)u.reset_count, (unsigned long)u.setup_count,
+                 (unsigned long)u.suspend_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
     }
 }

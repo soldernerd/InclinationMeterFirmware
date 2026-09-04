@@ -25,6 +25,7 @@
 #include "usbd_core.h"
 
 #include "usbd_customhid.h"
+#include "hal_usb.h"
 
 /* USER CODE BEGIN Includes */
 
@@ -167,7 +168,7 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *hpcd)
   /* USER CODE END  HAL_PCD_SetupStageCallback_PreTreatment */
   USBD_LL_SetupStage((USBD_HandleTypeDef*)hpcd->pData, (uint8_t *)hpcd->Setup);
   /* USER CODE BEGIN HAL_PCD_SetupStageCallback_PostTreatment */
-
+  hal_usb_note_setup();   /* WP4 bring-up diag: host sent a SETUP packet */
   /* USER CODE END  HAL_PCD_SetupStageCallback_PostTreatment */
 }
 
@@ -258,7 +259,7 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
   /* Reset Device. */
   USBD_LL_Reset((USBD_HandleTypeDef*)hpcd->pData);
   /* USER CODE BEGIN HAL_PCD_ResetCallback_PostTreatment */
-
+  hal_usb_note_reset();   /* WP4 bring-up diag: host issued a bus reset */
   /* USER CODE END HAL_PCD_ResetCallback_PostTreatment */
 }
 
@@ -289,7 +290,7 @@ void HAL_PCD_SuspendCallback(PCD_HandleTypeDef *hpcd)
   }
   /* USER CODE END 2 */
   /* USER CODE BEGIN HAL_PCD_SuspendCallback_PostTreatment */
-
+  hal_usb_note_suspend();   /* WP4 bring-up diag */
   /* USER CODE END HAL_PCD_SuspendCallback_PostTreatment */
 }
 

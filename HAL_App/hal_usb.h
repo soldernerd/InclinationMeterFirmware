@@ -32,9 +32,16 @@ typedef struct {
     uint32_t crs_isr;       /* CRS->ISR (bit0 SYNCOKF, 1 SYNCWARN,          */
                             /*   2 SYNCERR, 3 SYNCMISS, 4 TRIMOVF)          */
     uint32_t irq_count;     /* USB_UCPD1_2 IRQ entries since boot           */
+    uint32_t reset_count;   /* PCD_ResetCallback entries — host bus resets */
+    uint32_t setup_count;   /* PCD_SetupStageCallback entries — a SETUP     */
+                            /*   packet (e.g. GET_DESCRIPTOR) was RECEIVED  */
+    uint32_t suspend_count; /* PCD_SuspendCallback entries                  */
 } HalUsbDebug;
 
 void hal_usb_get_debug(HalUsbDebug *out);
-void hal_usb_isr_tick(void);   /* call at the top of USB_UCPD1_2_IRQHandler */
+void hal_usb_isr_tick(void);      /* call at the top of USB_UCPD1_2_IRQHandler */
+void hal_usb_note_reset(void);    /* call from PCD_ResetCallback               */
+void hal_usb_note_setup(void);    /* call from PCD_SetupStageCallback          */
+void hal_usb_note_suspend(void);  /* call from PCD_SuspendCallback             */
 
 #endif /* HAL_USB_H */
