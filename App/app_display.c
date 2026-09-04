@@ -9,7 +9,6 @@
 #include "svc_measurement.h"
 #include "hal_systick.h"
 #include "hal_usb.h"    /* WP4 bring-up: USB diag block on the STATUS screen */
-#include "hal_power.h"  /* WP4 bring-up: Reboot-to-DFU diag on the STATUS screen */
 #include "config.h"
 #include "u8g2.h"
 #include <stdio.h>
@@ -243,16 +242,8 @@ static void draw_status_screen(void)
     snprintf(line, sizeof line, "Uptime:    %s", up_str);
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
 
-    /* Reboot-to-DFU bring-up check (temporary): the DFU magic value as
-     * last read, in .noinit RAM now rather than a TAMP backup register
-     * (which turned out not to survive a reset on this board — see
-     * hal_power.c). Should read 0x44465521 right after triggering
-     * "Reboot to DFU" and 0 on an ordinary boot. */
-    snprintf(line, sizeof line, "DFU bkp0r 0x%08lX", (unsigned long)hal_power_last_bkp0r());
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-
     /* ---- WP4 USB bring-up diagnostics (temporary) ----
-     * Kept to exactly 4 lines (164/182/200/218) so nothing collides with
+     * Kept to exactly 4 lines (146/164/182/200) so nothing collides with
      * draw_screen_indicator()'s text at y=232 — a 5th line here previously
      * did, and was invisible/garbled under the indicator.
      *

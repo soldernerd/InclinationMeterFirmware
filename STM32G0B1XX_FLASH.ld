@@ -226,19 +226,6 @@ SECTIONS
   PROVIDE( __bss_start = __tbss_start );
   PROVIDE( __bss_size = __bss_end - __bss_start );
 
-  /* Deliberately OUTSIDE [_sbss, _ebss) — Reset_Handler's zero-fill loop
-   * only covers that range, so content placed here (via
-   * __attribute__((section(".noinit")))) survives a warm reset
-   * (NVIC_SystemReset(), watchdog, NRST) instead of being wiped like
-   * ordinary .bss. Only an actual power-on of the RAM supply clears it.
-   * Used by HAL_App/hal_power.c to carry a "reboot into DFU" request
-   * across NVIC_SystemReset() — see hal_power_request_dfu_reboot(). */
-  .noinit (NOLOAD) : ALIGN(4)
-  {
-    *(.noinit)
-    *(.noinit*)
-  } >RAM
-
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack (NOLOAD) :
   {

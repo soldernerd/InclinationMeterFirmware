@@ -35,31 +35,20 @@ bool hal_power_woke_from_standby(void);
  * for disabling whatever rails/peripherals should be off first. */
 void hal_power_enter_standby(void);
 
-/* Reboots into the STM32 ROM system bootloader (USB DFU / UART) instead
- * of this firmware — used by the SETTINGS screen's "Reboot to DFU" menu
- * action so the device can be field-updated over USB without an ST-LINK.
- * Stores a magic value in a .noinit RAM variable (survives
- * NVIC_SystemReset() — Reset_Handler's zero-fill loop skips that section;
- * see STM32G0B1XX_FLASH.ld) and calls NVIC_SystemReset(); does not
- * return. hal_power_check_dfu_request_and_jump() is what actually acts
- * on the request, very early on the next boot. */
+/* Resets the MCU — used right after App/app_ui.c's "Reboot to DFU" menu
+ * action has persisted its request via svc_storage_request_dfu_reboot()
+ * (EEPROM-backed; see that function's comment). A thin NVIC_SystemReset()
+ * wrapper so App-layer code doesn't call CMSIS directly. Does not return. */
 void hal_power_request_dfu_reboot(void);
 
-/* Call once, as the very first thing in main() — before any clock,
- * GPIO, or peripheral init. If the last reset was requested by
- * hal_power_request_dfu_reboot(), clears the magic value (so a later
- * normal reset doesn't loop back into DFU) and jumps into the ROM system
- * bootloader; does not return in that case. Otherwise returns
- * immediately and normal boot continues — the common case, and cheap
- * (a couple of RAM reads). */
-void hal_power_check_dfu_request_and_jump(void);
-
-/* The magic-value RAM location as last read by either
- * hal_power_request_dfu_reboot() (right after writing it) or
- * hal_power_check_dfu_request_and_jump() (at boot) — whichever ran most
- * recently in this session. Temporary bring-up visibility (rendered on
- * the STATUS screen). Name kept from an earlier TAMP-backup-register
- * version of this mechanism; no longer register-specific. */
-uint32_t hal_power_last_bkp0r(void);
+/* Jumps into the STM32 ROM system bootloader (USB DFU / UART) instead of
+ * continuing this firmware. Call only once boot has established whatever
+ * this needs to have already happened (nothing, in fact — it's safe at
+ * any point) — Core/Src/main.c calls it right after
+ * svc_storage_check_and_clear_dfu_reboot_flag() reports a pending
+ * request, as early in boot as EEPROM access is available. Never
+ * returns: fully undoes clock/interrupt state first, then remaps and
+ * jumps, same as a fresh boot straight into system memory. */
+void hal_power_jump_to_system_bootloader(void);
 
 #endif /* HAL_POWER_H */

@@ -68,56 +68,28 @@ void hal_power_enter_standby(void)
     NVIC_SystemReset();
 }
 
-/* Arbitrary 32-bit value, chosen only to be implausible as leftover RAM
- * garbage after a genuine power-on (as opposed to a warm/software reset,
- * which is what this whole mechanism relies on preserving it through). */
-#define DFU_REBOOT_MAGIC   0x44465521U   /* loosely "DFU!" */
-
-/* Deliberately NOT a normal static (which would live in .bss and get
- * zeroed by Reset_Handler on every boot, warm or cold, defeating the
- * whole point). Placed in the .noinit section instead — see
- * STM32G0B1XX_FLASH.ld — which Reset_Handler's zero-fill loop skips, so
- * this genuinely survives NVIC_SystemReset(). (An earlier version of this
- * used a TAMP backup register instead, on the general STM32 assumption
- * that those survive a software reset; empirically, on this board it did
- * not — reads back 0 on the very next boot after a verified, successful
- * write. Not chasing why; plain retained RAM is simpler and doesn't
- * depend on backup-domain reset semantics at all.) */
-__attribute__((section(".noinit"))) static uint32_t s_dfu_reboot_magic;
-
-static uint32_t s_last_magic_seen = 0U;
-
-uint32_t hal_power_last_bkp0r(void)
-{
-    return s_last_magic_seen;
-}
-
 void hal_power_request_dfu_reboot(void)
 {
-    s_dfu_reboot_magic = DFU_REBOOT_MAGIC;
-    s_last_magic_seen  = s_dfu_reboot_magic;
+    /* Persistence is handled by the caller (App/app_ui.c calls
+     * svc_storage_request_dfu_reboot() first — see its comment for why
+     * this is EEPROM-backed rather than RAM or a backup register). This
+     * function is just "reset the MCU", kept as a named entry point in
+     * HAL_App so App-layer code doesn't call NVIC_SystemReset() directly
+     * (CLAUDE.md: upper layers go through HAL_App, not raw CMSIS/HAL). */
     NVIC_SystemReset();
     for (;;) { }   /* NVIC_SystemReset() does not return */
 }
 
-void hal_power_check_dfu_request_and_jump(void)
+void hal_power_jump_to_system_bootloader(void)
 {
-    s_last_magic_seen = s_dfu_reboot_magic;
-    if (s_last_magic_seen != DFU_REBOOT_MAGIC) {
-        return;   /* normal boot — the common case (includes every
-                    * power-on reset: .noinit RAM content is only
-                    * meaningful across a WARM reset) */
-    }
-    s_dfu_reboot_magic = 0U;   /* one-shot: don't loop back into DFU on the next reset */
-
     /* Classic STM32 "jump to the ROM system bootloader" sequence: undo
-     * whatever HAL_Init() just did (this runs immediately after it, before
-     * any of our own clock/peripheral setup), remap system Flash to
-     * address 0x0, then load the bootloader's own initial SP and reset
-     * vector from there and jump. __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH()
-     * is the vendor-verified way to do the remap on this exact part —
-     * deliberately not hand-computing a raw system-memory address, which
-     * differs across STM32 families and would be easy to get wrong. */
+     * whatever HAL_Init() and our own boot-so-far has set up, remap
+     * system Flash to address 0x0, then load the bootloader's own
+     * initial SP and reset vector from there and jump.
+     * __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH() is the vendor-verified way
+     * to do the remap on this exact part — deliberately not hand-computing
+     * a raw system-memory address, which differs across STM32 families
+     * and would be easy to get wrong. Never returns. */
     __disable_irq();
     SysTick->CTRL = 0U;
     HAL_RCC_DeInit();

@@ -266,11 +266,15 @@ void app_ui_update(void)
         } else {
             /* Action row (UI_SETTING_REBOOT_DFU): rotating does nothing;
              * this second RIGHT press (the first got us into "editing" /
-             * confirm state below) performs the action immediately —
+             * confirm state below) performs the action immediately.
+             * Persist the request in EEPROM BEFORE resetting — see
+             * svc_storage_request_dfu_reboot()'s comment for why that's
+             * the right place rather than RAM or a backup register.
              * hal_power_request_dfu_reboot() does not return. */
             if (e1_press) {
                 beep_confirm();
                 if ((UiSettingIndex)g_ui_state.settings_cursor == UI_SETTING_REBOOT_DFU) {
+                    svc_storage_request_dfu_reboot();
                     hal_power_request_dfu_reboot();
                 }
             }

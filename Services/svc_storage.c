@@ -388,6 +388,48 @@ static void run_eeprom_selftest(void)
     g_system_state.eeprom_selftest = 0U;   /* pass: write + read-back verified twice */
 }
 
+/* ---------------- "Reboot to DFU" flag ---------------- */
+
+/* 0x0710, 16 bytes clear of EEPROM_SELFTEST_ADDR's 0x0700-0x0707 — same
+ * "scratch region well past every real settings page" as the self-test,
+ * just its own address so the two can never collide. */
+#define DFU_REBOOT_FLAG_ADDR    0x0710U
+#define DFU_REBOOT_FLAG_MAGIC   0x44465521UL   /* loosely "DFU!" */
+
+void svc_storage_request_dfu_reboot(void)
+{
+    uint8_t buf[4] = {
+        (uint8_t)(DFU_REBOOT_FLAG_MAGIC),
+        (uint8_t)(DFU_REBOOT_FLAG_MAGIC >> 8),
+        (uint8_t)(DFU_REBOOT_FLAG_MAGIC >> 16),
+        (uint8_t)(DFU_REBOOT_FLAG_MAGIC >> 24),
+    };
+    (void)blocking_write_page(DFU_REBOOT_FLAG_ADDR, buf, (uint16_t)sizeof buf);
+    /* Caller resets right after this; if the write itself failed there is
+     * nothing more useful to do than proceed with a normal reboot. */
+}
+
+bool svc_storage_check_and_clear_dfu_reboot_flag(void)
+{
+    uint8_t buf[4] = {0};
+    if (!blocking_read(DFU_REBOOT_FLAG_ADDR, buf, (uint16_t)sizeof buf)) {
+        return false;
+    }
+    uint32_t val = (uint32_t)buf[0]
+                 | ((uint32_t)buf[1] << 8)
+                 | ((uint32_t)buf[2] << 16)
+                 | ((uint32_t)buf[3] << 24);
+    if (val != DFU_REBOOT_FLAG_MAGIC) {
+        return false;
+    }
+    /* One-shot: clear it now so a later ordinary reset doesn't loop back
+     * into DFU. Caller is about to jump straight into the ROM bootloader
+     * on success, so this is the last EEPROM access before that happens. */
+    uint8_t zero[4] = {0};
+    (void)blocking_write_page(DFU_REBOOT_FLAG_ADDR, zero, (uint16_t)sizeof zero);
+    return true;
+}
+
 /* ---------------- public API ---------------- */
 
 DrvStatus svc_storage_save_settings(const DeviceSettings *settings)

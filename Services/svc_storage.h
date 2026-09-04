@@ -33,4 +33,16 @@ DrvStatus svc_storage_load_calibration(CalibrationData *cal);
 
 bool      svc_storage_is_busy(void); /* true while a write operation is in progress */
 
+/* "Reboot to DFU" persistence (App/app_ui.c's SETTINGS action requests
+ * it; Core/Src/main.c checks it early in boot, right after EEPROM access
+ * comes up). Backed by EEPROM rather than RAM or a backup register:
+ * both of those turned out not to survive NVIC_SystemReset() on this
+ * board (confirmed empirically — a verified write to each still read
+ * back as cleared on the very next boot), whereas EEPROM survives any
+ * reset or power cycle by construction. Both calls are blocking: the
+ * request happens right before a reset anyway, and the check happens
+ * before anything else in boot is running that could be delayed by it. */
+void svc_storage_request_dfu_reboot(void);
+bool svc_storage_check_and_clear_dfu_reboot_flag(void);
+
 #endif /* SVC_STORAGE_H */
