@@ -36,6 +36,12 @@ typedef struct {
     uint32_t setup_count;   /* PCD_SetupStageCallback entries — a SETUP     */
                             /*   packet (e.g. GET_DESCRIPTOR) was RECEIVED  */
     uint32_t suspend_count; /* PCD_SuspendCallback entries                  */
+    uint32_t err_count;     /* ISTR.ERR seen at IRQ entry                    */
+    uint32_t pmaovr_count;  /* ISTR.PMAOVR seen at IRQ entry (bad EP/PMA     */
+                            /*   config manifests here)                     */
+    uint32_t ctr_count;     /* ISTR.CTR seen at IRQ entry (a transfer        */
+                            /*   completed on some endpoint, incl. EP0)      */
+    uint32_t wkup_count;    /* ISTR.WKUP seen at IRQ entry                   */
 } HalUsbDebug;
 
 void hal_usb_get_debug(HalUsbDebug *out);

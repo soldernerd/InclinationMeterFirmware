@@ -27,8 +27,23 @@ static volatile uint32_t  s_usb_irq_count     = 0;
 static volatile uint32_t  s_usb_reset_count   = 0;
 static volatile uint32_t  s_usb_setup_count   = 0;
 static volatile uint32_t  s_usb_suspend_count = 0;
+static volatile uint32_t  s_usb_err_count     = 0;
+static volatile uint32_t  s_usb_pmaovr_count  = 0;
+static volatile uint32_t  s_usb_ctr_count     = 0;
+static volatile uint32_t  s_usb_wkup_count    = 0;
 
-void hal_usb_isr_tick(void)     { s_usb_irq_count++; }
+void hal_usb_isr_tick(void)
+{
+    /* Sampled BEFORE HAL_PCD_IRQHandler processes/clears ISTR, so this
+     * sees every flag that was pending on entry — which event(s) are
+     * actually driving the interrupt storm. */
+    uint32_t istr = USB_DRD_FS->ISTR;
+    if (istr & USB_ISTR_ERR)    { s_usb_err_count++; }
+    if (istr & USB_ISTR_PMAOVR) { s_usb_pmaovr_count++; }
+    if (istr & USB_ISTR_CTR)    { s_usb_ctr_count++; }
+    if (istr & USB_ISTR_WKUP)   { s_usb_wkup_count++; }
+    s_usb_irq_count++;
+}
 void hal_usb_note_reset(void)   { s_usb_reset_count++; }
 void hal_usb_note_setup(void)   { s_usb_setup_count++; }
 void hal_usb_note_suspend(void) { s_usb_suspend_count++; }
@@ -48,6 +63,10 @@ void hal_usb_get_debug(HalUsbDebug *out)
     out->reset_count     = s_usb_reset_count;
     out->setup_count     = s_usb_setup_count;
     out->suspend_count   = s_usb_suspend_count;
+    out->err_count       = s_usb_err_count;
+    out->pmaovr_count    = s_usb_pmaovr_count;
+    out->ctr_count       = s_usb_ctr_count;
+    out->wkup_count      = s_usb_wkup_count;
 }
 
 void hal_usb_init(void)

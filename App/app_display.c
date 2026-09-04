@@ -270,6 +270,14 @@ static void draw_status_screen(void)
         snprintf(line, sizeof line, "rst%lu setup%lu susp%lu",
                  (unsigned long)u.reset_count, (unsigned long)u.setup_count,
                  (unsigned long)u.suspend_count);
+        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
+        /* Which ISTR flag(s) are actually driving the interrupt storm,
+         * sampled at IRQ entry before HAL clears them: err=bus error,
+         * pmaovr=packet-memory over/underrun (bad EP/PMA config),
+         * ctr=a transfer completed on some endpoint, wkup=wake-up. */
+        snprintf(line, sizeof line, "err%lu pma%lu ctr%lu wkup%lu",
+                 (unsigned long)u.err_count, (unsigned long)u.pmaovr_count,
+                 (unsigned long)u.ctr_count, (unsigned long)u.wkup_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
     }
 }
