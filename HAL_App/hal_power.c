@@ -79,11 +79,21 @@ void hal_power_jump_to_system_bootloader(void)
      * __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH() is the vendor-verified way to
      * do the remap on this exact part — deliberately not hand-computing a
      * raw system-memory address, which differs across STM32 families and
-     * would be easy to get wrong. Interrupts stay disabled all the way
-     * through: the bootloader's own reset handler re-enables whatever it
-     * needs once it's actually running, and there is no reason to risk a
-     * stale/spurious IRQ firing through the freshly-remapped vector table
-     * before MSP is even updated. Never returns. */
+     * would be easy to get wrong.
+     *
+     * Interrupts: disabled up front so nothing fires mid-sequence while
+     * clocks/NVIC are being torn down, but explicitly RE-enabled just
+     * before the jump (after MSP is already pointed at the bootloader's
+     * own stack, so anything that does fire lands safely). The bootloader
+     * expects to be entered the way a real reset leaves the core — PRIMASK
+     * clear, interrupts enabled — since that's the only way it's ever
+     * normally reached; it has no reason to re-enable them itself. Leaving
+     * interrupts globally disabled here means its own USB stack can never
+     * see an interrupt, so it never notices a host talking to it, decides
+     * nothing is happening, and falls back to jumping into the application
+     * instead — exactly "no reboot but jumps back to normal operation".
+     * Every NVIC line was cleared just above, so nothing stale is pending
+     * to fire once this re-enables. Never returns. */
     __disable_irq();
     SysTick->CTRL = 0U;
     HAL_RCC_DeInit();
@@ -102,6 +112,7 @@ void hal_power_jump_to_system_bootloader(void)
     __set_MSP(bootloader_sp);
     __DSB();
     __ISB();
+    __enable_irq();
     bootloader_jump();
 
     for (;;) { }   /* never reached */
