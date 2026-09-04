@@ -42,7 +42,15 @@ bool      svc_storage_is_busy(void); /* true while a write operation is in progr
  * reset or power cycle by construction. Both calls are blocking: the
  * request happens right before a reset anyway, and the check happens
  * before anything else in boot is running that could be delayed by it. */
-void svc_storage_request_dfu_reboot(void);
+bool svc_storage_request_dfu_reboot(void);   /* true = write verified by readback */
 bool svc_storage_check_and_clear_dfu_reboot_flag(void);
+
+/* Temporary bring-up visibility (STATUS screen) into the DFU-reboot flag
+ * mechanism above — reflects whichever of the two functions ran most
+ * recently in this session. Remove once "Reboot to DFU" is confirmed
+ * working end to end. */
+bool     svc_storage_dfu_last_write_ok(void);
+bool     svc_storage_dfu_last_read_ok(void);
+uint32_t svc_storage_dfu_last_value(void);
 
 #endif /* SVC_STORAGE_H */

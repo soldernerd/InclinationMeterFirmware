@@ -396,7 +396,20 @@ static void run_eeprom_selftest(void)
 #define DFU_REBOOT_FLAG_ADDR    0x0710U
 #define DFU_REBOOT_FLAG_MAGIC   0x44465521UL   /* loosely "DFU!" */
 
-void svc_storage_request_dfu_reboot(void)
+/* Temporary bring-up visibility (STATUS screen) for this mechanism —
+ * whether the last read/write actually succeeded at the I2C/DMA level,
+ * and what value came back. Distinguishes "the read failed outright" from
+ * "the read worked but the flag just wasn't set" from each other, and
+ * separately from "the write itself didn't take". */
+static bool     s_dfu_last_write_ok = false;
+static bool     s_dfu_last_read_ok  = false;
+static uint32_t s_dfu_last_value    = 0U;
+
+bool svc_storage_dfu_last_write_ok(void) { return s_dfu_last_write_ok; }
+bool svc_storage_dfu_last_read_ok(void)  { return s_dfu_last_read_ok; }
+uint32_t svc_storage_dfu_last_value(void) { return s_dfu_last_value; }
+
+bool svc_storage_request_dfu_reboot(void)
 {
     uint8_t buf[4] = {
         (uint8_t)(DFU_REBOOT_FLAG_MAGIC),
@@ -404,22 +417,35 @@ void svc_storage_request_dfu_reboot(void)
         (uint8_t)(DFU_REBOOT_FLAG_MAGIC >> 16),
         (uint8_t)(DFU_REBOOT_FLAG_MAGIC >> 24),
     };
-    (void)blocking_write_page(DFU_REBOOT_FLAG_ADDR, buf, (uint16_t)sizeof buf);
-    /* Caller resets right after this; if the write itself failed there is
-     * nothing more useful to do than proceed with a normal reboot. */
+    s_dfu_last_write_ok = blocking_write_page(DFU_REBOOT_FLAG_ADDR, buf, (uint16_t)sizeof buf);
+    if (!s_dfu_last_write_ok) {
+        return false;
+    }
+    /* Verify by reading it straight back — the write completing doesn't
+     * by itself prove the byte actually landed (see blocking_write_page's
+     * own DMA-NAK/poll-timeout failure modes). */
+    uint8_t rb[4] = {0};
+    if (!blocking_read(DFU_REBOOT_FLAG_ADDR, rb, (uint16_t)sizeof rb)) {
+        s_dfu_last_write_ok = false;
+        return false;
+    }
+    s_dfu_last_write_ok = (memcmp(rb, buf, sizeof buf) == 0);
+    return s_dfu_last_write_ok;
 }
 
 bool svc_storage_check_and_clear_dfu_reboot_flag(void)
 {
     uint8_t buf[4] = {0};
-    if (!blocking_read(DFU_REBOOT_FLAG_ADDR, buf, (uint16_t)sizeof buf)) {
+    s_dfu_last_read_ok = blocking_read(DFU_REBOOT_FLAG_ADDR, buf, (uint16_t)sizeof buf);
+    if (!s_dfu_last_read_ok) {
+        s_dfu_last_value = 0U;
         return false;
     }
-    uint32_t val = (uint32_t)buf[0]
-                 | ((uint32_t)buf[1] << 8)
-                 | ((uint32_t)buf[2] << 16)
-                 | ((uint32_t)buf[3] << 24);
-    if (val != DFU_REBOOT_FLAG_MAGIC) {
+    s_dfu_last_value = (uint32_t)buf[0]
+                     | ((uint32_t)buf[1] << 8)
+                     | ((uint32_t)buf[2] << 16)
+                     | ((uint32_t)buf[3] << 24);
+    if (s_dfu_last_value != DFU_REBOOT_FLAG_MAGIC) {
         return false;
     }
     /* One-shot: clear it now so a later ordinary reset doesn't loop back

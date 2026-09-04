@@ -269,13 +269,21 @@ void app_ui_update(void)
              * confirm state below) performs the action immediately.
              * Persist the request in EEPROM BEFORE resetting — see
              * svc_storage_request_dfu_reboot()'s comment for why that's
-             * the right place rather than RAM or a backup register.
-             * hal_power_request_dfu_reboot() does not return. */
+             * the right place rather than RAM or a backup register. Only
+             * reset if that write actually verified; otherwise stay put
+             * and surface it the same way a failed settings save already
+             * does, rather than reboot into a request that was never
+             * really persisted. hal_power_request_dfu_reboot() does not
+             * return when it does run. */
             if (e1_press) {
                 beep_confirm();
                 if ((UiSettingIndex)g_ui_state.settings_cursor == UI_SETTING_REBOOT_DFU) {
-                    svc_storage_request_dfu_reboot();
-                    hal_power_request_dfu_reboot();
+                    if (svc_storage_request_dfu_reboot()) {
+                        hal_power_request_dfu_reboot();
+                    } else {
+                        g_system_state.settings_save_failed = true;
+                        g_ui_state.redraw_needed = true;
+                    }
                 }
             }
         }
