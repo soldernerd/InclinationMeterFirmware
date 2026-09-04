@@ -26,6 +26,7 @@ static volatile bool        s_dma_done        = false;
 static volatile bool        s_dma_success     = false;
 static volatile bool        s_read_complete   = false;
 static volatile bool        s_write_success   = false;
+static volatile uint8_t     s_last_write_fail = 0U;   /* see drv_24lc256_last_write_fail() */
 static uint8_t              *s_read_buf       = 0;
 static uint16_t              s_read_len       = 0;
 static uint32_t              s_poll_started_ms = 0;
@@ -91,10 +92,11 @@ DrvStatus drv_24lc256_start_write_page(uint16_t addr,
     s_tx_buf[1] = (uint8_t)(addr & 0xFFU);
     memcpy(&s_tx_buf[2], buf, len);
 
-    s_dma_done      = false;
-    s_dma_success   = false;
-    s_write_success = false;
-    s_op            = OP_DMA_WRITE;
+    s_dma_done       = false;
+    s_dma_success    = false;
+    s_write_success  = false;
+    s_last_write_fail = 0U;
+    s_op             = OP_DMA_WRITE;
     hal_i2c_write_dma(HAL_I2C_MAIN, EEPROM_I2C_ADDR, s_tx_buf, (uint16_t)(2U + len));
     return DRV_OK;
 }
@@ -104,6 +106,11 @@ bool drv_24lc256_write_complete(void)
     /* Only meaningful once !drv_24lc256_is_busy() confirms the write has
      * actually finished — same contract as drv_24lc256_read_complete(). */
     return s_write_success;
+}
+
+uint8_t drv_24lc256_last_write_fail(void)
+{
+    return s_last_write_fail;
 }
 
 bool drv_24lc256_is_busy(void)
@@ -160,8 +167,9 @@ void drv_24lc256_update(void)
                     s_op              = OP_WRITE_CYCLE_POLL;
                     s_poll_started_ms = hal_systick_get_ms();
                 } else {
-                    s_write_success = false;
-                    s_op            = OP_IDLE;
+                    s_write_success   = false;
+                    s_last_write_fail = 1U;   /* DMA transfer NAK'd */
+                    s_op              = OP_IDLE;
                 }
             }
             break;
@@ -172,8 +180,9 @@ void drv_24lc256_update(void)
                 s_op            = OP_IDLE;
             } else if (hal_systick_elapsed_ms(s_poll_started_ms) > 50U) {
                 /* Stuck — give up rather than wedging the scheduler */
-                s_write_success = false;
-                s_op            = OP_IDLE;
+                s_write_success   = false;
+                s_last_write_fail = 2U;   /* ACK-poll after write cycle timed out */
+                s_op              = OP_IDLE;
             }
             break;
 

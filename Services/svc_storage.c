@@ -328,6 +328,66 @@ static void start_section_write(const DeviceSettings *settings, uint8_t idx)
     s_pending.retry_count  = 0;
 }
 
+/* ---------------- boot EEPROM write self-test ---------------- */
+
+/* Scratch region well past every real page (calibration ends by 0x0600),
+ * page-aligned. Two passes with different data so a stale read can't
+ * false-pass; the byte values also vary per boot (systick seed) so even
+ * two identical boots can't. Result -> g_system_state.eeprom_selftest
+ * (codes documented in system_state.h). Runs blocking, boot only. */
+#define EEPROM_SELFTEST_ADDR   0x0700U
+
+static bool selftest_write_and_verify(const uint8_t *pat, uint8_t code_dma_nak,
+                                      uint8_t code_poll_to, uint8_t code_mismatch)
+{
+    if (drv_24lc256_start_write_page(EEPROM_SELFTEST_ADDR, pat, 8U) != DRV_OK) {
+        g_system_state.eeprom_selftest = 1U;   /* write start rejected */
+        return false;
+    }
+    uint32_t t0 = hal_systick_get_ms();
+    while (drv_24lc256_is_busy()) {
+        drv_24lc256_update();
+        if (hal_systick_elapsed_ms(t0) > STORAGE_BLOCKING_TIMEOUT_MS) {
+            drv_24lc256_abort();
+            g_system_state.eeprom_selftest = code_poll_to;
+            return false;
+        }
+    }
+    if (!drv_24lc256_write_complete()) {
+        g_system_state.eeprom_selftest =
+            (drv_24lc256_last_write_fail() == 2U) ? code_poll_to : code_dma_nak;
+        return false;
+    }
+
+    uint8_t rb[8];
+    if (!blocking_read(EEPROM_SELFTEST_ADDR, rb, 8U)) {
+        g_system_state.eeprom_selftest = 4U;   /* read-back DMA failed */
+        return false;
+    }
+    if (memcmp(rb, pat, 8U) != 0) {
+        g_system_state.eeprom_selftest = code_mismatch;
+        return false;
+    }
+    return true;
+}
+
+static void run_eeprom_selftest(void)
+{
+    g_system_state.eeprom_selftest = 255U;   /* in progress / not-yet-set */
+
+    uint8_t pa[8], pb[8];
+    uint32_t seed = hal_systick_get_ms();
+    for (uint8_t i = 0; i < 8U; ++i) {
+        pa[i] = (uint8_t)(seed + i * 37U + 1U);
+        pb[i] = (uint8_t)~pa[i];
+    }
+
+    if (!selftest_write_and_verify(pa, 2U, 3U, 5U)) return;
+    if (!selftest_write_and_verify(pb, 2U, 3U, 6U)) return;
+
+    g_system_state.eeprom_selftest = 0U;   /* pass: write + read-back verified twice */
+}
+
 /* ---------------- public API ---------------- */
 
 DrvStatus svc_storage_save_settings(const DeviceSettings *settings)
@@ -486,6 +546,9 @@ void svc_storage_update(void)
 void svc_storage_init(void)
 {
     drv_24lc256_init();
+
+    /* Prove the EEPROM write path end-to-end before relying on it below. */
+    run_eeprom_selftest();
 
     /* Seed every field with a sane default first. A section whose page
      * turns out to be missing/corrupt/wrong-version below is simply

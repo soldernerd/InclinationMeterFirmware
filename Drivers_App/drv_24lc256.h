@@ -41,6 +41,13 @@ DrvStatus drv_24lc256_start_write_page(uint16_t addr,
 bool      drv_24lc256_write_complete(void);  /* true = succeeded; call only after !is_busy() */
 bool      drv_24lc256_is_busy(void);    /* true while DMA active or write cycle polling */
 
+/* Diagnostic: why the most recently completed write failed.
+ *   0 = none / last write OK
+ *   1 = the address+data DMA transfer itself NAK'd (data never reached the chip)
+ *   2 = ACK-polling after the write cycle timed out (chip stayed NAK'ing)
+ * Cleared at the start of each drv_24lc256_start_write_page(). */
+uint8_t   drv_24lc256_last_write_fail(void);
+
 /* Drive the internal state machine — call from scheduler every tick.
  * Polls EEPROM ACK to detect end of internal write cycle. */
 void      drv_24lc256_update(void);

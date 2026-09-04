@@ -102,6 +102,14 @@ typedef struct {
                                   * on-screen content is simply stale/absent
                                   * while false. */
 
+    /* Boot EEPROM write->read-back self-test (svc_storage_init()):
+     *   255 = not run   0 = pass
+     *   1 = write start rejected      2 = write DMA NAK'd (data never reached chip)
+     *   3 = write-cycle ACK-poll timeout
+     *   4 = read-back DMA failed      5 = read-back mismatch (pass A)
+     *   6 = read-back mismatch (pass B, inverted pattern) */
+    uint8_t  eeprom_selftest;
+
     bool     calibration_valid;
 
     /* Local UI input (WP3), published by Services/svc_input.c. Raw

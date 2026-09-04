@@ -158,8 +158,20 @@ static void draw_status_screen(void)
     int y = 38;
     snprintf(line, sizeof line, "Firmware:  v%s", FW_VERSION_STRING);
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 16;
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, "EEPROM:    OK");                y += 16;
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, "Settings:  loaded");            y += 16;
+    {
+        uint8_t st = g_system_state.eeprom_selftest;
+        if (st == 0U) {
+            snprintf(line, sizeof line, "EEPROM RW: OK");
+        } else if (st == 255U) {
+            snprintf(line, sizeof line, "EEPROM RW: (not run)");
+        } else {
+            snprintf(line, sizeof line, "EEPROM RW: FAIL %u", (unsigned)st);
+        }
+    }
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);                           y += 16;
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y,
+                  g_system_state.settings_save_failed ? "Settings:  SAVE FAILED"
+                                                      : "Settings:  loaded");   y += 16;
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y,
                   g_system_state.ble_connected ? "BLE:       connected"
                                                : "BLE:       offline");       y += 16;
