@@ -32,17 +32,31 @@ static volatile uint32_t  s_usb_pmaovr_count  = 0;
 static volatile uint32_t  s_usb_ctr_count     = 0;
 static volatile uint32_t  s_usb_wkup_count    = 0;
 static volatile uint32_t  s_usb_attach_toggles = 0;
+static volatile uint32_t  s_usb_reset_flag_seen = 0;
+static volatile uint32_t  s_usb_it_line_sr8      = 0;
 
 void hal_usb_isr_tick(void)
 {
     /* Sampled BEFORE HAL_PCD_IRQHandler processes/clears ISTR, so this
      * sees every flag that was pending on entry — which event(s) are
-     * actually driving the interrupt storm. */
+     * actually driving the interrupt storm.
+     *
+     * Also sampling raw ISTR.RESET and SYSCFG->IT_LINE_SR[8] here:
+     * HAL_PCD_IRQHandler's very first thing is
+     *   if ((SYSCFG->IT_LINE_SR[8] & (0x1UL << 2)) == 0U) { return; }
+     * i.e. it refuses to touch ISTR at all unless that status bit is set.
+     * If reset_flag_seen climbs (a real bus reset IS happening at the wire)
+     * while reset_count (via PCD_ResetCallback) stays 0 and it_line_sr8
+     * never has bit 2 set, that gate is exactly what's eating every event
+     * before our code ever sees it — explains a storm with zero resets/
+     * setups ever counted despite the host actually trying to enumerate. */
     uint32_t istr = USB_DRD_FS->ISTR;
     if (istr & USB_ISTR_ERR)    { s_usb_err_count++; }
     if (istr & USB_ISTR_PMAOVR) { s_usb_pmaovr_count++; }
     if (istr & USB_ISTR_CTR)    { s_usb_ctr_count++; }
     if (istr & USB_ISTR_WKUP)   { s_usb_wkup_count++; }
+    if (istr & USB_ISTR_RESET)  { s_usb_reset_flag_seen++; }
+    s_usb_it_line_sr8 = SYSCFG->IT_LINE_SR[8];
     s_usb_irq_count++;
 }
 void hal_usb_note_reset(void)   { s_usb_reset_count++; }
@@ -69,6 +83,8 @@ void hal_usb_get_debug(HalUsbDebug *out)
     out->ctr_count       = s_usb_ctr_count;
     out->wkup_count      = s_usb_wkup_count;
     out->attach_toggles  = s_usb_attach_toggles;
+    out->reset_flag_seen = s_usb_reset_flag_seen;
+    out->it_line_sr8     = s_usb_it_line_sr8;
 }
 
 void hal_usb_init(void)

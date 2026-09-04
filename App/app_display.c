@@ -272,9 +272,9 @@ static void draw_status_screen(void)
          * — EP0/PMA problem. If setup>0 but we never reach st3 (CONFIGURED),
          * the host is getting SETUP requests but failing on the data that
          * comes back. */
-        snprintf(line, sizeof line, "rst%lu setup%lu susp%lu",
-                 (unsigned long)u.reset_count, (unsigned long)u.setup_count,
-                 (unsigned long)u.suspend_count);
+        snprintf(line, sizeof line, "rst%lu(hw%lu) setup%lu susp%lu",
+                 (unsigned long)u.reset_count, (unsigned long)u.reset_flag_seen,
+                 (unsigned long)u.setup_count, (unsigned long)u.suspend_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
         /* Which ISTR flag(s) are actually driving the interrupt storm,
          * sampled at IRQ entry before HAL clears them: err=bus error,
@@ -283,6 +283,14 @@ static void draw_status_screen(void)
         snprintf(line, sizeof line, "err%lu pma%lu ctr%lu wkup%lu",
                  (unsigned long)u.err_count, (unsigned long)u.pmaovr_count,
                  (unsigned long)u.ctr_count, (unsigned long)u.wkup_count);
+        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
+        /* rst(hw) counts raw ISTR.RESET seen at IRQ entry, BEFORE
+         * HAL_PCD_IRQHandler runs. HAL's very first line is
+         *   if ((SYSCFG->IT_LINE_SR[8] & (1<<2)) == 0) return;
+         * — if that's never true, HAL bails before processing ANY event
+         * (reset, setup, everything), which is exactly a storm with
+         * rst(hw)>0 but rst/setup/ctr always 0. itln8 is that raw value. */
+        snprintf(line, sizeof line, "itln8 0x%lX", (unsigned long)u.it_line_sr8);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
     }
 }

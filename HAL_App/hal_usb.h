@@ -46,6 +46,11 @@ typedef struct {
                               /*   since boot — climbing fast while VBUS      */
                               /*   reads steady plugged in means PA2 is       */
                               /*   bouncing and we're repeatedly detaching    */
+    uint32_t reset_flag_seen; /* raw ISTR.RESET seen at IRQ entry, BEFORE     */
+                               /*  HAL_PCD_IRQHandler runs at all — compare   */
+                               /*  against reset_count (via the callback)     */
+    uint32_t it_line_sr8;      /* raw SYSCFG->IT_LINE_SR[8] (shared IRQ       */
+                               /*  status for USB_UCPD1_2) at IRQ entry       */
 } HalUsbDebug;
 
 void hal_usb_get_debug(HalUsbDebug *out);
