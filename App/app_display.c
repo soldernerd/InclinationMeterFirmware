@@ -243,11 +243,23 @@ static void draw_status_screen(void)
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
 
     /* ---- WP4 USB bring-up diagnostics (temporary) ----
-     * a=VBUS-gated attach latch, v=raw PA2, st=USBD dev_state
-     *   (1 DEFAULT / 2 ADDRESSED / 3 CONFIGURED / 4 SUSPENDED),
-     * pu=D+ pull-up (BCDR.DPPU), fnr=USB frame number (moves only while
-     *   host SOF is being received), irq=USB IRQ entries since boot,
-     * crs ok=CRS SYNCOKF (HSI48 locked to host SOF), isr=raw CRS->ISR. */
+     * Kept to exactly 4 lines (146/164/182/200) so nothing collides with
+     * draw_screen_indicator()'s text at y=232 — a 5th line here previously
+     * did, and was invisible/garbled under the indicator.
+     *
+     * a=VBUS-gated attach latch, v=raw PA2, st=USBD dev_state (1 DEFAULT /
+     *   2 ADDRESSED / 3 CONFIGURED / 4 SUSPENDED), pu=D+ pull-up
+     *   (BCDR.DPPU), fnr=USB frame number (moves only while host SOF is
+     *   received), tog=USBD_Start()/Stop() calls since boot (climbing fast
+     *   while still plugged in would mean VBUS_SENSE/PA2 is bouncing).
+     * irq=USB IRQ entries since boot; err/wkup=ISTR.ERR/WKUP seen at IRQ
+     *   entry (pma/ctr tracked but always 0 so far — dropped from display).
+     * rst/setup/susp=PCD_Reset/SetupStage/Suspend callback entries; hw=raw
+     *   ISTR.RESET seen at IRQ entry, BEFORE HAL_PCD_IRQHandler runs at all
+     *   — compare against rst.
+     * crs=CRS SYNCOKF (HSI48 locked to host SOF); itln8=raw
+     *   SYSCFG->IT_LINE_SR[8], the shared-IRQ status HAL_PCD_IRQHandler
+     *   gates on before touching anything (bit 2 = USB). */
     {
         HalUsbDebug u;
         hal_usb_get_debug(&u);
@@ -256,41 +268,16 @@ static void draw_status_screen(void)
                  (unsigned)u.dev_state, (unsigned)u.dppu,
                  (unsigned)u.fnr, (unsigned long)u.attach_toggles);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        /* tog = USBD_Start()/Stop() calls since boot. Climbing fast while
-         * the device stays visibly plugged in means VBUS_SENSE (PA2) is
-         * bouncing and we're repeatedly detaching/reattaching — which would
-         * explain resets/setups never completing despite the pull-up being
-         * asserted (each Start() only stays up for a few ms). */
-        snprintf(line, sizeof line, "irq%lu", (unsigned long)u.irq_count);
+        snprintf(line, sizeof line, "irq%lu err%lu wkup%lu",
+                 (unsigned long)u.irq_count, (unsigned long)u.err_count,
+                 (unsigned long)u.wkup_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        snprintf(line, sizeof line, "CRS ok%u isr0x%lX",
-                 (unsigned)(u.crs_isr & 1U), (unsigned long)u.crs_isr);
-        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        /* rst = bus resets seen, setup = SETUP packets (e.g. GET_DESCRIPTOR)
-         * actually RECEIVED and processed, susp = suspend events. If rst>0
-         * but setup=0, the host never got a valid SETUP transaction through
-         * — EP0/PMA problem. If setup>0 but we never reach st3 (CONFIGURED),
-         * the host is getting SETUP requests but failing on the data that
-         * comes back. */
         snprintf(line, sizeof line, "rst%lu(hw%lu) setup%lu susp%lu",
                  (unsigned long)u.reset_count, (unsigned long)u.reset_flag_seen,
                  (unsigned long)u.setup_count, (unsigned long)u.suspend_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        /* Which ISTR flag(s) are actually driving the interrupt storm,
-         * sampled at IRQ entry before HAL clears them: err=bus error,
-         * pmaovr=packet-memory over/underrun (bad EP/PMA config),
-         * ctr=a transfer completed on some endpoint, wkup=wake-up. */
-        snprintf(line, sizeof line, "err%lu pma%lu ctr%lu wkup%lu",
-                 (unsigned long)u.err_count, (unsigned long)u.pmaovr_count,
-                 (unsigned long)u.ctr_count, (unsigned long)u.wkup_count);
-        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        /* rst(hw) counts raw ISTR.RESET seen at IRQ entry, BEFORE
-         * HAL_PCD_IRQHandler runs. HAL's very first line is
-         *   if ((SYSCFG->IT_LINE_SR[8] & (1<<2)) == 0) return;
-         * — if that's never true, HAL bails before processing ANY event
-         * (reset, setup, everything), which is exactly a storm with
-         * rst(hw)>0 but rst/setup/ctr always 0. itln8 is that raw value. */
-        snprintf(line, sizeof line, "itln8 0x%lX", (unsigned long)u.it_line_sr8);
+        snprintf(line, sizeof line, "crs%u itln8 0x%lX",
+                 (unsigned)(u.crs_isr & 1U), (unsigned long)u.it_line_sr8);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
     }
 }
