@@ -124,6 +124,18 @@ void hal_power_jump_to_system_bootloader(void)
     __HAL_RCC_SYSCFG_CLK_ENABLE();
     __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
 
+    /* SCB->VTOR is a separate register from the SYSCFG remap above and
+     * does NOT follow it automatically — it's an absolute address the
+     * core uses for every exception/interrupt vector fetch from here on.
+     * Our app never sets it explicitly (SystemInit()'s VTOR write is
+     * conditional on USER_VECT_TAB_ADDRESS, which this project doesn't
+     * define), so if it isn't already exactly 0x00000000, the very next
+     * interrupt the bootloader takes (SysTick, USB, ...) vectors through
+     * whatever table VTOR was ACTUALLY left pointing at — quite possibly
+     * our own application's — rather than the bootloader's. Set it
+     * explicitly rather than assume it was already correct. */
+    SCB->VTOR = 0x00000000U;
+
     typedef void (*BootJumpFn)(void);
     uint32_t   bootloader_sp   = *(volatile uint32_t *)0x00000000U;
     BootJumpFn bootloader_jump = (BootJumpFn)(*(volatile uint32_t *)0x00000004U);
