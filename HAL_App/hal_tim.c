@@ -28,37 +28,116 @@ void hal_tim_vcom_stop(void)
     HAL_TIM_Base_Stop_IT(&htim6);
 }
 
+/* Non-zero while a hal_tim_buzzer_beep() tone is sounding: the number of
+ * whole PWM periods still owed before the ISR stops the output. Touched by
+ * both thread code (under __disable_irq) and the TIM3 update ISR. */
+static volatile uint32_t s_buzzer_periods_left = 0U;
+
+/* Program ARR/CCR4 for freq_hz and force the shadow registers to load now.
+ *
+ * Timer clock = 1 MHz (prescaler = 63, CubeMX-configured in Core/Src/tim.c;
+ * APB1 = HCLK = 64 MHz, confirmed unprescaled in SystemClock_Config()), so
+ * one timer tick = 1 us. ARR = ticks per PWM period - 1; CCR4 = period/2
+ * for ~50% duty. REV B moved the buzzer from the REV A prototype's
+ * TIM1_CH2/PB3 to TIM3_CH4/PC9 — see pin_config.h's BUZZER_PIN.
+ *
+ * MX_TIM3_Init leaves ARR/CCR preload enabled (ARR=999 from CubeMX), so the
+ * register writes only reach the shadows; without the forced update the
+ * first period of every beep would run at the previous frequency (1 kHz on
+ * the very first beep) until the counter next wrapped — an audible chunk of
+ * a 20 ms beep. TIM_EGR_UG loads the shadows and re-zeros the counter; the
+ * update flag it raises is cleared so the caller can decide whether the
+ * period-counting interrupt should see subsequent updates. Returns the PWM
+ * period length in timer ticks (= microseconds). */
+static uint32_t buzzer_program_freq(uint16_t freq_hz)
+{
+    uint32_t arr = (1000000UL / freq_hz) - 1U;
+
+    __HAL_TIM_SET_AUTORELOAD(&htim3, arr);
+    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (arr + 1U) / 2U);
+    htim3.Instance->EGR = TIM_EGR_UG;
+    __HAL_TIM_CLEAR_FLAG(&htim3, TIM_FLAG_UPDATE);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+
+    return arr + 1U;
+}
+
 void hal_tim_buzzer_start(uint16_t freq_hz)
 {
     if (freq_hz == 0U) {
         hal_tim_buzzer_stop();
         return;
     }
-    /* Timer clock = 1 MHz (prescaler = 63, CubeMX-configured in
-     * Core/Src/tim.c; APB1 = HCLK = 64 MHz, confirmed unprescaled in
-     * SystemClock_Config()). ARR = ticks per period - 1; CCR4 = ARR/2 for
-     * ~50% duty. REV B moved the buzzer from the REV A prototype's
-     * TIM1_CH2/PB3 to TIM3_CH4/PC9 — see pin_config.h's BUZZER_PIN. */
-    uint32_t arr = (1000000UL / freq_hz) - 1U;
-
-    __HAL_TIM_SET_AUTORELOAD(&htim3, arr);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (arr + 1U) / 2U);
-    /* MX_TIM3_Init leaves ARR/CCR preload enabled (ARR=999 from CubeMX), so
-     * the writes above only reach the shadow registers — without forcing an
-     * update the first period of every beep would run at the *previous*
-     * frequency (1 kHz on the very first beep, or the last beep's tone
-     * after that) until the counter next wraps. For a 20 ms beep that stale
-     * first period is a large, audible chunk and reads as "the beep barely
-     * sounded". TIM_EGR_UG loads the shadows into the active registers now
-     * and re-zeros the counter, so the whole beep is at the right pitch. */
-    htim3.Instance->EGR = TIM_EGR_UG;
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-
+    __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
+    s_buzzer_periods_left = 0U;
+    (void)buzzer_program_freq(freq_hz);
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+}
+
+void hal_tim_buzzer_beep(uint16_t freq_hz, uint16_t duration_ms)
+{
+    if (freq_hz == 0U || duration_ms == 0U) {
+        hal_tim_buzzer_stop();
+        return;
+    }
+
+    /* period length in us; periods needed for duration_ms, rounded to
+     * nearest whole PWM period (2 kHz => 500 us => 40 periods for 20 ms). */
+    uint32_t period_us = (1000000UL / freq_hz);
+    uint32_t periods   = ((uint32_t)duration_ms * 1000UL + period_us / 2U) / period_us;
+    if (periods == 0U) {
+        periods = 1U;
+    }
+
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+
+    if (s_buzzer_periods_left != 0U) {
+        /* A beep is already sounding — only ever lengthen it, never cut it
+         * short. The tone and pitch are already correct; just top up the
+         * period budget the ISR is counting down. */
+        if (periods > s_buzzer_periods_left) {
+            s_buzzer_periods_left = periods;
+        }
+        __set_PRIMASK(primask);
+        return;
+    }
+
+    (void)buzzer_program_freq(freq_hz);
+    s_buzzer_periods_left = periods;
+    __HAL_TIM_ENABLE_IT(&htim3, TIM_IT_UPDATE);
+    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
+    __set_PRIMASK(primask);
+}
+
+/* TIM3 update ISR body — one call per elapsed PWM period. Counts the beep
+ * down and cuts the output at exactly the requested number of periods,
+ * independent of the main loop. */
+void hal_tim_buzzer_isr(void)
+{
+    if (__HAL_TIM_GET_FLAG(&htim3, TIM_FLAG_UPDATE) == RESET) {
+        return;
+    }
+    if (__HAL_TIM_GET_IT_SOURCE(&htim3, TIM_IT_UPDATE) == RESET) {
+        /* Update flag is set but its interrupt isn't armed — not ours to
+         * act on (e.g. a stale flag from buzzer_program_freq's UG). */
+        return;
+    }
+    __HAL_TIM_CLEAR_FLAG(&htim3, TIM_FLAG_UPDATE);
+
+    if (s_buzzer_periods_left != 0U) {
+        if (--s_buzzer_periods_left == 0U) {
+            __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
+            HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_4);
+        }
+    }
 }
 
 void hal_tim_buzzer_stop(void)
 {
+    __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
+    s_buzzer_periods_left = 0U;
     HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_4);
 }
 

@@ -76,7 +76,16 @@ void MX_TIM3_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM3_Init 2 */
-
+  /* TIM3 update interrupt: hal_tim_buzzer_beep() uses it to count PWM
+   * periods and stop the buzzer after an exact duration. Priority 2 —
+   * below the encoder EXTI / SPI-DMA / I2C lines (0/1), above SysTick (3).
+   * The .ioc enables NVIC.TIM3_TIM4_IRQn with "generate IRQ handler" off
+   * (same pattern as I2C1_IRQn), so a regen keeps this enable but does not
+   * emit a competing handler — the real TIM3_TIM4_IRQHandler lives in
+   * stm32g0xx_it.c. Enabling here by hand too is idempotent and keeps the
+   * buzzer working even if that .ioc flag is lost in a future regen. */
+  HAL_NVIC_SetPriority(TIM3_TIM4_IRQn, 2, 0);
+  HAL_NVIC_EnableIRQ(TIM3_TIM4_IRQn);
   /* USER CODE END TIM3_Init 2 */
   HAL_TIM_MspPostInit(&htim3);
 
