@@ -14,20 +14,32 @@
  * hUsbDeviceFS is defined in usb_device.c but not exported via its header
  * (ST's own template omits it) — hence the explicit extern here. */
 #include "usbd_def.h"
+#include "usbd_core.h"
 #include "usbd_customhid.h"
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
 static HalUsbRxCallback s_rx_cb       = 0;
 static uint8_t          s_tx_buf[USB_HID_REPORT_SIZE];
+static bool             s_attached    = false;
 
 void hal_usb_init(void)
 {
     /* hUsbDeviceFS / USB middleware are initialised by MX_USB_Device_Init
-     * in usb_device.c (called from main()). Nothing to do here — s_rx_cb
-     * is NOT reset in this function: svc_usb_init() registers its callback
-     * via hal_usb_register_rx_callback() before calling this, and this
-     * function running after that registration must not clobber it. */
+     * in usb_device.c (called from main()), which also calls USBD_Start().
+     *
+     * Detach again here: on this board USB DM/DP sit on the PA9/PA10 pads
+     * (SYSCFG PA11/PA12 remap, LQFP64). With the stack started but no host
+     * connected, those lines float and the USB peripheral raises bus
+     * reset/error interrupts continuously at NVIC priority 0, starving the
+     * cooperative scheduler (the LED heartbeat freezes). The device is
+     * attached only while VBUS is present — see hal_usb_update(), pumped
+     * from task_usb every scheduler tick.
+     *
+     * s_rx_cb is NOT reset here: svc_usb_init() registers its callback
+     * before calling this and must not have it clobbered. */
+    USBD_Stop(&hUsbDeviceFS);
+    s_attached = false;
 }
 
 void hal_usb_register_rx_callback(HalUsbRxCallback cb)
@@ -82,8 +94,20 @@ bool hal_usb_send(const uint8_t *data, uint16_t len)
 
 void hal_usb_update(void)
 {
-    /* Nothing to poll here today — hal_usb_is_connected() reads live
-     * state on every call. Kept as a scheduler-callable hook (mirrors
-     * every other hal_*_update()) for whatever future USB-level polling
-     * turns out to be needed (e.g. remote wakeup, suspend handling). */
+    /* Attach the USB device only while VBUS is present; detach as soon as
+     * the cable is pulled. Leaving the peripheral connected with the data
+     * lines floating produces a priority-0 interrupt storm (see
+     * hal_usb_init()). VBUS_SENSE is PA2, driven high by USB-present on
+     * REV B (same signal svc_battery uses); read it raw here — a couple of
+     * spurious start/stop cycles on a bouncy edge are harmless. */
+    bool vbus = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN);
+
+    if (vbus && !s_attached) {
+        if (USBD_Start(&hUsbDeviceFS) == USBD_OK) {
+            s_attached = true;
+        }
+    } else if (!vbus && s_attached) {
+        USBD_Stop(&hUsbDeviceFS);
+        s_attached = false;
+    }
 }
