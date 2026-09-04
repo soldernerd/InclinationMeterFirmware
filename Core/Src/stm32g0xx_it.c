@@ -56,6 +56,7 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+extern PCD_HandleTypeDef hpcd_USB_DRD_FS;
 extern DMA_HandleTypeDef hdma_adc1;
 extern ADC_HandleTypeDef hadc1;
 extern DMA_HandleTypeDef hdma_i2c1_rx;
@@ -155,46 +156,60 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /**
-  * @brief This function handles EXTI Line 0 and 1 Interrupts.
+  * @brief This function handles EXTI line 0 and line 1 interrupts.
   */
 void EXTI0_1_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI0_1_IRQn 0 */
 
   /* USER CODE END EXTI0_1_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(ENC_1B_Pin);    /* PB0, line 0 */
-  HAL_GPIO_EXTI_IRQHandler(ENC_2A_Pin);    /* PB1, line 1 */
+  HAL_GPIO_EXTI_IRQHandler(ENC_1B_Pin);
+  HAL_GPIO_EXTI_IRQHandler(ENC_2A_Pin);
   /* USER CODE BEGIN EXTI0_1_IRQn 1 */
 
   /* USER CODE END EXTI0_1_IRQn 1 */
 }
 
 /**
-  * @brief This function handles EXTI Line 2 and 3 Interrupts.
+  * @brief This function handles EXTI line 2 and line 3 interrupts.
   */
 void EXTI2_3_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI2_3_IRQn 0 */
 
   /* USER CODE END EXTI2_3_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(ENC_2B_Pin);    /* PB2, line 2 */
+  HAL_GPIO_EXTI_IRQHandler(ENC_2B_Pin);
   /* USER CODE BEGIN EXTI2_3_IRQn 1 */
 
   /* USER CODE END EXTI2_3_IRQn 1 */
 }
 
 /**
-  * @brief This function handles EXTI Line 4 to 15 Interrupts.
+  * @brief This function handles EXTI line 4 to 15 interrupts.
   */
 void EXTI4_15_IRQHandler(void)
 {
   /* USER CODE BEGIN EXTI4_15_IRQn 0 */
 
   /* USER CODE END EXTI4_15_IRQn 0 */
-  HAL_GPIO_EXTI_IRQHandler(ENC_1A_Pin);    /* PC4, line 4 */
+  HAL_GPIO_EXTI_IRQHandler(ENC_1A_Pin);
   /* USER CODE BEGIN EXTI4_15_IRQn 1 */
 
   /* USER CODE END EXTI4_15_IRQn 1 */
+}
+
+/**
+  * @brief This function handles USB, UCPD1 and UCPD2 global interrupts.
+  */
+void USB_UCPD1_2_IRQHandler(void)
+{
+  /* USER CODE BEGIN USB_UCPD1_2_IRQn 0 */
+
+  /* USER CODE END USB_UCPD1_2_IRQn 0 */
+  HAL_PCD_IRQHandler(&hpcd_USB_DRD_FS);
+  /* USER CODE BEGIN USB_UCPD1_2_IRQn 1 */
+
+  /* USER CODE END USB_UCPD1_2_IRQn 1 */
 }
 
 /**

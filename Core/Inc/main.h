@@ -61,12 +61,16 @@ void Error_Handler(void);
 #define CHARGE_SENSE_GPIO_Port GPIOC
 #define ENC_1A_Pin GPIO_PIN_4
 #define ENC_1A_GPIO_Port GPIOC
+#define ENC_1A_EXTI_IRQn EXTI4_15_IRQn
 #define ENC_1B_Pin GPIO_PIN_0
 #define ENC_1B_GPIO_Port GPIOB
+#define ENC_1B_EXTI_IRQn EXTI0_1_IRQn
 #define ENC_2A_Pin GPIO_PIN_1
 #define ENC_2A_GPIO_Port GPIOB
+#define ENC_2A_EXTI_IRQn EXTI0_1_IRQn
 #define ENC_2B_Pin GPIO_PIN_2
 #define ENC_2B_GPIO_Port GPIOB
+#define ENC_2B_EXTI_IRQn EXTI2_3_IRQn
 #define _3V3_ENABLE__Pin GPIO_PIN_6
 #define _3V3_ENABLE__GPIO_Port GPIOC
 #define STANDBY_SENSE_Pin GPIO_PIN_5

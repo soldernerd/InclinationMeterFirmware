@@ -18,6 +18,16 @@ void      svc_storage_update(void);  /* call every scheduler tick — drives non
  * page directly. */
 DrvStatus svc_storage_save_settings(const DeviceSettings *settings);
 
+/* Clamps every EEPROM-backed divisor field (encoder_counts_per_detent,
+ * vbat_scale_den, tmp236_seg1_den, tmp236_seg2_den) to its DEFAULT_* value
+ * if zero. svc_storage_init() runs this after loading from EEPROM; any
+ * other writer of DeviceSettings — currently only Services/svc_api.c's
+ * SET_SETTINGS handler, applying an untrusted host payload — must run it
+ * too before accepting the write, or a zero divisor from a malformed
+ * payload silently deadens whatever consumer divides by it (App/app_ui.c,
+ * Services/svc_battery.c, Drivers_App/drv_tmp236.c). */
+void svc_storage_validate_settings(DeviceSettings *settings);
+
 DrvStatus svc_storage_save_calibration(const CalibrationData *cal);
 DrvStatus svc_storage_load_calibration(CalibrationData *cal);
 

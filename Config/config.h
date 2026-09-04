@@ -107,4 +107,24 @@
 #define EEPROM_CALIBRATION_ADDR         0x0500     /* moved from 0x0100 */
 #define EEPROM_CALIBRATION_VERSION      0x0001
 
+/* --- USB HID (WP4) ---
+ * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
+ * SolarChargerRevE) use this VID with project-specific PIDs granted by
+ * Microchip. We adopt the same VID for consistency in the soldernerd
+ * USB device family.
+ *
+ * NOTE: Microchip's grant strictly covers Microchip-MCU-based products.
+ * This firmware runs on an STM32, so the VID match is informal. Replace
+ * with a pid.codes / Open Stella allocation if a clean licensing story
+ * is needed for distribution.
+ *
+ * SolarCharger PID is 0xF08E. Picking 0xF08F here so the two don't
+ * collide on the same host. */
+#define USB_VID                         0x04D8
+#define USB_PID                         0xF08F
+#define USB_HID_REPORT_SIZE             64
+#define USB_MANUFACTURER_STR            "soldernerd"
+#define USB_PRODUCT_STR                 "InclinationMeter"
+#define USB_SERIAL_STR                  "001"
+
 #endif /* CONFIG_H */

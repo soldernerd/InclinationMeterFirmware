@@ -495,17 +495,18 @@ void svc_storage_update(void)
              * exact same "caller already got DRV_OK and never learns
              * about a later async failure" gap this now also closes).
              *
-             * svc_storage_save_settings()'s synchronous return only
-             * covers whether section 0 could be QUEUED, not whether the
-             * whole multi-page write actually completes — App/app_ui.c's
-             * commit_edit() clears settings_save_failed the moment
-             * queueing succeeds, which can be premature. Escalate here
-             * too, at the point a settings save genuinely fails, so the
-             * SETTINGS screen's indicator (App/app_display.c) still
-             * lights up even though the UI already exited edit mode. */
-            if (s_pending.is_settings_save) {
-                g_system_state.settings_save_failed = true;
-            }
+             * svc_storage_save_settings()/svc_storage_save_calibration()'s
+             * synchronous return only covers whether the write could be
+             * QUEUED, not whether it actually completes — callers that
+             * clear settings_save_failed the moment queueing succeeds
+             * (App/app_ui.c's commit_edit(), Services/svc_api.c's
+             * SET_ZERO/SET_CALIBRATION/SET_SETTINGS ACKing on DRV_OK) can
+             * be premature. Escalate here for BOTH kinds of save — not
+             * just settings — so a calibration write that fails async
+             * after its synchronous ACK is still surfaced somewhere,
+             * rather than the host believing an EEPROM write succeeded
+             * that never actually did. */
+            g_system_state.settings_save_failed = true;
             s_pending.active       = false;
             s_pending.inflight_len = 0U;
             s_pending.retry_count  = 0U;
@@ -522,12 +523,11 @@ void svc_storage_update(void)
             start_section_write(s_pending.settings_src, (uint8_t)(s_pending.section_idx + 1U));
             return;
         }
-        if (s_pending.is_settings_save) {
-            /* All 5 pages genuinely finished — the authoritative "did it
-             * really succeed" point, as opposed to commit_edit()'s
-             * optimistic synchronous clear on queueing. */
-            g_system_state.settings_save_failed = false;
-        }
+        /* The whole write genuinely finished — either all 5 settings
+         * pages, or the single calibration page — the authoritative "did
+         * it really succeed" point, as opposed to commit_edit()'s/
+         * svc_api.c's optimistic synchronous clear on queueing. */
+        g_system_state.settings_save_failed = false;
         s_pending.active = false;
         return;
     }
@@ -584,25 +584,7 @@ void svc_storage_init(void)
         }
     }
 
-    /* Belt-and-suspenders beyond load_section()'s own guarantees: a
-     * page that legitimately passed CRC+version but somehow still holds
-     * a zero divisor (e.g. a future bug in whatever writes this field)
-     * would otherwise fault a consumer. Covers every EEPROM-backed
-     * divisor, not just the encoder one App/app_ui.c happens to divide
-     * by every UI tick -- Services/svc_battery.c and
-     * Drivers_App/drv_tmp236.c divide by these too. */
-    if (g_device_settings.encoder_counts_per_detent == 0U) {
-        g_device_settings.encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
-    }
-    if (g_device_settings.vbat_scale_den == 0U) {
-        g_device_settings.vbat_scale_den = DEFAULT_VBAT_SCALE_DEN;
-    }
-    if (g_device_settings.tmp236_seg1_den == 0U) {
-        g_device_settings.tmp236_seg1_den = DEFAULT_TMP236_SEG1_DEN;
-    }
-    if (g_device_settings.tmp236_seg2_den == 0U) {
-        g_device_settings.tmp236_seg2_den = DEFAULT_TMP236_SEG2_DEN;
-    }
+    svc_storage_validate_settings(&g_device_settings);
 
     /* Calibration: same pattern, but a missing/corrupt header just means
      * the device hasn't been calibrated yet — fill zeros, leave validity
@@ -615,4 +597,39 @@ void svc_storage_init(void)
 
     g_system_state.calibration_valid =
         g_calibration.scale_valid && g_calibration.zero_valid;
+}
+
+void svc_storage_validate_settings(DeviceSettings *settings)
+{
+    /* Belt-and-suspenders beyond load_section()'s own guarantees: a page
+     * that legitimately passed CRC+version but somehow still holds a
+     * zero divisor (e.g. a future bug in whatever writes this field, or
+     * an untrusted SET_SETTINGS payload from svc_api.c) would otherwise
+     * fault a consumer. Covers every EEPROM-backed divisor in
+     * DeviceSettings, including filter_cutoff_hz_den/lm35_scale_mv_per_c
+     * below, which have no consumer yet (the complementary filter and
+     * LM35 driver are both future work) — guarded now anyway so whoever
+     * wires either one up inherits protection instead of having to
+     * remember to extend this function first. encoder_counts_per_detent,
+     * vbat_scale_den, and the tmp236_seg*_den pair already have live
+     * consumers: App/app_ui.c divides by the encoder one every UI tick,
+     * Services/svc_battery.c and Drivers_App/drv_tmp236.c by theirs. */
+    if (settings->encoder_counts_per_detent == 0U) {
+        settings->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
+    }
+    if (settings->vbat_scale_den == 0U) {
+        settings->vbat_scale_den = DEFAULT_VBAT_SCALE_DEN;
+    }
+    if (settings->tmp236_seg1_den == 0U) {
+        settings->tmp236_seg1_den = DEFAULT_TMP236_SEG1_DEN;
+    }
+    if (settings->tmp236_seg2_den == 0U) {
+        settings->tmp236_seg2_den = DEFAULT_TMP236_SEG2_DEN;
+    }
+    if (settings->filter_cutoff_hz_den == 0U) {
+        settings->filter_cutoff_hz_den = DEFAULT_FILTER_CUTOFF_HZ_DEN;
+    }
+    if (settings->lm35_scale_mv_per_c == 0U) {
+        settings->lm35_scale_mv_per_c = DEFAULT_LM35_SCALE_MV_PER_C;
+    }
 }

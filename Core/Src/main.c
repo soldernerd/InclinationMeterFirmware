@@ -24,7 +24,7 @@
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
-#include "usb_drd_fs.h"
+#include "usb_device.h"
 #include "gpio.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -49,6 +49,9 @@
 #include "app_ui.h"
 #include "svc_input.h"
 #include "pin_config.h"
+#include "svc_usb.h"
+#include "svc_api.h"
+#include "svc_measurement.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
@@ -200,18 +203,24 @@ int main(void)
   app_ui_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: UI layer up */
 
-  /* Remaining CubeMX peripherals: not yet used by any current WP (external
-   * ADC/DAC front end on SPI1/SPI3, RN4871 BLE UART, USB, a third I2C bus).
-   * Deferred to last on purpose — WP2/WP1's own init is what matters for
-   * "did we get far enough to work", not this boilerplate. */
+  /* Remaining CubeMX peripherals: external ADC/DAC front end on SPI1/SPI3,
+   * RN4871 BLE UART, a third I2C bus — not yet used by any current WP.
+   * Deferred to last on purpose. USB (Custom HID) IS used by WP4: its
+   * device stack is brought up here by MX_USB_Device_Init(). */
   MX_SPI1_Init();
   MX_SPI3_Init();
   MX_USART3_UART_Init();
   MX_USART6_UART_Init();
-  MX_USB_DRD_FS_PCD_Init();
+  MX_USB_Device_Init();
   MX_I2C3_Init();
 
   /* USER CODE BEGIN 2 */
+  /* WP4 comms stack. svc_api_init() before svc_usb_init(): svc_usb
+   * registers itself as API_TRANSPORT_USB via svc_api_register_transport(),
+   * which needs the transport table already zeroed. */
+  svc_api_init();
+  svc_measurement_init();
+  svc_usb_init();
   svc_battery_init();
   app_scheduler_init();
   hal_adc_start();             /* kick off the first ADC scan */

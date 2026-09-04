@@ -132,24 +132,41 @@ typedef struct {
                                            * one-shot interrupt event */
     bool     encoder2_sw_press_event;
 
-    /* True while a settings EEPROM write has failed and hasn't been
-     * superseded by a successful one yet. Set from three places in
-     * Services/svc_storage.c / App/app_ui.c: (1) commit_edit() sets it
-     * synchronously if svc_storage_save_settings() can't even be
-     * queued; (2) svc_storage_update() sets it (asynchronously, possibly
-     * many ticks later) if a multi-page settings save fails partway
-     * through after retries are exhausted — the save isn't atomic across
-     * its 5 EEPROM pages, so this is the only signal that a "successful"
-     * queue didn't actually finish; (3) svc_storage_init()'s boot-time
-     * per-page reseed-to-defaults write can also fail and sets it. Only
-     * svc_storage_update() clears it, at the point a full multi-page
-     * save genuinely completes — not commit_edit()'s optimistic
+    /* True while an EEPROM write (settings OR calibration) has failed
+     * and hasn't been superseded by a successful one yet. Set from:
+     * (1) App/app_ui.c's commit_edit(), synchronously, if
+     * svc_storage_save_settings() can't even be queued; (2)
+     * Services/svc_api.c's SET_ZERO/SET_CALIBRATION/SET_SETTINGS
+     * handlers, the same way, for a host-triggered save; (3)
+     * Services/svc_storage.c's svc_storage_update(), asynchronously,
+     * possibly many ticks later, if any in-flight write (settings or
+     * calibration) fails partway through after retries are exhausted —
+     * a synchronous DRV_OK only means the write was queued, not that it
+     * completed, so this is the only signal a "successful" queue didn't
+     * actually finish; (4) svc_storage_init()'s boot-time per-page
+     * reseed-to-defaults write can also fail and sets it. Only
+     * svc_storage_update() clears it, at the point an in-flight write
+     * genuinely completes — not commit_edit()'s/svc_api.c's optimistic
      * synchronous-queue-success clear, which can't see a later failure.
+     * svc_api.c's handlers NACK without setting this flag when
+     * svc_storage_is_busy() reports transient contention (another save
+     * already in flight) — that's not a failure, just "try again".
      * No DBG_PRINT infra exists in this codebase yet (WP1.5 was never
      * wired up), so this is the escalation-to-system-state half of
      * CLAUDE.md's "No Silent Failures" rule; App/app_display.c's
      * SETTINGS screen renders it. */
     bool     settings_save_failed;
+
+    /* Counts USB HID IN reports svc_usb.c's send_via_usb() asked
+     * hal_usb_send() to transmit but that hal_usb_send() reported
+     * as failed (not connected, or USBD_CUSTOM_HID_SendReport returned
+     * USBD_BUSY — a previous IN report still in flight). There's no
+     * retry queue: a dropped notification is just gone. No DBG_PRINT
+     * infra exists yet, so this counter is the CLAUDE.md 7.6 escalation
+     * for that failure — makes it observable (e.g. via a future debug
+     * command or GET_STATUS extension) instead of silent. Saturates
+     * rather than wraps; never cleared once the count is nonzero. */
+    uint16_t usb_tx_dropped_count;
 } SystemState;
 
 typedef struct {

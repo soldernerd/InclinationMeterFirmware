@@ -1,6 +1,7 @@
 #include "app_ui.h"
 #include "drv_buzzer.h"
 #include "svc_storage.h"
+#include "svc_measurement.h"
 #include "app_scheduler.h"
 #include "system_state.h"
 
@@ -214,7 +215,8 @@ void app_ui_update(void)
     /* ---- LEFT encoder: screen-level navigation ----
      * Rotate = move between screens (LIVE <-> STATUS <-> SETTINGS).
      * Ignored while editing a value so you can't accidentally jump away
-     * mid-edit. Push = back / cancel. */
+     * mid-edit. Push = back / cancel (and cancels an in-progress
+     * measurement first — see below). */
     if (!g_ui_state.settings_editing) {
         if (e2_steps > 0) {
             switch_screen(next_screen(g_ui_state.current_screen));
@@ -226,7 +228,14 @@ void app_ui_update(void)
     }
     if (e2_press) {
         beep_confirm();
-        if (g_ui_state.settings_editing) {
+        /* A measurement in progress takes priority over the normal
+         * back/cancel: App/app_display.c's overlay replaces the whole
+         * screen body and explicitly tells the user "[ENC2 push] Cancel"
+         * while it's showing, so honor that before falling through to
+         * settings-edit-cancel / screen-back. */
+        if (svc_measurement_get_state() != MEAS_STATE_IDLE) {
+            svc_measurement_cancel();
+        } else if (g_ui_state.settings_editing) {
             cancel_edit();
         } else {
             switch_screen(g_ui_state.previous_screen);

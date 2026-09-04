@@ -5,7 +5,10 @@
 #include "app_version.h"
 #include "system_state.h"
 #include "svc_battery.h"
+#include "svc_api.h"
+#include "svc_measurement.h"
 #include "hal_systick.h"
+#include "config.h"
 #include "u8g2.h"
 #include <stdio.h>
 #include <string.h>
@@ -21,6 +24,8 @@ typedef struct {
     bool     battery_charging;
     bool     usb_connected;
     bool     battery_critical;
+    MeasurementState meas_state;
+    ApiMode  api_mode_usb;
     UiScreen screen;
     uint8_t  settings_cursor;
     bool     settings_editing;
@@ -75,7 +80,26 @@ static void draw_top_bar(void)
     u8g2_uint_t x = (u8g2_uint_t)(LCD_WIDTH - 4 - bat_w);
     u8g2_DrawUTF8(&s_u8g2, x, 12, buf);
 
-    /* Status badges to the left of BAT */
+    /* Status badges to the left of BAT — measurement state has highest
+     * priority, then transport mode, then charging, then USB. */
+    if (svc_measurement_get_state() != MEAS_STATE_IDLE) {
+        const char *t = "[SGL]";
+        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
+        x = (u8g2_uint_t)(x - 2 - w);
+        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
+    }
+    ApiMode m_usb = svc_api_get_mode(API_TRANSPORT_USB);
+    if (m_usb == API_MODE_RAW_STREAM) {
+        const char *t = "[RAW]";
+        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
+        x = (u8g2_uint_t)(x - 2 - w);
+        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
+    } else if (m_usb == API_MODE_STREAM) {
+        const char *t = "[STR]";
+        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
+        x = (u8g2_uint_t)(x - 2 - w);
+        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
+    }
     if (g_system_state.battery_charging) {
         const char *t = "[CHG]";
         u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
@@ -90,6 +114,42 @@ static void draw_top_bar(void)
     }
 
     u8g2_DrawHLine(&s_u8g2, 0, 18, LCD_WIDTH);
+}
+
+/* MEASURING overlay — drawn on top of whichever screen is active when
+ * svc_measurement_get_state() != IDLE. Replaces the screen body, keeps
+ * the top bar visible. */
+static void draw_measuring_overlay(void)
+{
+    u8g2_SetFont(&s_u8g2, u8g2_font_ncenB14_tr);
+    const char *title = "Measuring...";
+    u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, title);
+    u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2), 60, title);
+
+    /* Progress bar — 320 px wide, 14 px tall, centred */
+    uint8_t pct = svc_measurement_get_progress_pct();
+    u8g2_uint_t bar_w = 320;
+    u8g2_uint_t bar_x = (u8g2_uint_t)((LCD_WIDTH - bar_w) / 2);
+    u8g2_uint_t bar_y = 100;
+    u8g2_DrawFrame(&s_u8g2, bar_x, bar_y, bar_w, 14);
+    u8g2_DrawBox(&s_u8g2, (u8g2_uint_t)(bar_x + 2), (u8g2_uint_t)(bar_y + 2),
+                 (u8g2_uint_t)(((uint32_t)(bar_w - 4) * pct) / 100U), 10);
+
+    char line[40];
+    snprintf(line, sizeof line, "%u%%", (unsigned)pct);
+    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    w = u8g2_GetUTF8Width(&s_u8g2, line);
+    u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2), 134, line);
+
+    snprintf(line, sizeof line, "Samples: %u / %u",
+             (unsigned)svc_measurement_get_packet()->sample_count,
+             (unsigned)SETTLING_BUFFER_SIZE);
+    w = u8g2_GetUTF8Width(&s_u8g2, line);
+    u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2), 154, line);
+
+    const char *hint = "[ENC2 push] Cancel";
+    w = u8g2_GetUTF8Width(&s_u8g2, hint);
+    u8g2_DrawUTF8(&s_u8g2, (u8g2_uint_t)((LCD_WIDTH - w) / 2), 200, hint);
 }
 
 /* ---- screen indicator (bottom) ---- */
@@ -269,6 +329,8 @@ static bool snapshot_changed(void)
         || s_last.battery_charging != g_system_state.battery_charging
         || s_last.usb_connected    != g_system_state.usb_connected
         || s_last.battery_critical != g_system_state.battery_critical
+        || s_last.meas_state       != svc_measurement_get_state()
+        || s_last.api_mode_usb     != svc_api_get_mode(API_TRANSPORT_USB)
         || s_last.screen           != g_ui_state.current_screen
         || s_last.settings_cursor  != g_ui_state.settings_cursor
         || s_last.settings_editing != g_ui_state.settings_editing
@@ -285,6 +347,8 @@ static void snapshot_capture(void)
     s_last.battery_charging = g_system_state.battery_charging;
     s_last.usb_connected    = g_system_state.usb_connected;
     s_last.battery_critical = g_system_state.battery_critical;
+    s_last.meas_state       = svc_measurement_get_state();
+    s_last.api_mode_usb     = svc_api_get_mode(API_TRANSPORT_USB);
     s_last.screen           = g_ui_state.current_screen;
     s_last.settings_cursor  = g_ui_state.settings_cursor;
     s_last.settings_editing = g_ui_state.settings_editing;
@@ -319,6 +383,11 @@ void app_display_update(void)
 
     if (g_system_state.battery_low) {
         draw_low_battery_screen(svc_battery_get_vbat_mv());
+    } else if (svc_measurement_get_state() != MEAS_STATE_IDLE) {
+        /* Measurement in progress — overlay replaces the screen body
+         * but the top bar still gives status context. */
+        draw_top_bar();
+        draw_measuring_overlay();
     } else {
         draw_top_bar();
         switch (g_ui_state.current_screen) {
