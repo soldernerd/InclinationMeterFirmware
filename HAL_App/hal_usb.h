@@ -51,6 +51,9 @@ typedef struct {
                                /*  against reset_count (via the callback)     */
     uint32_t it_line_sr8;      /* raw SYSCFG->IT_LINE_SR[8] (shared IRQ       */
                                /*  status for USB_UCPD1_2) at IRQ entry       */
+    uint8_t  hsi48_on;         /* RCC->CR HSI48ON                             */
+    uint8_t  hsi48_rdy;        /* RCC->CR HSI48RDY                            */
+    uint8_t  usb_clk_sel;      /* RCC->CCIPR2 USBSEL field (0=HSI48 expected)  */
 } HalUsbDebug;
 
 void hal_usb_get_debug(HalUsbDebug *out);

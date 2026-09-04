@@ -276,8 +276,15 @@ static void draw_status_screen(void)
                  (unsigned long)u.reset_count, (unsigned long)u.reset_flag_seen,
                  (unsigned long)u.setup_count, (unsigned long)u.suspend_count);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
-        snprintf(line, sizeof line, "crs%u itln8 0x%lX",
-                 (unsigned)(u.crs_isr & 1U), (unsigned long)u.it_line_sr8);
+        /* crs=CRS SYNCOKF (never seen set so far, in any reading — CRS has
+         * not received one single valid USB SOF sync to lock onto).
+         * hsi48on/rdy = RCC->CR HSI48ON/HSI48RDY — confirms the oscillator
+         * itself is enabled and stable. usbsel = RCC->CCIPR2 USBSEL field,
+         * expected 0 (HSI48); a nonzero value would mean the USB peripheral
+         * is clocked from something else entirely. */
+        snprintf(line, sizeof line, "crs%u hsi48%u%u usbsel%u",
+                 (unsigned)(u.crs_isr & 1U), (unsigned)u.hsi48_on,
+                 (unsigned)u.hsi48_rdy, (unsigned)u.usb_clk_sel);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
     }
 }
