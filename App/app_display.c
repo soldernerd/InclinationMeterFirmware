@@ -65,7 +65,7 @@ static void format_uptime(char *buf, size_t bufsz, uint32_t ms)
 
 static void draw_top_bar(void)
 {
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     u8g2_DrawUTF8(&s_u8g2, 4, 12, "InclinationMeter");
 
     /* Right-anchored badges + battery percent */
@@ -97,7 +97,7 @@ static void draw_top_bar(void)
 static void draw_screen_indicator(UiScreen current)
 {
     static const char *labels[UI_SCREEN_COUNT] = { "LIVE", "STATUS", "SETTINGS" };
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
 
     /* Lay out evenly across the width */
     u8g2_uint_t y = 232;
@@ -124,7 +124,7 @@ static void draw_live_screen(void)
     char temp_str[16];
     format_temp(temp_str, sizeof temp_str, g_system_state.temperature_cdeg);
 
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 38, "Temperature");
 
     char line[32];
@@ -132,7 +132,7 @@ static void draw_live_screen(void)
     u8g2_SetFont(&s_u8g2, u8g2_font_logisoso24_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 76, line);
 
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 110, "Battery");
 
     char volt_str[16];
@@ -142,7 +142,7 @@ static void draw_live_screen(void)
     u8g2_SetFont(&s_u8g2, u8g2_font_logisoso24_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 148, line);
 
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 200, "Sensors: offline");
 }
 
@@ -154,10 +154,10 @@ static void draw_status_screen(void)
     char up_str[16];
     format_uptime(up_str, sizeof up_str, hal_systick_get_ms());
 
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     int y = 38;
     snprintf(line, sizeof line, "Firmware:  v%s", FW_VERSION_STRING);
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 16;
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
     {
         uint8_t st = g_system_state.eeprom_selftest;
         if (st == 0U) {
@@ -168,16 +168,16 @@ static void draw_status_screen(void)
             snprintf(line, sizeof line, "EEPROM RW: FAIL %u", (unsigned)st);
         }
     }
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);                           y += 16;
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);                           y += 18;
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y,
                   g_system_state.settings_save_failed ? "Settings:  SAVE FAILED"
-                                                      : "Settings:  loaded");   y += 16;
+                                                      : "Settings:  loaded");   y += 18;
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y,
                   g_system_state.ble_connected ? "BLE:       connected"
-                                               : "BLE:       offline");       y += 16;
+                                               : "BLE:       offline");       y += 18;
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y,
                   g_system_state.usb_connected ? "USB:       connected"
-                                               : "USB:       offline");       y += 16;
+                                               : "USB:       offline");       y += 18;
     snprintf(line, sizeof line, "Uptime:    %s", up_str);
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
 }
@@ -198,7 +198,7 @@ static int32_t setting_value_for_display(UiSettingIndex i)
 
 static void draw_settings_screen(void)
 {
-    u8g2_SetFont(&s_u8g2, u8g2_font_6x10_tr);
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 36, "Settings");
 
     int y = 56;
@@ -214,14 +214,14 @@ static void draw_settings_screen(void)
         if (i == g_ui_state.settings_cursor && g_ui_state.settings_editing) {
             /* Highlight: invert background of this row */
             u8g2_SetDrawColor(&s_u8g2, 1);
-            u8g2_DrawBox(&s_u8g2, 4, (u8g2_uint_t)(y - 12), LCD_WIDTH - 8, 16);
+            u8g2_DrawBox(&s_u8g2, 4, (u8g2_uint_t)(y - 14), LCD_WIDTH - 8, 19);
             u8g2_SetDrawColor(&s_u8g2, 0);
             u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
             u8g2_SetDrawColor(&s_u8g2, 1);
         } else {
             u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
         }
-        y += 16;
+        y += 18;
     }
 
     u8g2_DrawUTF8(&s_u8g2, 8, 200, "LEFT: screen   RIGHT: item/value   RIGHT press: enter");

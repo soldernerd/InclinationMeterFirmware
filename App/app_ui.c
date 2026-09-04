@@ -69,6 +69,28 @@ static int32_t clamp(int32_t v, int32_t lo, int32_t hi)
     return v;
 }
 
+/* Beep feedback. A nav click scales with how many detents landed in one
+ * UI tick (a fast spin), capped, so a burst still gets an audible beep
+ * instead of one short blip. drv_buzzer_beep() itself only ever extends
+ * an in-progress beep, never shortens it. */
+#define BEEP_NAV_MS      40U
+#define BEEP_NAV_MAX_MS  110U
+#define BEEP_CONFIRM_MS  70U
+
+static void beep_nav(int16_t steps)
+{
+    uint32_t n  = (uint32_t)(steps < 0 ? -(int32_t)steps : (int32_t)steps);
+    if (n == 0U) n = 1U;
+    uint32_t ms = BEEP_NAV_MS * n;
+    if (ms > BEEP_NAV_MAX_MS) ms = BEEP_NAV_MAX_MS;
+    drv_buzzer_beep(BUZZER_TONE_CLICK, (uint16_t)ms);
+}
+
+static void beep_confirm(void)
+{
+    drv_buzzer_beep(BUZZER_TONE_CLICK, BEEP_CONFIRM_MS);
+}
+
 /* Converts the continuously-accumulating raw quadrature count into whole
  * mechanical detents moved since the last call. *last_pos holds the last
  * reported detent index (0 at init).
@@ -198,14 +220,14 @@ void app_ui_update(void)
     if (!g_ui_state.settings_editing) {
         if (e2_steps > 0) {
             switch_screen(next_screen(g_ui_state.current_screen));
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
+            beep_nav(e2_steps);
         } else if (e2_steps < 0) {
             switch_screen(prev_screen(g_ui_state.current_screen));
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
+            beep_nav(e2_steps);
         }
     }
     if (e2_press) {
-        drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
+        beep_confirm();
         if (g_ui_state.settings_editing) {
             cancel_edit();
         } else {
@@ -222,29 +244,29 @@ void app_ui_update(void)
             const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)g_ui_state.settings_cursor);
             int32_t delta = (int32_t)e1_steps * m->step;
             g_ui_state.edit_value = clamp(g_ui_state.edit_value + delta, m->min_v, m->max_v);
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
+            beep_nav(e1_steps);
             g_ui_state.redraw_needed = true;
         }
         if (e1_press) {
             commit_edit();
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
+            beep_confirm();
         }
     } else if (g_ui_state.current_screen == UI_SCREEN_SETTINGS) {
         if (e1_steps > 0) {
             g_ui_state.settings_cursor = (uint8_t)((g_ui_state.settings_cursor + 1U)
                                                    % UI_SETTING_COUNT);
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
+            beep_nav(e1_steps);
             g_ui_state.redraw_needed = true;
         } else if (e1_steps < 0) {
             g_ui_state.settings_cursor =
                 (uint8_t)((g_ui_state.settings_cursor + UI_SETTING_COUNT - 1U)
                           % UI_SETTING_COUNT);
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
+            beep_nav(e1_steps);
             g_ui_state.redraw_needed = true;
         }
         if (e1_press) {
             enter_edit_mode();
-            drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
+            beep_confirm();
         }
     }
     /* LIVE / STATUS: RIGHT encoder rotate/push do nothing in WP3. */
