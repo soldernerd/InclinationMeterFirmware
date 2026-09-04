@@ -42,3 +42,6 @@ WP*_prompt.md
 
 # Claude Code local tooling (worktrees, etc.) - not project source
 .claude/
+
+# Windows shortcut files
+*.lnk
