@@ -68,52 +68,47 @@ void hal_power_enter_standby(void)
     NVIC_SystemReset();
 }
 
-/* Arbitrary 32-bit value, chosen only to be implausible as an
- * uninitialised/garbage TAMP_BKP0R content after a power-on reset (which
- * does clear the backup domain, unlike a software reset). */
+/* Arbitrary 32-bit value, chosen only to be implausible as leftover RAM
+ * garbage after a genuine power-on (as opposed to a warm/software reset,
+ * which is what this whole mechanism relies on preserving it through). */
 #define DFU_REBOOT_MAGIC   0x44465521U   /* loosely "DFU!" */
 
-static uint32_t s_last_bkp0r_seen = 0U;
+/* Deliberately NOT a normal static (which would live in .bss and get
+ * zeroed by Reset_Handler on every boot, warm or cold, defeating the
+ * whole point). Placed in the .noinit section instead — see
+ * STM32G0B1XX_FLASH.ld — which Reset_Handler's zero-fill loop skips, so
+ * this genuinely survives NVIC_SystemReset(). (An earlier version of this
+ * used a TAMP backup register instead, on the general STM32 assumption
+ * that those survive a software reset; empirically, on this board it did
+ * not — reads back 0 on the very next boot after a verified, successful
+ * write. Not chasing why; plain retained RAM is simpler and doesn't
+ * depend on backup-domain reset semantics at all.) */
+__attribute__((section(".noinit"))) static uint32_t s_dfu_reboot_magic;
+
+static uint32_t s_last_magic_seen = 0U;
 
 uint32_t hal_power_last_bkp0r(void)
 {
-    return s_last_bkp0r_seen;
-}
-
-static void backup_domain_unlock(void)
-{
-    __HAL_RCC_PWR_CLK_ENABLE();
-    HAL_PWR_EnableBkUpAccess();
-    __HAL_RCC_RTCAPB_CLK_ENABLE();   /* TAMP_BKPxR needs the RTC APB clock */
+    return s_last_magic_seen;
 }
 
 void hal_power_request_dfu_reboot(void)
 {
-    backup_domain_unlock();
-    TAMP->BKP0R = DFU_REBOOT_MAGIC;
-    __DSB();   /* make sure the write has actually posted before reading it back */
-    s_last_bkp0r_seen = TAMP->BKP0R;
-    if (s_last_bkp0r_seen != DFU_REBOOT_MAGIC) {
-        /* The write itself didn't take — deliberately do NOT reset, so
-         * this readback stays visible on STATUS (hal_power_last_bkp0r())
-         * without a reboot overwriting it. Distinguishes "the write never
-         * landed" from "it landed but doesn't survive the reset", which
-         * hal_power_check_dfu_request_and_jump() would otherwise conflate
-         * into the same "read 0 at next boot" symptom. */
-        return;
-    }
+    s_dfu_reboot_magic = DFU_REBOOT_MAGIC;
+    s_last_magic_seen  = s_dfu_reboot_magic;
     NVIC_SystemReset();
     for (;;) { }   /* NVIC_SystemReset() does not return */
 }
 
 void hal_power_check_dfu_request_and_jump(void)
 {
-    backup_domain_unlock();
-    s_last_bkp0r_seen = TAMP->BKP0R;
-    if (s_last_bkp0r_seen != DFU_REBOOT_MAGIC) {
-        return;   /* normal boot — the common case */
+    s_last_magic_seen = s_dfu_reboot_magic;
+    if (s_last_magic_seen != DFU_REBOOT_MAGIC) {
+        return;   /* normal boot — the common case (includes every
+                    * power-on reset: .noinit RAM content is only
+                    * meaningful across a WARM reset) */
     }
-    TAMP->BKP0R = 0U;   /* one-shot: don't loop back into DFU on the next reset */
+    s_dfu_reboot_magic = 0U;   /* one-shot: don't loop back into DFU on the next reset */
 
     /* Classic STM32 "jump to the ROM system bootloader" sequence: undo
      * whatever HAL_Init() just did (this runs immediately after it, before

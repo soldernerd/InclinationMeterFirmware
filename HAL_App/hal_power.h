@@ -38,12 +38,11 @@ void hal_power_enter_standby(void);
 /* Reboots into the STM32 ROM system bootloader (USB DFU / UART) instead
  * of this firmware — used by the SETTINGS screen's "Reboot to DFU" menu
  * action so the device can be field-updated over USB without an ST-LINK.
- * Stores a magic value in a TAMP backup register (expected to survive a
- * normal software reset) and calls NVIC_SystemReset() — does not return
- * in the normal case. hal_power_check_dfu_request_and_jump() is what
- * actually acts on it, very early on the next boot.
- * If the write can't even be read back immediately afterward, this
- * returns instead of resetting — see hal_power_last_bkp0r(). */
+ * Stores a magic value in a .noinit RAM variable (survives
+ * NVIC_SystemReset() — Reset_Handler's zero-fill loop skips that section;
+ * see STM32G0B1XX_FLASH.ld) and calls NVIC_SystemReset(); does not
+ * return. hal_power_check_dfu_request_and_jump() is what actually acts
+ * on the request, very early on the next boot. */
 void hal_power_request_dfu_reboot(void);
 
 /* Call once, as the very first thing in main() — before any clock,
@@ -52,14 +51,15 @@ void hal_power_request_dfu_reboot(void);
  * normal reset doesn't loop back into DFU) and jumps into the ROM system
  * bootloader; does not return in that case. Otherwise returns
  * immediately and normal boot continues — the common case, and cheap
- * (a couple of register reads). */
+ * (a couple of RAM reads). */
 void hal_power_check_dfu_request_and_jump(void);
 
-/* The raw value hal_power_check_dfu_request_and_jump() read out of
- * TAMP->BKP0R on THIS boot, captured before the compare/clear — so it's
- * populated whether or not a DFU jump was requested. Temporary bring-up
- * visibility (rendered on the STATUS screen) for confirming the backup
- * register actually survives a software reset on this part/board. */
+/* The magic-value RAM location as last read by either
+ * hal_power_request_dfu_reboot() (right after writing it) or
+ * hal_power_check_dfu_request_and_jump() (at boot) — whichever ran most
+ * recently in this session. Temporary bring-up visibility (rendered on
+ * the STATUS screen). Name kept from an earlier TAMP-backup-register
+ * version of this mechanism; no longer register-specific. */
 uint32_t hal_power_last_bkp0r(void);
 
 #endif /* HAL_POWER_H */

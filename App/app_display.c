@@ -243,12 +243,11 @@ static void draw_status_screen(void)
     snprintf(line, sizeof line, "Uptime:    %s", up_str);
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
 
-    /* Reboot-to-DFU bring-up check (temporary): the raw TAMP->BKP0R value
-     * read at boot, before hal_power_check_dfu_request_and_jump() compares
-     * it. Confirms whether the backup register actually survives a
-     * software reset on this board — magic is 0x44465521; 0 (or anything
-     * else) after triggering "Reboot to DFU" means it didn't survive, or
-     * the menu action never actually wrote it. */
+    /* Reboot-to-DFU bring-up check (temporary): the DFU magic value as
+     * last read, in .noinit RAM now rather than a TAMP backup register
+     * (which turned out not to survive a reset on this board — see
+     * hal_power.c). Should read 0x44465521 right after triggering
+     * "Reboot to DFU" and 0 on an ordinary boot. */
     snprintf(line, sizeof line, "DFU bkp0r 0x%08lX", (unsigned long)hal_power_last_bkp0r());
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
 
