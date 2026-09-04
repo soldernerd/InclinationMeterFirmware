@@ -282,9 +282,14 @@ static void draw_status_screen(void)
          * itself is enabled and stable. usbsel = RCC->CCIPR2 USBSEL field,
          * expected 0 (HSI48); a nonzero value would mean the USB peripheral
          * is clocked from something else entirely. */
-        snprintf(line, sizeof line, "crs%u hsi48%u%u usbsel%u",
+        /* usv=PWR->CR2 VDDUSB-supply-valid. If 0, the analog transceiver
+         * runs under-supplied: coarse SE0/reset detection can still work,
+         * but real differential signal levels (needed to decode any actual
+         * packet) may not — matching resets-work/data-never-decodes. */
+        snprintf(line, sizeof line, "crs%u hsi48%u%u sel%u usv%u",
                  (unsigned)(u.crs_isr & 1U), (unsigned)u.hsi48_on,
-                 (unsigned)u.hsi48_rdy, (unsigned)u.usb_clk_sel);
+                 (unsigned)u.hsi48_rdy, (unsigned)u.usb_clk_sel,
+                 (unsigned)u.vddusb_valid);
         u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
     }
 }

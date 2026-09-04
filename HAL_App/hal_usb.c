@@ -88,6 +88,7 @@ void hal_usb_get_debug(HalUsbDebug *out)
     out->hsi48_on        = (RCC->CR & RCC_CR_HSI48ON)  ? 1U : 0U;
     out->hsi48_rdy       = (RCC->CR & RCC_CR_HSI48RDY) ? 1U : 0U;
     out->usb_clk_sel     = (uint8_t)((RCC->CCIPR2 & RCC_CCIPR2_USBSEL) >> RCC_CCIPR2_USBSEL_Pos);
+    out->vddusb_valid    = (PWR->CR2 & PWR_CR2_USV) ? 1U : 0U;
 }
 
 void hal_usb_init(void)

@@ -54,6 +54,10 @@ typedef struct {
     uint8_t  hsi48_on;         /* RCC->CR HSI48ON                             */
     uint8_t  hsi48_rdy;        /* RCC->CR HSI48RDY                            */
     uint8_t  usb_clk_sel;      /* RCC->CCIPR2 USBSEL field (0=HSI48 expected)  */
+    uint8_t  vddusb_valid;     /* PWR->CR2 USV (VDDUSB supply valid) — if 0,  */
+                               /*  the analog transceiver runs under-supplied: */
+                               /*  coarse SE0/reset still "works", but real   */
+                               /*  differential signal levels may not         */
 } HalUsbDebug;
 
 void hal_usb_get_debug(HalUsbDebug *out);
