@@ -7,7 +7,11 @@
  *   read  : write [addr_hi, addr_lo] then read N
  *   write : write [addr_hi, addr_lo, data...] up to one 64-byte page
  * After a write, the internal cycle takes up to 5 ms during which the
- * device NACKs all transactions. We poll IsDeviceReady to detect end. */
+ * device NACKs all transactions. We just wait the datasheet's fixed
+ * TWC (5 ms max) — ACK-polling via HAL_I2C_IsDeviceReady proved
+ * unreliable on this STM32G0 I2C IP (it never reported ready). */
+
+#define EEPROM_WRITE_CYCLE_MS  10U   /* 2x the 5 ms datasheet TWC max */
 
 /* Internal write buffer holds 2-byte address + up to one page of data.
  * Also reused to hold the 2-byte address ahead of a DMA read. */
@@ -18,7 +22,7 @@ typedef enum {
     OP_DMA_WRITE_ADDR,     /* writing the 2-byte address before a DMA read */
     OP_DMA_READ,
     OP_DMA_WRITE,
-    OP_WRITE_CYCLE_POLL,
+    OP_WRITE_CYCLE_WAIT,   /* fixed TWC wait after the data DMA completes */
 } eeprom_op_t;
 
 static volatile eeprom_op_t s_op              = OP_IDLE;
@@ -29,7 +33,7 @@ static volatile bool        s_write_success   = false;
 static volatile uint8_t     s_last_write_fail = 0U;   /* see drv_24lc256_last_write_fail() */
 static uint8_t              *s_read_buf       = 0;
 static uint16_t              s_read_len       = 0;
-static uint32_t              s_poll_started_ms = 0;
+static uint32_t              s_wr_cycle_start_ms = 0;
 
 static void on_dma(HalI2cInstance instance, bool success)
 {
@@ -161,11 +165,12 @@ void drv_24lc256_update(void)
         case OP_DMA_WRITE:
             if (s_dma_done) {
                 if (s_dma_success) {
-                    /* Address bytes + data have been clocked out. EEPROM now
-                     * runs an internal write cycle (<= 5 ms) during which it
-                     * NACKs all transactions. Poll until it ACKs again. */
-                    s_op              = OP_WRITE_CYCLE_POLL;
-                    s_poll_started_ms = hal_systick_get_ms();
+                    /* Address bytes + data have been clocked out and ACK'd.
+                     * The EEPROM now runs its internal write cycle (<= 5 ms
+                     * datasheet TWC) during which it NACKs everything. Just
+                     * wait it out — see EEPROM_WRITE_CYCLE_MS. */
+                    s_op                = OP_WRITE_CYCLE_WAIT;
+                    s_wr_cycle_start_ms = hal_systick_get_ms();
                 } else {
                     s_write_success   = false;
                     s_last_write_fail = 1U;   /* DMA transfer NAK'd */
@@ -174,15 +179,10 @@ void drv_24lc256_update(void)
             }
             break;
 
-        case OP_WRITE_CYCLE_POLL:
-            if (hal_i2c_device_ready(HAL_I2C_MAIN, EEPROM_I2C_ADDR)) {
+        case OP_WRITE_CYCLE_WAIT:
+            if (hal_systick_elapsed_ms(s_wr_cycle_start_ms) >= EEPROM_WRITE_CYCLE_MS) {
                 s_write_success = true;
                 s_op            = OP_IDLE;
-            } else if (hal_systick_elapsed_ms(s_poll_started_ms) > 50U) {
-                /* Stuck — give up rather than wedging the scheduler */
-                s_write_success   = false;
-                s_last_write_fail = 2U;   /* ACK-poll after write cycle timed out */
-                s_op              = OP_IDLE;
             }
             break;
 
