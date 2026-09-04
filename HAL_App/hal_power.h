@@ -35,20 +35,16 @@ bool hal_power_woke_from_standby(void);
  * for disabling whatever rails/peripherals should be off first. */
 void hal_power_enter_standby(void);
 
-/* Resets the MCU — used right after App/app_ui.c's "Reboot to DFU" menu
- * action has persisted its request via svc_storage_request_dfu_reboot()
- * (EEPROM-backed; see that function's comment). A thin NVIC_SystemReset()
- * wrapper so App-layer code doesn't call CMSIS directly. Does not return. */
-void hal_power_request_dfu_reboot(void);
-
 /* Jumps into the STM32 ROM system bootloader (USB DFU / UART) instead of
- * continuing this firmware. Call only once boot has established whatever
- * this needs to have already happened (nothing, in fact — it's safe at
- * any point) — Core/Src/main.c calls it right after
- * svc_storage_check_and_clear_dfu_reboot_flag() reports a pending
- * request, as early in boot as EEPROM access is available. Never
- * returns: fully undoes clock/interrupt state first, then remaps and
- * jumps, same as a fresh boot straight into system memory. */
+ * continuing this firmware — App/app_ui.c's "Reboot to DFU" menu action
+ * calls this directly, right from the running application, no prior
+ * reset needed. (An earlier version persisted a request across a reset
+ * instead — via a TAMP backup register, then retained RAM, then EEPROM —
+ * on the theory that a fresh reboot gives the bootloader a cleaner
+ * slate; each mechanism's "survives the reset" assumption turned out
+ * wrong on this board for reasons never root-caused, and it was all
+ * unnecessary anyway: this function already fully undoes clock/interrupt
+ * state before jumping, which is what actually matters.) Never returns. */
 void hal_power_jump_to_system_bootloader(void);
 
 #endif /* HAL_POWER_H */

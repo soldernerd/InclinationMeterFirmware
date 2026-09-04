@@ -179,16 +179,6 @@ int main(void)
   /* 8a. I2C1 / EEPROM — needs the 3.3V rail (step 5) up. */
   MX_I2C1_Init();
   hal_i2c_init(HAL_I2C_MAIN);
-  drv_24lc256_init();
-  /* "Reboot to DFU" (App/app_ui.c's SETTINGS action) persists its request
-   * in EEPROM — see Services/svc_storage.c's svc_storage_request_dfu_reboot()
-   * comment for why (RAM and a TAMP backup register both turned out not
-   * to survive NVIC_SystemReset() on this board). Checked here, as early
-   * as EEPROM access exists, before the rest of boot (display, UI,
-   * scheduler) does any work that a pending request would just waste. */
-  if (svc_storage_check_and_clear_dfu_reboot_flag()) {
-      hal_power_jump_to_system_bootloader();   /* never returns */
-  }
   /* Storage must come before scheduler init — it populates
    * g_device_settings (and g_calibration) which the scheduler reads
    * for its task periods. */

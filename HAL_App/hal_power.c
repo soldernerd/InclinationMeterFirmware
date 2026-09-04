@@ -68,28 +68,22 @@ void hal_power_enter_standby(void)
     NVIC_SystemReset();
 }
 
-void hal_power_request_dfu_reboot(void)
-{
-    /* Persistence is handled by the caller (App/app_ui.c calls
-     * svc_storage_request_dfu_reboot() first — see its comment for why
-     * this is EEPROM-backed rather than RAM or a backup register). This
-     * function is just "reset the MCU", kept as a named entry point in
-     * HAL_App so App-layer code doesn't call NVIC_SystemReset() directly
-     * (CLAUDE.md: upper layers go through HAL_App, not raw CMSIS/HAL). */
-    NVIC_SystemReset();
-    for (;;) { }   /* NVIC_SystemReset() does not return */
-}
-
 void hal_power_jump_to_system_bootloader(void)
 {
-    /* Classic STM32 "jump to the ROM system bootloader" sequence: undo
-     * whatever HAL_Init() and our own boot-so-far has set up, remap
-     * system Flash to address 0x0, then load the bootloader's own
-     * initial SP and reset vector from there and jump.
-     * __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH() is the vendor-verified way
-     * to do the remap on this exact part — deliberately not hand-computing
-     * a raw system-memory address, which differs across STM32 families
-     * and would be easy to get wrong. Never returns. */
+    /* Classic STM32 "jump to the ROM system bootloader" sequence, called
+     * directly from wherever the caller decides to (App/app_ui.c's
+     * "Reboot to DFU" menu action) — no prior reset needed. Undoes
+     * whatever this boot has set up (clocks, interrupts, SysTick), remaps
+     * system Flash to address 0x0, then loads the bootloader's own
+     * initial SP and reset vector from there and jumps.
+     * __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH() is the vendor-verified way to
+     * do the remap on this exact part — deliberately not hand-computing a
+     * raw system-memory address, which differs across STM32 families and
+     * would be easy to get wrong. Interrupts stay disabled all the way
+     * through: the bootloader's own reset handler re-enables whatever it
+     * needs once it's actually running, and there is no reason to risk a
+     * stale/spurious IRQ firing through the freshly-remapped vector table
+     * before MSP is even updated. Never returns. */
     __disable_irq();
     SysTick->CTRL = 0U;
     HAL_RCC_DeInit();
@@ -101,13 +95,13 @@ void hal_power_jump_to_system_bootloader(void)
     __HAL_RCC_SYSCFG_CLK_ENABLE();
     __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
 
-    __enable_irq();
-
     typedef void (*BootJumpFn)(void);
     uint32_t   bootloader_sp   = *(volatile uint32_t *)0x00000000U;
     BootJumpFn bootloader_jump = (BootJumpFn)(*(volatile uint32_t *)0x00000004U);
 
     __set_MSP(bootloader_sp);
+    __DSB();
+    __ISB();
     bootloader_jump();
 
     for (;;) { }   /* never reached */
