@@ -20,6 +20,9 @@ typedef enum {
                                      * "battery cutoff"; see config.h */
     UI_SETTING_STREAM_INTERVAL,
     UI_SETTING_SETTLING_TIMEOUT,
+    UI_SETTING_REBOOT_DFU,          /* action, not a value — see its
+                                     * UiSettingMeta.step == 0 and
+                                     * app_ui.c's app_ui_update() */
     UI_SETTING_COUNT,
 } UiSettingIndex;
 
@@ -34,7 +37,12 @@ typedef struct {
 
 /* Display label/unit/edit-range for one setting — single source of truth
  * shared by App/app_ui.c (edit clamping) and App/app_display.c (rendering
- * the SETTINGS screen), instead of each keeping its own copy. */
+ * the SETTINGS screen), instead of each keeping its own copy.
+ *
+ * step == 0 marks an ACTION row (currently only UI_SETTING_REBOOT_DFU)
+ * rather than a numeric value: unit/min_v/max_v are unused, rotating the
+ * encoder does nothing, and a second RIGHT press while "editing" performs
+ * the action immediately instead of committing a value to EEPROM. */
 typedef struct {
     const char *label;
     const char *unit;

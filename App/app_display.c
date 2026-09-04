@@ -318,12 +318,23 @@ static void draw_settings_screen(void)
         char line[64];
         const char *cursor = (i == g_ui_state.settings_cursor) ? ">" : " ";
         const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)i);
-        snprintf(line, sizeof line, "%s %-18s %ld %s",
-                 cursor,
-                 m->label,
-                 (long)setting_value_for_display((UiSettingIndex)i),
-                 m->unit);
-        if (i == g_ui_state.settings_cursor && g_ui_state.settings_editing) {
+        bool is_selected_and_editing = (i == g_ui_state.settings_cursor) && g_ui_state.settings_editing;
+        if (m->step != 0) {
+            snprintf(line, sizeof line, "%s %-18s %ld %s",
+                     cursor,
+                     m->label,
+                     (long)setting_value_for_display((UiSettingIndex)i),
+                     m->unit);
+        } else {
+            /* Action row (step == 0, e.g. "Reboot to DFU") — no numeric
+             * value to show; a confirm prompt replaces it once the row is
+             * "entered" (the first RIGHT press), same highlight box as an
+             * ordinary edit. */
+            snprintf(line, sizeof line, "%s %-18s%s",
+                     cursor, m->label,
+                     is_selected_and_editing ? "  RIGHT again to confirm" : "");
+        }
+        if (is_selected_and_editing) {
             /* Highlight: invert background of this row */
             u8g2_SetDrawColor(&s_u8g2, 1);
             u8g2_DrawBox(&s_u8g2, 4, (u8g2_uint_t)(y - 14), LCD_WIDTH - 8, 19);

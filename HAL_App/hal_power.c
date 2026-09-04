@@ -67,3 +67,62 @@ void hal_power_enter_standby(void)
      * retries the shutdown. Beats silently running with the display dark. */
     NVIC_SystemReset();
 }
+
+/* Arbitrary 32-bit value, chosen only to be implausible as an
+ * uninitialised/garbage TAMP_BKP0R content after a power-on reset (which
+ * does clear the backup domain, unlike a software reset). */
+#define DFU_REBOOT_MAGIC   0x44465521U   /* loosely "DFU!" */
+
+static void backup_domain_unlock(void)
+{
+    __HAL_RCC_PWR_CLK_ENABLE();
+    HAL_PWR_EnableBkUpAccess();
+    __HAL_RCC_RTCAPB_CLK_ENABLE();   /* TAMP_BKPxR needs the RTC APB clock */
+}
+
+void hal_power_request_dfu_reboot(void)
+{
+    backup_domain_unlock();
+    TAMP->BKP0R = DFU_REBOOT_MAGIC;
+    NVIC_SystemReset();
+    for (;;) { }   /* NVIC_SystemReset() does not return */
+}
+
+void hal_power_check_dfu_request_and_jump(void)
+{
+    backup_domain_unlock();
+    if (TAMP->BKP0R != DFU_REBOOT_MAGIC) {
+        return;   /* normal boot — the common case */
+    }
+    TAMP->BKP0R = 0U;   /* one-shot: don't loop back into DFU on the next reset */
+
+    /* Classic STM32 "jump to the ROM system bootloader" sequence: undo
+     * whatever HAL_Init() just did (this runs immediately after it, before
+     * any of our own clock/peripheral setup), remap system Flash to
+     * address 0x0, then load the bootloader's own initial SP and reset
+     * vector from there and jump. __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH()
+     * is the vendor-verified way to do the remap on this exact part —
+     * deliberately not hand-computing a raw system-memory address, which
+     * differs across STM32 families and would be easy to get wrong. */
+    __disable_irq();
+    SysTick->CTRL = 0U;
+    HAL_RCC_DeInit();
+    for (uint8_t i = 0U; i < 8U; i++) {
+        NVIC->ICER[i] = 0xFFFFFFFFU;
+        NVIC->ICPR[i] = 0xFFFFFFFFU;
+    }
+
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
+
+    __enable_irq();
+
+    typedef void (*BootJumpFn)(void);
+    uint32_t   bootloader_sp   = *(volatile uint32_t *)0x00000000U;
+    BootJumpFn bootloader_jump = (BootJumpFn)(*(volatile uint32_t *)0x00000004U);
+
+    __set_MSP(bootloader_sp);
+    bootloader_jump();
+
+    for (;;) { }   /* never reached */
+}

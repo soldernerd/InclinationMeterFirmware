@@ -4,6 +4,7 @@
 #include "svc_measurement.h"
 #include "app_scheduler.h"
 #include "system_state.h"
+#include "hal_power.h"
 
 UiState g_ui_state = {
     .current_screen   = UI_SCREEN_LIVE,
@@ -27,6 +28,8 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
     [UI_SETTING_STREAM_INTERVAL]  = { "Stream interval",  "ms",   50,   100,   2000 },
     [UI_SETTING_SETTLING_TIMEOUT] = { "Settling timeout", "ms", 1000,  5000,  60000 },
+    /* step 0 marks this an action row — see UiSettingMeta's comment. */
+    [UI_SETTING_REBOOT_DFU]       = { "Reboot to DFU",    "",      0,     0,      0 },
 };
 
 const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i)
@@ -247,16 +250,30 @@ void app_ui_update(void)
      * SETTINGS not editing: rotate moves the cursor, push enters edit.
      * LIVE / STATUS: nothing to navigate within. */
     if (g_ui_state.current_screen == UI_SCREEN_SETTINGS && g_ui_state.settings_editing) {
-        if (e1_steps != 0) {
-            const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)g_ui_state.settings_cursor);
-            int32_t delta = (int32_t)e1_steps * m->step;
-            g_ui_state.edit_value = clamp(g_ui_state.edit_value + delta, m->min_v, m->max_v);
-            beep_nav(e1_steps);
-            g_ui_state.redraw_needed = true;
-        }
-        if (e1_press) {
-            commit_edit();
-            beep_confirm();
+        const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)g_ui_state.settings_cursor);
+        if (m->step != 0) {
+            /* Ordinary numeric setting. */
+            if (e1_steps != 0) {
+                int32_t delta = (int32_t)e1_steps * m->step;
+                g_ui_state.edit_value = clamp(g_ui_state.edit_value + delta, m->min_v, m->max_v);
+                beep_nav(e1_steps);
+                g_ui_state.redraw_needed = true;
+            }
+            if (e1_press) {
+                commit_edit();
+                beep_confirm();
+            }
+        } else {
+            /* Action row (UI_SETTING_REBOOT_DFU): rotating does nothing;
+             * this second RIGHT press (the first got us into "editing" /
+             * confirm state below) performs the action immediately —
+             * hal_power_request_dfu_reboot() does not return. */
+            if (e1_press) {
+                beep_confirm();
+                if ((UiSettingIndex)g_ui_state.settings_cursor == UI_SETTING_REBOOT_DFU) {
+                    hal_power_request_dfu_reboot();
+                }
+            }
         }
     } else if (g_ui_state.current_screen == UI_SCREEN_SETTINGS) {
         if (e1_steps > 0) {

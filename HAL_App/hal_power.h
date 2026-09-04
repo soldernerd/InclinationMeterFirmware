@@ -34,4 +34,22 @@ bool hal_power_woke_from_standby(void);
  * for disabling whatever rails/peripherals should be off first. */
 void hal_power_enter_standby(void);
 
+/* Reboots into the STM32 ROM system bootloader (USB DFU / UART) instead
+ * of this firmware — used by the SETTINGS screen's "Reboot to DFU" menu
+ * action so the device can be field-updated over USB without an ST-LINK.
+ * Stores a magic value in a TAMP backup register (survives a normal
+ * software reset) and calls NVIC_SystemReset(); does not return.
+ * hal_power_check_dfu_request_and_jump() is what actually acts on it,
+ * very early on the next boot. */
+void hal_power_request_dfu_reboot(void);
+
+/* Call once, as the very first thing in main() — before any clock,
+ * GPIO, or peripheral init. If the last reset was requested by
+ * hal_power_request_dfu_reboot(), clears the magic value (so a later
+ * normal reset doesn't loop back into DFU) and jumps into the ROM system
+ * bootloader; does not return in that case. Otherwise returns
+ * immediately and normal boot continues — the common case, and cheap
+ * (a couple of register reads). */
+void hal_power_check_dfu_request_and_jump(void);
+
 #endif /* HAL_POWER_H */
