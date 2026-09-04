@@ -187,7 +187,13 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
     __HAL_LINKDMA(i2cHandle,hdmatx,hdma_i2c1_tx);
 
   /* USER CODE BEGIN I2C1_MspInit 1 */
-
+    /* I2C1 global interrupt — REQUIRED for HAL_I2C_Master_*_DMA(): the I2C
+     * event/error IRQ is what detects transfer-complete/STOP and fires the
+     * ...CpltCallback / ErrorCallback. CubeMX's .ioc never enabled it, so
+     * every DMA transfer hung mid-completion. Added here (USER CODE) so it
+     * survives a regen; also add NVIC.I2C1_IRQn=true to the .ioc. */
+    HAL_NVIC_SetPriority(I2C1_IRQn, 1, 0);
+    HAL_NVIC_EnableIRQ(I2C1_IRQn);
   /* USER CODE END I2C1_MspInit 1 */
   }
   else if(i2cHandle->Instance==I2C3)
