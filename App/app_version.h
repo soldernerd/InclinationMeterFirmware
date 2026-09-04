@@ -8,7 +8,7 @@
  * only one place to edit. */
 #define FW_VERSION_MAJOR  0
 #define FW_VERSION_MINOR  3
-#define FW_VERSION_PATCH  9
+#define FW_VERSION_PATCH  10
 
 #define FW_VERSION_STR2(x)  #x
 #define FW_VERSION_STR(x)   FW_VERSION_STR2(x)

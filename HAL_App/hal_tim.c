@@ -43,6 +43,15 @@ void hal_tim_buzzer_start(uint16_t freq_hz)
 
     __HAL_TIM_SET_AUTORELOAD(&htim3, arr);
     __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_4, (arr + 1U) / 2U);
+    /* MX_TIM3_Init leaves ARR/CCR preload enabled (ARR=999 from CubeMX), so
+     * the writes above only reach the shadow registers — without forcing an
+     * update the first period of every beep would run at the *previous*
+     * frequency (1 kHz on the very first beep, or the last beep's tone
+     * after that) until the counter next wraps. For a 20 ms beep that stale
+     * first period is a large, audible chunk and reads as "the beep barely
+     * sounded". TIM_EGR_UG loads the shadows into the active registers now
+     * and re-zeros the counter, so the whole beep is at the right pitch. */
+    htim3.Instance->EGR = TIM_EGR_UG;
     __HAL_TIM_SET_COUNTER(&htim3, 0U);
 
     HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);

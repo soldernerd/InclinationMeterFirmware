@@ -3,8 +3,17 @@
 #include "hal_systick.h"
 #include <stdbool.h>
 
+/* Hard floor on how short a beep can physically be, independent of what
+ * duration the caller asked for or how the deadline math works out. The
+ * merge logic below already guarantees at least the requested duration
+ * from the last drv_buzzer_beep() call, but this is the backstop that
+ * makes "the beep sometimes lasts only a few ms" structurally impossible:
+ * once the tone is switched on it stays on for at least this long. */
+#define BUZZER_MIN_ON_MS  15U
+
 static volatile bool s_active            = false;
-static uint32_t      s_beep_deadline_ms  = 0;   /* absolute stop time */
+static uint32_t      s_beep_start_ms     = 0;   /* when the tone came on   */
+static uint32_t      s_beep_deadline_ms  = 0;   /* absolute stop time      */
 
 void drv_buzzer_init(void)
 {
@@ -15,6 +24,7 @@ void drv_buzzer_init(void)
 void drv_buzzer_on(BuzzerTone tone)
 {
     hal_tim_buzzer_start((uint16_t)tone);
+    s_beep_start_ms = hal_systick_get_ms();
     s_active = true;
 }
 
@@ -45,7 +55,19 @@ void drv_buzzer_beep(BuzzerTone tone, uint16_t duration_ms)
 
 void drv_buzzer_update(void)
 {
-    if (s_active && (int32_t)(hal_systick_get_ms() - s_beep_deadline_ms) >= 0) {
-        drv_buzzer_off();
+    if (!s_active) {
+        return;
     }
+    uint32_t now = hal_systick_get_ms();
+
+    /* Not past the requested stop time yet. */
+    if ((int32_t)(now - s_beep_deadline_ms) < 0) {
+        return;
+    }
+    /* Past the stop time, but hold the tone until the minimum on-time has
+     * elapsed so a beep is never cut down to a click. */
+    if ((int32_t)(now - s_beep_start_ms) < (int32_t)BUZZER_MIN_ON_MS) {
+        return;
+    }
+    drv_buzzer_off();
 }

@@ -69,21 +69,19 @@ static int32_t clamp(int32_t v, int32_t lo, int32_t hi)
     return v;
 }
 
-/* Beep feedback. A nav click scales with how many detents landed in one
- * UI tick (a fast spin), capped, so a burst still gets an audible beep
- * instead of one short blip. drv_buzzer_beep() itself only ever extends
- * an in-progress beep, never shortens it. */
-#define BEEP_NAV_MS      40U
-#define BEEP_NAV_MAX_MS  110U
-#define BEEP_CONFIRM_MS  70U
+/* Beep feedback — flat durations: a short blip for a nav step, a slightly
+ * longer one for a confirm/press. drv_buzzer_beep() only ever extends an
+ * in-progress beep (never shortens it) and drv_buzzer.c enforces a hard
+ * minimum on-time, so a fast encoder spin blends into one continuous click
+ * rather than a string of chopped-off blips. The steps argument is kept
+ * for call-site symmetry but no longer scales the duration. */
+#define BEEP_NAV_MS      20U
+#define BEEP_CONFIRM_MS  40U
 
 static void beep_nav(int16_t steps)
 {
-    uint32_t n  = (uint32_t)(steps < 0 ? -(int32_t)steps : (int32_t)steps);
-    if (n == 0U) n = 1U;
-    uint32_t ms = BEEP_NAV_MS * n;
-    if (ms > BEEP_NAV_MAX_MS) ms = BEEP_NAV_MAX_MS;
-    drv_buzzer_beep(BUZZER_TONE_CLICK, (uint16_t)ms);
+    (void)steps;
+    drv_buzzer_beep(BUZZER_TONE_CLICK, BEEP_NAV_MS);
 }
 
 static void beep_confirm(void)
