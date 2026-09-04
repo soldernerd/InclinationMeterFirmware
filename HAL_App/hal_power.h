@@ -38,10 +38,12 @@ void hal_power_enter_standby(void);
 /* Reboots into the STM32 ROM system bootloader (USB DFU / UART) instead
  * of this firmware — used by the SETTINGS screen's "Reboot to DFU" menu
  * action so the device can be field-updated over USB without an ST-LINK.
- * Stores a magic value in a TAMP backup register (survives a normal
- * software reset) and calls NVIC_SystemReset(); does not return.
- * hal_power_check_dfu_request_and_jump() is what actually acts on it,
- * very early on the next boot. */
+ * Stores a magic value in a TAMP backup register (expected to survive a
+ * normal software reset) and calls NVIC_SystemReset() — does not return
+ * in the normal case. hal_power_check_dfu_request_and_jump() is what
+ * actually acts on it, very early on the next boot.
+ * If the write can't even be read back immediately afterward, this
+ * returns instead of resetting — see hal_power_last_bkp0r(). */
 void hal_power_request_dfu_reboot(void);
 
 /* Call once, as the very first thing in main() — before any clock,

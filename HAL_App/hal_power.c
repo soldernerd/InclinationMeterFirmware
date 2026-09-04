@@ -91,6 +91,17 @@ void hal_power_request_dfu_reboot(void)
 {
     backup_domain_unlock();
     TAMP->BKP0R = DFU_REBOOT_MAGIC;
+    __DSB();   /* make sure the write has actually posted before reading it back */
+    s_last_bkp0r_seen = TAMP->BKP0R;
+    if (s_last_bkp0r_seen != DFU_REBOOT_MAGIC) {
+        /* The write itself didn't take — deliberately do NOT reset, so
+         * this readback stays visible on STATUS (hal_power_last_bkp0r())
+         * without a reboot overwriting it. Distinguishes "the write never
+         * landed" from "it landed but doesn't survive the reset", which
+         * hal_power_check_dfu_request_and_jump() would otherwise conflate
+         * into the same "read 0 at next boot" symptom. */
+        return;
+    }
     NVIC_SystemReset();
     for (;;) { }   /* NVIC_SystemReset() does not return */
 }
