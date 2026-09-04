@@ -181,9 +181,13 @@ void app_ui_update(void)
     bool    e2_press = g_system_state.encoder2_sw_press_event;
     g_system_state.encoder1_sw_press_event = false;
     g_system_state.encoder2_sw_press_event = false;
-    (void)e2_steps;     /* ENC2 rotate reserved for future scroll */
 
-    /* Encoder 2 push — universal "back / cancel" */
+    /* WP3: the LEFT encoder's rotation currently just mirrors the RIGHT
+     * one (was "reserved for future scroll") so both knobs can be
+     * exercised. All the rotation branches below act on e1_steps. */
+    e1_steps = (int16_t)(e1_steps + e2_steps);
+
+    /* LEFT encoder push — universal "back / cancel" */
     if (e2_press) {
         drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
         if (g_ui_state.settings_editing) {
@@ -193,7 +197,7 @@ void app_ui_update(void)
         }
     }
 
-    /* Encoder 1 — context-dependent */
+    /* RIGHT encoder rotate (or LEFT, mirrored above) — context-dependent */
     if (g_ui_state.current_screen == UI_SCREEN_SETTINGS && g_ui_state.settings_editing) {
         /* Editing a value */
         if (e1_steps != 0) {
@@ -208,7 +212,7 @@ void app_ui_update(void)
             drv_buzzer_beep(BUZZER_TONE_CLICK, 40);
         }
     } else if (g_ui_state.current_screen == UI_SCREEN_SETTINGS) {
-        /* Settings screen, not editing — encoder1 moves cursor */
+        /* Settings screen, not editing — rotate moves cursor */
         if (e1_steps > 0) {
             g_ui_state.settings_cursor = (uint8_t)((g_ui_state.settings_cursor + 1U)
                                                    % UI_SETTING_COUNT);
@@ -234,6 +238,6 @@ void app_ui_update(void)
             switch_screen(prev_screen(g_ui_state.current_screen));
             drv_buzzer_beep(BUZZER_TONE_CLICK, 20);
         }
-        /* Encoder 1 push on LIVE/STATUS does nothing in WP3 */
+        /* RIGHT encoder push on LIVE/STATUS does nothing in WP3 */
     }
 }
