@@ -103,7 +103,24 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
     HAL_NVIC_SetPriority(USB_UCPD1_2_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(USB_UCPD1_2_IRQn);
   /* USER CODE BEGIN USB_DRD_FS_MspInit 1 */
-
+    /* The USB clock is HSI48 (RCC_USBCLKSOURCE_HSI48 above). Free-running
+     * HSI48 is not within USB full-speed frequency tolerance, so enumeration
+     * fails: the device pulls D+ high (Windows Device Manager refreshes on
+     * plug/unplug) but no device node ever appears. Lock HSI48 to the host's
+     * start-of-frame with the Clock Recovery System. CubeMX did not emit
+     * this (the .ioc has no CRS section); done here in the USB clock's own
+     * MspInit so it survives a regen. */
+    __HAL_RCC_CRS_CLK_ENABLE();
+    {
+      RCC_CRSInitTypeDef crs_init = {0};
+      crs_init.Prescaler             = RCC_CRS_SYNC_DIV1;
+      crs_init.Source                = RCC_CRS_SYNC_SOURCE_USB;
+      crs_init.Polarity             = RCC_CRS_SYNC_POLARITY_RISING;
+      crs_init.ReloadValue           = __HAL_RCC_CRS_RELOADVALUE_CALCULATE(48000000U, 1000U);
+      crs_init.ErrorLimitValue       = RCC_CRS_ERRORLIMIT_DEFAULT;
+      crs_init.HSI48CalibrationValue = RCC_CRS_HSI48CALIBRATION_DEFAULT;
+      HAL_RCCEx_CRSConfig(&crs_init);
+    }
   /* USER CODE END USB_DRD_FS_MspInit 1 */
   }
 }
