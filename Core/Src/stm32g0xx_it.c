@@ -23,7 +23,6 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hal_tim.h"
-#include "hal_usb.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -207,7 +206,7 @@ void EXTI4_15_IRQHandler(void)
 void USB_UCPD1_2_IRQHandler(void)
 {
   /* USER CODE BEGIN USB_UCPD1_2_IRQn 0 */
-  hal_usb_isr_tick();   /* WP4 bring-up: count IRQ entries for the STATUS-screen diag */
+
   /* USER CODE END USB_UCPD1_2_IRQn 0 */
   HAL_PCD_IRQHandler(&hpcd_USB_DRD_FS);
   /* USER CODE BEGIN USB_UCPD1_2_IRQn 1 */

@@ -20,90 +20,9 @@
 
 extern USBD_HandleTypeDef hUsbDeviceFS;
 
-static HalUsbRxCallback   s_rx_cb        = 0;
+static HalUsbRxCallback   s_rx_cb    = 0;
 static uint8_t            s_tx_buf[USB_HID_REPORT_SIZE];
-static bool               s_attached     = false;
-static volatile uint32_t  s_usb_irq_count     = 0;
-static volatile uint32_t  s_usb_reset_count   = 0;
-static volatile uint32_t  s_usb_setup_count   = 0;
-static volatile uint32_t  s_usb_suspend_count = 0;
-static volatile uint32_t  s_usb_err_count     = 0;
-static volatile uint32_t  s_usb_pmaovr_count  = 0;
-static volatile uint32_t  s_usb_ctr_count     = 0;
-static volatile uint32_t  s_usb_wkup_count    = 0;
-static volatile uint32_t  s_usb_attach_toggles = 0;
-static volatile uint32_t  s_usb_reset_flag_seen = 0;
-static volatile uint32_t  s_usb_it_line_sr8      = 0;
-static volatile uint32_t  s_usb_it_line_gate_open_count    = 0;
-static volatile uint32_t  s_usb_it_line_gate_blocked_count = 0;
-static volatile uint32_t  s_crs_isr_ever = 0;
-
-void hal_usb_isr_tick(void)
-{
-    /* Sampled BEFORE HAL_PCD_IRQHandler processes/clears ISTR, so this
-     * sees every flag that was pending on entry — which event(s) are
-     * actually driving the interrupt storm.
-     *
-     * Also sampling raw ISTR.RESET and SYSCFG->IT_LINE_SR[8] here:
-     * HAL_PCD_IRQHandler's very first thing is
-     *   if ((SYSCFG->IT_LINE_SR[8] & (0x1UL << 2)) == 0U) { return; }
-     * i.e. it refuses to touch ISTR at all unless that status bit is set —
-     * not even ISTR.RESET gets cleared when it's blocked. it_line_sr8 alone
-     * is a last-value-wins snapshot: it can't distinguish "blocked on 95% of
-     * entries, this one happened to be open" from "reliably open". The two
-     * running totals below can — if gate_blocked dominates gate_open, this
-     * is exactly what eats every event before HAL_PCD_IRQHandler (and hence
-     * our PCD_*Callback hooks) ever sees it, explaining reset_flag_seen
-     * climbing while reset_count/setup_count never do. */
-    uint32_t istr = USB_DRD_FS->ISTR;
-    if (istr & USB_ISTR_ERR)    { s_usb_err_count++; }
-    if (istr & USB_ISTR_PMAOVR) { s_usb_pmaovr_count++; }
-    if (istr & USB_ISTR_CTR)    { s_usb_ctr_count++; }
-    if (istr & USB_ISTR_WKUP)   { s_usb_wkup_count++; }
-    if (istr & USB_ISTR_RESET)  { s_usb_reset_flag_seen++; }
-    s_usb_it_line_sr8 = SYSCFG->IT_LINE_SR[8];
-    if (s_usb_it_line_sr8 & (0x1UL << 2)) {
-        s_usb_it_line_gate_open_count++;
-    } else {
-        s_usb_it_line_gate_blocked_count++;
-    }
-    s_usb_irq_count++;
-}
-void hal_usb_note_reset(void)   { s_usb_reset_count++; }
-void hal_usb_note_setup(void)   { s_usb_setup_count++; }
-void hal_usb_note_suspend(void) { s_usb_suspend_count++; }
-
-void hal_usb_get_debug(HalUsbDebug *out)
-{
-    if (!out) {
-        return;
-    }
-    out->attached      = s_attached ? 1U : 0U;
-    out->vbus_pin       = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN) ? 1U : 0U;
-    out->dev_state      = (uint8_t)hUsbDeviceFS.dev_state;
-    out->dppu           = (USB_DRD_FS->BCDR & USB_BCDR_DPPU) ? 1U : 0U;
-    out->fnr            = (uint16_t)(USB_DRD_FS->FNR & USB_FNR_FN);
-    out->crs_isr        = CRS->ISR;
-    out->irq_count       = s_usb_irq_count;
-    out->reset_count     = s_usb_reset_count;
-    out->setup_count     = s_usb_setup_count;
-    out->suspend_count   = s_usb_suspend_count;
-    out->err_count       = s_usb_err_count;
-    out->pmaovr_count    = s_usb_pmaovr_count;
-    out->ctr_count       = s_usb_ctr_count;
-    out->wkup_count      = s_usb_wkup_count;
-    out->attach_toggles  = s_usb_attach_toggles;
-    out->reset_flag_seen = s_usb_reset_flag_seen;
-    out->it_line_sr8     = s_usb_it_line_sr8;
-    out->it_line_gate_open_count    = s_usb_it_line_gate_open_count;
-    out->it_line_gate_blocked_count = s_usb_it_line_gate_blocked_count;
-    out->hsi48_on        = (RCC->CR & RCC_CR_HSI48ON)  ? 1U : 0U;
-    out->hsi48_rdy       = (RCC->CR & RCC_CR_HSI48RDY) ? 1U : 0U;
-    out->usb_clk_sel     = (uint8_t)((RCC->CCIPR2 & RCC_CCIPR2_USBSEL) >> RCC_CCIPR2_USBSEL_Pos);
-    out->vddusb_valid    = (PWR->CR2 & PWR_CR2_USV) ? 1U : 0U;
-    s_crs_isr_ever |= CRS->ISR;
-    out->crs_isr_ever   = s_crs_isr_ever;
-}
+static bool               s_attached = false;
 
 void hal_usb_init(void)
 {
@@ -204,10 +123,8 @@ void hal_usb_update(void)
         if (USBD_Start(&hUsbDeviceFS) == USBD_OK) {
             s_attached = true;
         }
-        s_usb_attach_toggles++;
     } else if (!vbus && s_attached) {
         USBD_Stop(&hUsbDeviceFS);
         s_attached = false;
-        s_usb_attach_toggles++;
     }
 }

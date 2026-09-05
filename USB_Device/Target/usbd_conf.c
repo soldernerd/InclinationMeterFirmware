@@ -27,13 +27,7 @@
 #include "usbd_customhid.h"
 
 /* USER CODE BEGIN Includes */
-/* hal_usb_note_reset()/_setup()/_suspend() below are WP4 bring-up
- * diagnostics called from this file's own callbacks. This #include used to
- * sit unprotected, directly after usbd_customhid.h above — a CubeMX regen
- * silently dropped it (same class of regen-loss as the HID report
- * descriptor's own comment in usbd_custom_hid_if.c already documents).
- * Inside this USER CODE marker is the one place confirmed to survive. */
-#include "hal_usb.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -168,7 +162,7 @@ void HAL_PCD_SetupStageCallback(PCD_HandleTypeDef *hpcd)
   /* USER CODE END  HAL_PCD_SetupStageCallback_PreTreatment */
   USBD_LL_SetupStage((USBD_HandleTypeDef*)hpcd->pData, (uint8_t *)hpcd->Setup);
   /* USER CODE BEGIN HAL_PCD_SetupStageCallback_PostTreatment */
-  hal_usb_note_setup();   /* WP4 bring-up diag: host sent a SETUP packet */
+
   /* USER CODE END  HAL_PCD_SetupStageCallback_PostTreatment */
 }
 
@@ -259,7 +253,7 @@ void HAL_PCD_ResetCallback(PCD_HandleTypeDef *hpcd)
   /* Reset Device. */
   USBD_LL_Reset((USBD_HandleTypeDef*)hpcd->pData);
   /* USER CODE BEGIN HAL_PCD_ResetCallback_PostTreatment */
-  hal_usb_note_reset();   /* WP4 bring-up diag: host issued a bus reset */
+
   /* USER CODE END HAL_PCD_ResetCallback_PostTreatment */
 }
 
@@ -290,7 +284,7 @@ void HAL_PCD_SuspendCallback(PCD_HandleTypeDef *hpcd)
   }
   /* USER CODE END 2 */
   /* USER CODE BEGIN HAL_PCD_SuspendCallback_PostTreatment */
-  hal_usb_note_suspend();   /* WP4 bring-up diag */
+
   /* USER CODE END HAL_PCD_SuspendCallback_PostTreatment */
 }
 
