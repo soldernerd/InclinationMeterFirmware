@@ -276,7 +276,20 @@ void SystemClock_Config(void)
   /** Configure LSE Drive Capability
   */
   HAL_PWR_EnableBkUpAccess();
-  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+  /* HAND-EDIT (WP6, 2026-09-05): LSEDRV may only be written while the LSE
+   * is stopped (RM0444 "LSEDRV can be written only when LSEON = 0 and
+   * LSERDY = 0"). On a wake from Standby the backup domain kept the LSE
+   * crystal running, so this write glitches the oscillator; HAL_RCC_OscConfig()
+   * below then spins the full RCC_LSE_TIMEOUT_VALUE (5 s) waiting for LSERDY,
+   * times out, and main() drops into Error_Handler() — an infinite loop
+   * before the first LED. Only (re)configure the drive on a genuine cold
+   * start (LSE not yet running); on a warm wake OscConfig sees LSERDY
+   * already set and skips its wait. A CubeMX regen will drop this guard —
+   * see memory/cubemx-regen-hazards. */
+  if (__HAL_RCC_GET_FLAG(RCC_FLAG_LSERDY) == 0U)
+  {
+    __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+  }
 
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
