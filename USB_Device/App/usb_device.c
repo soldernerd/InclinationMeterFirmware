@@ -79,8 +79,23 @@ void MX_USB_Device_Init(void)
   if (USBD_CUSTOM_HID_RegisterInterface(&hUsbDeviceFS, &USBD_CustomHID_fops_FS) != USBD_OK) {
     Error_Handler();
   }
-  if (USBD_Start(&hUsbDeviceFS) != USBD_OK) {
-    Error_Handler();
+  /* HAND-EDIT (WP6, 2026-09-05): only USBD_Start() when VBUS is present.
+   * With no host, USBD_Start() connects D+/D- into an unpowered bus and the
+   * USB IP raises bus-reset/error interrupts at NVIC priority 0 forever,
+   * starving SysTick — so every HAL_Delay() further down main()'s boot
+   * sequence (rail settle, etc.) never returns and a battery-only power-up
+   * hangs before the display. hal_usb_update() (task_usb) starts/stops the
+   * stack on VBUS edges from here on, so a cable plugged in after boot
+   * still enumerates. PA2 = VBUS_SENSE is left in POR analog mode by
+   * MX_GPIO_Init (it doubles as SYS_WKUP4); flip it to a plain digital
+   * input just long enough to sample it. A CubeMX regen restores the
+   * unconditional USBD_Start() — see memory/cubemx-regen-hazards. */
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  MODIFY_REG(GPIOA->MODER, (3UL << (2UL * 2UL)), 0UL);   /* PA2 -> input */
+  if (READ_BIT(GPIOA->IDR, (1UL << 2UL)) != 0UL) {       /* VBUS present (active high) */
+    if (USBD_Start(&hUsbDeviceFS) != USBD_OK) {
+      Error_Handler();
+    }
   }
   /* USER CODE BEGIN USB_Device_Init_PostTreatment */
 

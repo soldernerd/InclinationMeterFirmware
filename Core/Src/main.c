@@ -93,32 +93,6 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* --- TEMP boot diagnostic (v0.6.4) — remove after locating the wake hang ---
- * SLOW blinks of LED_PWR (PB13, active high): n long blinks (~0.6 s on,
- * ~0.4 s off) then a ~2 s dark gap. Raw busy-wait, self-calibrated to the
- * live CPU clock via a one-shot HSI-vs-current estimate is overkill — the
- * loop counts below are sized for 64 MHz (post-SystemClock_Config, which
- * we already know is reached). Count the LAST full group before it freezes;
- * the init listed for count N+1 is the one that hung:
- *   1 after MX_GPIO_Init          5 after MX_USART6_UART_Init
- *   2 after MX_ADC1_Init          6 after MX_I2C3_Init
- *   3 after MX_I2C1_Init          7 after MX_USB_Device_Init
- *   4 after MX_USART3_UART_Init   (then normal boot: LED_PWR solid + LED_STS heartbeat)
- * The intervening inits (DMA/TIM3/SPI1/SPI2/SPI3/TIM6) are pure register
- * writes with no wait loop and cannot hang, so they are not checkpointed. */
-static void dbg_cp(int n)
-{
-    __HAL_RCC_GPIOB_CLK_ENABLE();
-    GPIOB->MODER = (GPIOB->MODER & ~(3UL << (13U * 2U))) | (1UL << (13U * 2U));
-    for (int k = 0; k < n; k++) {
-        GPIOB->BSRR = (1UL << 13U);
-        for (volatile uint32_t d = 0; d < 6000000UL; d++) { }   /* ~0.6 s on @64MHz */
-        GPIOB->BSRR = (1UL << (13U + 16U));
-        for (volatile uint32_t d = 0; d < 4000000UL; d++) { }   /* ~0.4 s off */
-    }
-    for (volatile uint32_t d = 0; d < 20000000UL; d++) { }      /* ~2 s dark gap */
-}
-
 /* USER CODE END 0 */
 
 /**
@@ -151,19 +125,19 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();          dbg_cp(1);   /* TEMP v0.6.4 */
+  MX_GPIO_Init();
   MX_DMA_Init();
   MX_TIM3_Init();
   MX_SPI1_Init();
   MX_SPI2_Init();
-  MX_ADC1_Init();          dbg_cp(2);
-  MX_I2C1_Init();          dbg_cp(3);
+  MX_ADC1_Init();
+  MX_I2C1_Init();
   MX_SPI3_Init();
   MX_TIM6_Init();
-  MX_USART3_UART_Init();   dbg_cp(4);
-  MX_USART6_UART_Init();   dbg_cp(5);
-  MX_I2C3_Init();          dbg_cp(6);
-  MX_USB_Device_Init();    dbg_cp(7);
+  MX_USART3_UART_Init();
+  MX_USART6_UART_Init();
+  MX_I2C3_Init();
+  MX_USB_Device_Init();
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
   /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
