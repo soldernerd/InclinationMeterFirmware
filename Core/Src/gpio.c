@@ -60,7 +60,10 @@ void MX_GPIO_Init(void)
    * voltage made no difference either): main.c turns the rail on exactly
    * once, explicitly, at a well-defined point (after GPIO/LEDs/clocks,
    * before anything that reads the battery-sense divider or talks to the
-   * EEPROM), not implicitly here as a side effect of GPIO init. */
+   * EEPROM), not implicitly here as a side effect of GPIO init.
+   * A 2026-09-05 CubeMX regen (RTC/USB clock changes) silently lumped this
+   * pin into the general GPIO_PIN_RESET group above instead — caught in
+   * review and restored; watch for this again on any future regen. */
   HAL_GPIO_WritePin(_3V3_ENABLE__GPIO_Port, _3V3_ENABLE__Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
@@ -71,12 +74,14 @@ void MX_GPIO_Init(void)
 
   /* PD6 = !CHARGE_EN! (confirmed active-LOW: low = charge, high = don't
    * charge). Default HIGH so charging doesn't start the instant USB is
-   * plugged in, before firmware has decided to allow it. */
+   * plugged in, before firmware has decided to allow it. Also silently
+   * reverted by the 2026-09-05 regen — see the 3V3_EN comment above. */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_6, GPIO_PIN_SET);
 
   /* BLE_RESET is active-LOW. Held LOW (in reset) by default: RN4871 support
    * isn't implemented yet (drv_rn4871.c is a stub), so don't let the module
-   * boot and run its radio unsupervised. */
+   * boot and run its radio unsupervised. Also silently flipped to SET (i.e.
+   * out of reset) by the 2026-09-05 regen — see the 3V3_EN comment above. */
   HAL_GPIO_WritePin(BLE_RESET_GPIO_Port, BLE_RESET_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : PC11 */

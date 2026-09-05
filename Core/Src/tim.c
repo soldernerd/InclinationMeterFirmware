@@ -134,6 +134,10 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
   /* USER CODE END TIM3_MspInit 0 */
     /* TIM3 clock enable */
     __HAL_RCC_TIM3_CLK_ENABLE();
+
+    /* TIM3 interrupt Init */
+    HAL_NVIC_SetPriority(TIM3_TIM4_IRQn, 2, 0);
+    HAL_NVIC_EnableIRQ(TIM3_TIM4_IRQn);
   /* USER CODE BEGIN TIM3_MspInit 1 */
 
   /* USER CODE END TIM3_MspInit 1 */
@@ -174,7 +178,10 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef* timHandle)
      * PWM, so this AF pin is otherwise undriven and was picking up coupled
      * noise from the adjacent SPI clock, spuriously triggering the buzzer.
      * TIM3_CH4 is OCPOLARITY_HIGH (idle-low), so pull-down matches its
-     * inactive level and is overridden harmlessly once PWM starts. */
+     * inactive level and is overridden harmlessly once PWM starts. Silently
+     * reverted to NOPULL by the 2026-09-05 CubeMX regen (RTC/USB clock
+     * changes) — caught in review and restored; watch for this again on
+     * any future regen. */
     GPIO_InitStruct.Pull = GPIO_PULLDOWN;
     GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
     GPIO_InitStruct.Alternate = GPIO_AF1_TIM3;
@@ -197,6 +204,9 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* tim_baseHandle)
   /* USER CODE END TIM3_MspDeInit 0 */
     /* Peripheral clock disable */
     __HAL_RCC_TIM3_CLK_DISABLE();
+
+    /* TIM3 interrupt Deinit */
+    HAL_NVIC_DisableIRQ(TIM3_TIM4_IRQn);
   /* USER CODE BEGIN TIM3_MspDeInit 1 */
 
   /* USER CODE END TIM3_MspDeInit 1 */

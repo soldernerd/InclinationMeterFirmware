@@ -37,6 +37,18 @@ add_executable(${CMAKE_PROJECT_NAME})
 # Add STM32CubeMX generated sources
 add_subdirectory(cmake/stm32cubemx)
 
+# usbd_conf.h (hand-augmented, see its own USER CODE INCLUDE comment) pulls
+# in Config/config.h, and hal_usb.h — needed by USB_Device_Library's and
+# STM32_Drivers' own sources via that same header chain, not just this
+# project's own App-layer target below. A CubeMX regen of
+# cmake/stm32cubemx/CMakeLists.txt does not know about either directory and
+# will not re-add them to MX_Include_Dirs, so this needs to live here
+# instead, in the one CMakeLists.txt CubeMX never regenerates.
+target_include_directories(stm32cubemx INTERFACE
+    "${CMAKE_SOURCE_DIR}/Config"
+    "${CMAKE_SOURCE_DIR}/HAL_App"
+)
+
 # Link directories setup
 target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths

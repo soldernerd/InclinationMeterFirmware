@@ -21,6 +21,7 @@
 #include "adc.h"
 #include "dma.h"
 #include "i2c.h"
+#include "rtc.h"
 #include "spi.h"
 #include "tim.h"
 #include "usart.h"
@@ -104,70 +105,84 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  /* Deliberate boot order (agreed 2026-09-03): each step is a checkpoint
-   * you can observe on LED_STS without a debugger attached — if it stops
-   * toggling, that names the stretch that's hanging.
-   *   1. GPIO init                    5. 3V3 rail + settle
-   *   2. LED_PWR on                   6. 5V rail + settle
-   *   3. HSE/PLL + timers             7. internal ADC (no digital bus)
-   *   4. LED_STS starts as a heartbeat 8. digital-bus peripherals, gated
-   *      (checkpoint toggles here,       on their rail: I2C1/EEPROM (3V3),
-   *      real 2 Hz blink once the        SPI2/display (5V)
-   *      scheduler starts)
-   * !3V3_EN! is touched exactly once now (step 5) — no more pre-HAL_Init
-   * head-start spin: that existed only for the brown-out theory, which is
-   * ruled out (BOR is off in the option bytes; raising supply voltage to
-   * normal made no difference either). */
+  /* Deliberate boot order (agreed 2026-09-03; restructured 2026-09-05 —
+   * see the long comment in USER CODE 2 below for why and where the rest
+   * of this sequence now lives). Checked/cleared as early as possible,
+   * before anything else touches PWR. */
+  g_system_state.woke_from_standby = hal_power_woke_from_standby();
   /* USER CODE END Init */
 
-  /* 1. GPIO */
-  MX_GPIO_Init();
+  /* Configure the system clock */
+  SystemClock_Config();
 
-  /* 2. LED_PWR on — the only thing this depends on is PB13 being
-   * configured as an output, done by MX_GPIO_Init() just above. Proof of
-   * life before anything that could actually hang. */
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_TIM3_Init();
+  MX_SPI1_Init();
+  MX_SPI2_Init();
+  MX_ADC1_Init();
+  MX_I2C1_Init();
+  MX_SPI3_Init();
+  MX_TIM6_Init();
+  MX_USART3_UART_Init();
+  MX_USART6_UART_Init();
+  MX_I2C3_Init();
+  MX_USB_Device_Init();
+  MX_RTC_Init();
+  /* USER CODE BEGIN 2 */
+  /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
+   * directly between the individual MX_*_Init() calls above, each step a
+   * checkpoint observable on LED_STS without a debugger attached — but
+   * that section is CubeMX-owned and gets fully regenerated on every
+   * regen (lost whole, silently, on 2026-09-05's RTC/USB clock change —
+   * caught only by diffing before committing). Restructured to live
+   * entirely here instead, in the one block CubeMX has always left alone:
+   * every MX_*_Init() above only configures registers/pins, none of them
+   * touch a live bus or need a rail up yet, so it's safe to let CubeMX
+   * run them all first, in whatever order it wants, and do the actual
+   * rail sequencing and bus-touching init below, in the same relative
+   * order and with the same scoped delays as before.
+   *   1. LEDs/GPIO proof of life        4. internal ADC (no digital bus)
+   *   2. 3V3 rail + settle              5. digital-bus peripherals, gated
+   *   3. 5V rail + settle                  on their rail: I2C1/EEPROM
+   *                                         (3V3), SPI2/display (5V)
+   * !3V3_EN! is touched exactly once (step 2) — no pre-HAL_Init head-start
+   * spin: that existed only for the brown-out theory, which is ruled out
+   * (BOR is off in the option bytes; raising supply voltage to normal made
+   * no difference either). */
   app_leds_init();
   hal_gpio_init();              /* remaining pin defaults — no rails, no LEDs (see hal_gpio.c) */
   hal_systick_init();
-  g_system_state.woke_from_standby = hal_power_woke_from_standby();
+  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: GPIO/LEDs up */
 
-  /* 3. External crystal + PLL, then timers. HAL_RCC_ClockConfig() re-syncs
-   * SysTick to the new SystemCoreClock internally, so HAL_Delay() below
-   * (steps 5-6) is accurate regardless of running on HSI up to this point. */
-  SystemClock_Config();
-  HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: HSE/PLL locked */
-
-  MX_DMA_Init();                /* must precede any peripheral that DMAs (SPI2, I2C1 below) */
-  MX_TIM3_Init();                /* buzzer PWM base — not used until WP3, harmless to configure now */
-  MX_TIM6_Init();                /* VCOM base timer — drv_sharp_lcd_init() starts it later */
   hal_tim_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: timers configured */
 
-  /* 4. LED_STS heartbeat starts here (checkpoint toggles through the rest
-   * of this function); app_scheduler_run() hands it off to the real 2 Hz
-   * task_leds() once the scheduler is alive. */
-
-  /* 5. 3.3V rail. Needed in WP2 for the battery-sense divider (its
-   * low-side gate needs this rail live so the divider doesn't otherwise
-   * bleed the battery while "off") and the EEPROM. Scoped: the rail is
-   * fully up within a couple of ms of the enable; 5 ms is ample. */
+  /* 3.3V rail. Needed in WP2 for the battery-sense divider (its low-side
+   * gate needs this rail live so the divider doesn't otherwise bleed the
+   * battery while "off") and the EEPROM. Scoped: the rail is fully up
+   * within a couple of ms of the enable; 5 ms is ample. */
   hal_gpio_set(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, false);   /* !3V3_EN! active-LOW: LOW = rail ON */
   HAL_Delay(5);
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 3.3V rail settled */
 
-  /* 6. 5V rail. Needed for the display and both temp sensors. Bringing it
+  /* 5V rail. Needed for the display and both temp sensors. Bringing it
    * (and the -5V inverter off it) up transiently sags the shared battery
    * node, dipping 3.3V ~0.7 V for ~23 ms before it recovers (scoped).
    * 30 ms here so everything — including that 3.3V recovery — is fully
-   * settled before the ADC/VREF work in step 7. */
+   * settled before the ADC/VREF work below. */
   hal_gpio_set(PWR_5V_EN_PORT, PWR_5V_EN_PIN, true);
   HAL_Delay(40);   /* 30 ms was just enough on the scope; 40 for margin */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: 5V rail settled */
 
-  /* 7. Internal ADC — no digital bus, no external chip to wait on beyond
-   * VREF+/VDDA (always-on rail) already being stable. */
-  MX_ADC1_Init();
-  /* ADC calibration failure is NOT boot-halting (CLAUDE.md 7.6 escalation):
+  /* Internal ADC — no digital bus, no external chip to wait on beyond
+   * VREF+/VDDA (always-on rail) already being stable.
+   * ADC calibration failure is NOT boot-halting (CLAUDE.md 7.6 escalation):
    * a wake-from-Standby with the 3V3/VREF rail still settling used to brick
    * the device here in Error_Handler(). hal_adc_init() already retries; if
    * it still fails, flag it and carry on — svc_battery/drv_tmp236 gate on
@@ -176,8 +191,7 @@ int main(void)
   drv_tmp236_init();             /* no-op: reads via the same internal ADC, no bus of its own */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: ADC calibration done */
 
-  /* 8a. I2C1 / EEPROM — needs the 3.3V rail (step 5) up. */
-  MX_I2C1_Init();
+  /* I2C1 / EEPROM — needs the 3.3V rail above up. */
   hal_i2c_init(HAL_I2C_MAIN);
   /* Storage must come before scheduler init — it populates
    * g_device_settings (and g_calibration) which the scheduler reads
@@ -186,16 +200,14 @@ int main(void)
   drv_24lc256_init();            /* idempotent — svc_storage_init already calls this */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: EEPROM load/seed done */
 
-  /* 8b. SPI2 / display — needs the 5V rail (step 6) up. */
-  MX_SPI2_Init();
+  /* SPI2 / display — needs the 5V rail above up. */
   hal_spi_init(HAL_SPI_DISPLAY);
   app_display_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: display init kicked off */
 
-  /* 8c. Local UI layer (WP3): rotary encoders (EXTI on GPIO from step 1),
-   * push-switch polling, buzzer PWM (TIM3 from step 4 + 5V rail from
-   * step 6), and the UI state machine. All before the scheduler starts
-   * pumping task_input / task_buzzer / task_ui. */
+  /* Local UI layer (WP3): rotary encoders (EXTI on GPIO), push-switch
+   * polling, buzzer PWM (TIM3 + 5V rail above), and the UI state machine.
+   * All before the scheduler starts pumping task_input/task_buzzer/task_ui. */
   drv_encoder_init(ENCODER_1);
   drv_encoder_init(ENCODER_2);
   drv_buzzer_init();
@@ -203,18 +215,6 @@ int main(void)
   app_ui_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: UI layer up */
 
-  /* Remaining CubeMX peripherals: external ADC/DAC front end on SPI1/SPI3,
-   * RN4871 BLE UART, a third I2C bus — not yet used by any current WP.
-   * Deferred to last on purpose. USB (Custom HID) IS used by WP4: its
-   * device stack is brought up here by MX_USB_Device_Init(). */
-  MX_SPI1_Init();
-  MX_SPI3_Init();
-  MX_USART3_UART_Init();
-  MX_USART6_UART_Init();
-  MX_USB_Device_Init();
-  MX_I2C3_Init();
-
-  /* USER CODE BEGIN 2 */
   /* WP4 comms stack. svc_api_init() before svc_usb_init(): svc_usb
    * registers itself as API_TRANSPORT_USB via svc_api_register_transport(),
    * which needs the transport table already zeroed. */
@@ -251,19 +251,24 @@ void SystemClock_Config(void)
   */
   HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1);
 
+  /** Configure LSE Drive Capability
+  */
+  HAL_PWR_EnableBkUpAccess();
+  __HAL_RCC_LSEDRIVE_CONFIG(RCC_LSEDRIVE_LOW);
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
-  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_HSI48;
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE|RCC_OSCILLATORTYPE_LSE;
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
-  RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
+  RCC_OscInitStruct.LSEState = RCC_LSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
   RCC_OscInitStruct.PLL.PLLM = RCC_PLLM_DIV1;
-  RCC_OscInitStruct.PLL.PLLN = 16;
+  RCC_OscInitStruct.PLL.PLLN = 24;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
-  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
-  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV4;
+  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV3;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();

@@ -25,10 +25,15 @@
 #include "usbd_core.h"
 
 #include "usbd_customhid.h"
-#include "hal_usb.h"
 
 /* USER CODE BEGIN Includes */
-
+/* hal_usb_note_reset()/_setup()/_suspend() below are WP4 bring-up
+ * diagnostics called from this file's own callbacks. This #include used to
+ * sit unprotected, directly after usbd_customhid.h above — a CubeMX regen
+ * silently dropped it (same class of regen-loss as the HID report
+ * descriptor's own comment in usbd_custom_hid_if.c already documents).
+ * Inside this USER CODE marker is the one place confirmed to survive. */
+#include "hal_usb.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -79,7 +84,7 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
   /** Initializes the peripherals clocks
   */
     PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USB;
-    PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_HSI48;
+    PeriphClkInit.UsbClockSelection = RCC_USBCLKSOURCE_PLL;
     if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
     {
       Error_Handler();
@@ -111,24 +116,19 @@ void HAL_PCD_MspInit(PCD_HandleTypeDef* pcdHandle)
      * moved the data lines off the connector — reverted. Do NOT re-add the
      * remap unless the schematic actually puts USB on the PA9/PA10 pads. */
 
-    /* The USB clock is HSI48 (RCC_USBCLKSOURCE_HSI48 above). Free-running
-     * HSI48 is not within USB full-speed frequency tolerance, so enumeration
-     * fails: the device pulls D+ high (Windows Device Manager refreshes on
-     * plug/unplug) but no device node ever appears. Lock HSI48 to the host's
-     * start-of-frame with the Clock Recovery System. CubeMX did not emit
-     * this (the .ioc has no CRS section); done here in the USB clock's own
-     * MspInit so it survives a regen. */
-    __HAL_RCC_CRS_CLK_ENABLE();
-    {
-      RCC_CRSInitTypeDef crs_init = {0};
-      crs_init.Prescaler             = RCC_CRS_SYNC_DIV1;
-      crs_init.Source                = RCC_CRS_SYNC_SOURCE_USB;
-      crs_init.Polarity             = RCC_CRS_SYNC_POLARITY_RISING;
-      crs_init.ReloadValue           = __HAL_RCC_CRS_RELOADVALUE_CALCULATE(48000000U, 1000U);
-      crs_init.ErrorLimitValue       = RCC_CRS_ERRORLIMIT_DEFAULT;
-      crs_init.HSI48CalibrationValue = RCC_CRS_HSI48CALIBRATION_DEFAULT;
-      HAL_RCCEx_CRSConfig(&crs_init);
-    }
+    /* USB clock is now PLLQ (RCC_USBCLKSOURCE_PLL above), derived from the
+     * 8 MHz HSE crystal (Y2) — PLLN=24/PLLQ=DIV4 gives an exact 48 MHz,
+     * PLLR=DIV3 off the same 192 MHz VCO keeps SYSCLK at the usual 64 MHz.
+     * This replaced HSI48 + the Clock Recovery System that used to live
+     * here: across many bring-up iterations HSI48+CRS never once decoded
+     * a single real USB packet on this exact board (bus resets — a coarse
+     * SE0 condition — worked fine; SOF/SETUP/anything needing accurate
+     * bit-level timing never did, and CRS's own SYNCOKF lock flag never
+     * set even once) despite the config matching ST's reference exactly.
+     * A real crystal-derived clock needs no runtime trimming at all, so
+     * this sidesteps that mystery rather than solving it. If USB
+     * enumeration is ever moved back to HSI48, CRS will need to come back
+     * too — see git history for the removed init block. */
   /* USER CODE END USB_DRD_FS_MspInit 1 */
   }
 }

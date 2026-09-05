@@ -1,60 +1,15 @@
 #include "hal_power.h"
 #include "stm32g0xx_hal.h"
+#include "rtc.h"
 
-/* RTC is used for exactly one narrow purpose: giving
- * hal_power_reboot_to_dfu() a self-triggered Standby wake-up (see that
- * function's comment for why). Never configured by CubeMX on this project
- * (no .ioc RTC section, no Core/Src/rtc.c) — HAL_RTC_MspInit below is the
- * one place enabling it, following the same pattern CubeMX itself would
- * generate into a dedicated rtc.c/MX_RTC_Init() if it had been ticked in
- * the .ioc. */
-static RTC_HandleTypeDef s_hrtc;
-
-void HAL_RTC_MspInit(RTC_HandleTypeDef *hrtc)
-{
-    if (hrtc->Instance != RTC) {
-        return;
-    }
-    __HAL_RCC_RTC_ENABLE();
-}
-
-static bool rtc_init_for_standby_wakeup(void)
-{
-    /* LSI, not LSE: Y1 (the 32.768 kHz RTC crystal on PC14/PC15) is
-     * unpopulated on this board — CLAUDE.md Open Item 2, already the
-     * project-wide resolution for anything RTC-related. Accuracy doesn't
-     * matter here; the wakeup timer below runs off raw RTCCLK, not the
-     * calendar prescalers, and we only need it to fire once, roughly a
-     * millisecond out. */
-    RCC_OscInitTypeDef losc = {0};
-    losc.OscillatorType = RCC_OSCILLATORTYPE_LSI;
-    losc.LSIState       = RCC_LSI_ON;
-    if (HAL_RCC_OscConfig(&losc) != HAL_OK) {
-        return false;
-    }
-
-    RCC_PeriphCLKInitTypeDef pclk = {0};
-    pclk.PeriphClockSelection = RCC_PERIPHCLK_RTC;
-    pclk.RTCClockSelection    = RCC_RTCCLKSOURCE_LSI;
-    if (HAL_RCCEx_PeriphCLKConfig(&pclk) != HAL_OK) {
-        return false;
-    }
-    __HAL_RCC_RTC_ENABLE();
-
-    /* Calendar (Hour/Async/SyncPrediv) is configured but never used — no
-     * SetTime/SetDate call, since nothing here reads back a date. Only the
-     * wakeup timer (armed separately, right before Standby entry) matters. */
-    s_hrtc.Instance            = RTC;
-    s_hrtc.Init.HourFormat     = RTC_HOURFORMAT_24;
-    s_hrtc.Init.AsynchPrediv   = 127;
-    s_hrtc.Init.SynchPrediv    = 255;
-    s_hrtc.Init.OutPut         = RTC_OUTPUT_DISABLE;
-    s_hrtc.Init.OutPutRemap    = RTC_OUTPUT_REMAP_NONE;
-    s_hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
-    s_hrtc.Init.OutPutType     = RTC_OUTPUT_TYPE_OPENDRAIN;
-    s_hrtc.Init.OutPutPullUp   = RTC_OUTPUT_PULLUP_NONE;
-    return HAL_RTC_Init(&s_hrtc) == HAL_OK;
-}
+/* RTC is a real CubeMX-managed peripheral now (Core/Src/rtc.c,
+ * MX_RTC_Init() called unconditionally at boot from main.c, clocked from
+ * LSE — Y1 is fitted on this board after all, CLAUDE.md's Open Item 2 was
+ * stale). hal_power_reboot_to_dfu() below is the only consumer: it arms
+ * the already-initialised hrtc's wakeup timer for exactly one purpose,
+ * giving itself a self-triggered Standby wake-up (see that function's
+ * comment for why). No separate init needed here — by the time any menu
+ * action can run, MX_RTC_Init() has already executed. */
 
 void hal_power_configure_wakeup_pins(void)
 {
@@ -162,7 +117,7 @@ void hal_power_reboot_to_dfu(void)
      * RTC wakeup timer instead: an internal source under firmware's own
      * control, immune to any pin already sitting at its wake level,
      * configured for the shortest possible period (raw RTCCLK/16, no
-     * counts — a fraction of a millisecond on LSI) so the bounce is
+     * counts — a fraction of a millisecond on LSE) so the bounce is
      * effectively instant and needs no calendar/timekeeping setup.
      *
      * The application itself is left completely intact in flash the whole
@@ -178,8 +133,7 @@ void hal_power_reboot_to_dfu(void)
     HAL_FLASHEx_ForceFlashEmpty(FLASH_PROG_EMPTY);
     HAL_FLASH_Lock();
 
-    if (rtc_init_for_standby_wakeup() &&
-        HAL_RTCEx_SetWakeUpTimer_IT(&s_hrtc, 0, RTC_WAKEUPCLOCK_RTCCLK_DIV16) == HAL_OK) {
+    if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, 0, RTC_WAKEUPCLOCK_RTCCLK_DIV16) == HAL_OK) {
         HAL_PWR_DisableWakeUpPin(PWR_WAKEUP_PIN1 | PWR_WAKEUP_PIN4 | PWR_WAKEUP_PIN5);
         __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF);
         HAL_PWR_EnterSTANDBYMode();

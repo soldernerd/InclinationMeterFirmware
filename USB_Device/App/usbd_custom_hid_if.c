@@ -94,9 +94,13 @@
  * ([CMD][LEN][PAYLOAD][CRC16]) inside that array, so no field-level HID
  * usages are declared here. Written directly in the array initializer
  * rather than inside the USER CODE BEGIN 0/END 0 markers below — those
- * markers do NOT survive a CubeMX regen for this array (confirmed on two
- * separate regens now, on two different machines). Re-verify this
- * content is still present after every future regen. */
+ * markers do NOT survive a CubeMX regen for this array (confirmed on
+ * THREE separate regens now, across two different machines: 2026-09-05's
+ * RTC/USB clock regen wiped it down to a bare `0xC0`, a malformed
+ * descriptor missing everything from USAGE_PAGE through OUTPUT). Placing
+ * it here instead of inside the markers is ALSO not a guarantee, just a
+ * mitigation — re-verify this content is still present after every
+ * future regen; do not assume "outside the markers" is safe forever. */
 __ALIGN_BEGIN static uint8_t CUSTOM_HID_ReportDesc_FS[USBD_CUSTOM_HID_REPORT_DESC_SIZE] __ALIGN_END =
 {
   0x06, 0x00, 0xFF,             /* USAGE_PAGE (Vendor Defined Page 1)  */
