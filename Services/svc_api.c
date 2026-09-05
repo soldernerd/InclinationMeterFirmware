@@ -2,6 +2,7 @@
 #include "svc_battery.h"
 #include "svc_storage.h"
 #include "svc_log.h"
+#include "hal_rtc.h"
 #include "app_scheduler.h"
 #include "drv_buzzer.h"
 #include "math_crc.h"
@@ -145,16 +146,71 @@ static bool check_crc(ApiTransport t, uint16_t opcode, const uint8_t *frame, uin
     return true;
 }
 
-/* ---------------- System status (0x0, GET only) ---------------- */
+/* ---------------- System status (0x0) ----------------
+ * 0x00 Identity / 0x01 Device state: GET only.
+ * 0x02 RTC datetime: GET and SET. */
+
+static void dispatch_rtc(ApiTransport t, uint16_t opcode, uint8_t verb,
+                         const uint8_t *frame, uint16_t paylen)
+{
+    if (verb == API2_VERB_GET) {
+        if (paylen != 0U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        rtc_datetime_t dt;
+        hal_rtc_get(&dt);
+        uint8_t p[9] = {
+            (uint8_t)(dt.year & 0xFFU), (uint8_t)(dt.year >> 8),
+            dt.month, dt.day, dt.weekday, dt.hour, dt.minute, dt.second,
+            (uint8_t)(hal_rtc_is_set() ? 1U : 0U),
+        };
+        send_response(t, opcode, API2_STATUS_OK, p, sizeof p);
+        return;
+    }
+
+    /* SET */
+    if (paylen != 7U) {
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+    const uint8_t *b = &frame[API2_PACKET_HDR_BYTES];
+    rtc_datetime_t dt = {
+        .year   = (uint16_t)(b[0] | ((uint16_t)b[1] << 8)),
+        .month  = b[2], .day = b[3], .weekday = 0,
+        .hour   = b[4], .minute = b[5], .second = b[6],
+    };
+    if (!hal_rtc_datetime_valid(&dt)) {
+        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+        return;
+    }
+    if (hal_rtc_set(&dt) != DRV_OK) {
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    svc_logf(API2_LOG_INFO, "rtc set %04u-%02u-%02u %02u:%02u:%02u",
+             dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
 
 static void dispatch_system_status(ApiTransport t, uint16_t opcode, uint8_t verb,
                                    uint8_t res, const uint8_t *frame, uint16_t paylen)
 {
+    if (res == API2_RES_SYS_RTC) {
+        if (verb != API2_VERB_GET && verb != API2_VERB_SET) {
+            send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+            return;
+        }
+        if (!check_crc(t, opcode, frame, paylen)) return;
+        dispatch_rtc(t, opcode, verb, frame, paylen);
+        return;
+    }
+
     if (verb != API2_VERB_GET) {
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
         return;
     }
-    if (res != 0x00U && res != 0x01U) {
+    if (res != API2_RES_SYS_IDENTITY && res != API2_RES_SYS_DEVICE_STATE) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
@@ -164,7 +220,7 @@ static void dispatch_system_status(ApiTransport t, uint16_t opcode, uint8_t verb
         return;
     }
 
-    if (res == 0x00U) {
+    if (res == API2_RES_SYS_IDENTITY) {
         Api2IdentityPayload p;
         memset(&p, 0, sizeof p);
         p.fw_major = (uint8_t)FW_VERSION_MAJOR;
@@ -337,7 +393,8 @@ typedef struct {
  * battery_*_mv 2500..4200 (single-cell Li-ion real range); tmp236 voffs /
  * boundary 0..3300 (ADC VDDA); num/den ratio pairs 1..10000 (nonzero
  * divisors); lm35_scale 1..1000; encoder_counts 1..100;
- * settling_threshold 1..100000; tmp236 tinfl 0..20000 (0..200.00 degC). */
+ * settling_threshold 1..100000; tmp236 tinfl 0..20000 (0..200.00 degC);
+ * auto_poweroff_s 0..65535 (0 = disabled). */
 static const SettingsFieldDesc s_settings_fields[] = {
     SF(API2_RES_SET_TASK_SENSORS_MS,         SF_U16, 2, task_sensors_ms,           1,    60000),
     SF(API2_RES_SET_TASK_PROCESSING_MS,      SF_U16, 2, task_processing_ms,        1,    60000),
@@ -366,6 +423,7 @@ static const SettingsFieldDesc s_settings_fields[] = {
     SF(API2_RES_SET_TMP236_SEG2_TINFL_CDEG,  SF_U16, 2, tmp236_seg2_tinfl_cdeg,    0,    20000),
     SF(API2_RES_SET_LM35_SCALE_MV_PER_C,     SF_U16, 2, lm35_scale_mv_per_c,       1,    1000),
     SF(API2_RES_SET_ENCODER_COUNTS_PER_DET,  SF_U16, 2, encoder_counts_per_detent, 1,    100),
+    SF(API2_RES_SET_AUTO_POWEROFF_S,         SF_U16, 2, auto_poweroff_s,           0,    65535),
 };
 #define SETTINGS_FIELD_COUNT (sizeof(s_settings_fields) / sizeof(s_settings_fields[0]))
 

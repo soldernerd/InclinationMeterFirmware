@@ -113,11 +113,25 @@ typedef enum {
     API2_STATUS_NOTHING_TO_CANCEL = 0x0AU,
 } Api2Status;
 
-/* ---------------- System status (0x0, GET only) ---------------- */
+/* ---------------- System status (0x0) ----------------
+ * 0x00 Identity, 0x01 Device state — GET only.
+ * 0x02 RTC datetime — GET and SET (the one writable system-status
+ *      resource). GET response payload (9 B): year u16 LE, month, day,
+ *      weekday (1=Mon..7=Sun), hour, minute, second, is_set (0/1).
+ *      SET request payload (7 B): year u16 LE, month, day, hour, minute,
+ *      second — weekday is recomputed. */
+#define API2_RES_SYS_IDENTITY      0x00U
+#define API2_RES_SYS_DEVICE_STATE  0x01U
+#define API2_RES_SYS_RTC           0x02U
+
 #define API2_OP_SYS_GET_IDENTITY \
-    API2_OPCODE(API2_VERB_GET, API2_CAT_SYSTEM_STATUS, 0x00U)
+    API2_OPCODE(API2_VERB_GET, API2_CAT_SYSTEM_STATUS, API2_RES_SYS_IDENTITY)
 #define API2_OP_SYS_GET_DEVICE_STATE \
-    API2_OPCODE(API2_VERB_GET, API2_CAT_SYSTEM_STATUS, 0x01U)
+    API2_OPCODE(API2_VERB_GET, API2_CAT_SYSTEM_STATUS, API2_RES_SYS_DEVICE_STATE)
+#define API2_OP_SYS_GET_RTC \
+    API2_OPCODE(API2_VERB_GET, API2_CAT_SYSTEM_STATUS, API2_RES_SYS_RTC)
+#define API2_OP_SYS_SET_RTC \
+    API2_OPCODE(API2_VERB_SET, API2_CAT_SYSTEM_STATUS, API2_RES_SYS_RTC)
 
 /* ---------------- Commands (0x1, EXECUTE only) ---------------- */
 #define API2_OP_CMD_TEST_BEEP \
@@ -163,6 +177,11 @@ typedef enum {
 #define API2_RES_SET_TMP236_SEG2_TINFL_CDEG  0x18U
 #define API2_RES_SET_LM35_SCALE_MV_PER_C     0x19U
 #define API2_RES_SET_ENCODER_COUNTS_PER_DET  0x1AU
+/* 0x1B (WP6): auto_poweroff_s — idle seconds before auto power-off, 0 =
+ * disabled. Appended, not slotted into struct order, so the indices above
+ * keep their wire values (its DeviceSettings field sits mid-struct, in
+ * the battery page). u16, range 0..65535. */
+#define API2_RES_SET_AUTO_POWEROFF_S         0x1BU
 
 /* ---------------- Debug messages (0x6: SUBSCRIBE, UNSUBSCRIBE only) ----------------
  * A live log stream. SUBSCRIBE payload is one byte: the minimum severity

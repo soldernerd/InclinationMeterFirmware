@@ -24,12 +24,14 @@ OP_SYS_IDENTITY     = opcode(GET, CAT_SYSTEM, 0x00)
 OP_SYS_DEVICE_STATE = opcode(GET, CAT_SYSTEM, 0x01)
 OP_CMD_TEST_BEEP    = opcode(EXECUTE, CAT_COMMANDS, 0x00)
 
+SYS_IDENTITY, SYS_DEVICE_STATE, SYS_RTC = 0x00, 0x01, 0x02
 MEAS_ONBOARD_TEMP, MEAS_BATTERY_MV, MEAS_BATTERY_SOC = 0x00, 0x01, 0x02
 DBG_LOG_STREAM = 0x00
 
 # Settings resource indices (DeviceSettings field order) — a few useful ones:
 SET_STREAM_INTERVAL_MS = 0x07
 SET_TASK_BLE_MS        = 0x03
+SET_AUTO_POWEROFF_S    = 0x1B
 
 # ---- status codes ----
 STATUS = {
@@ -114,3 +116,20 @@ def decode_device_state(data: bytes):
     names = {0: "NORMAL", 1: "LOW", 2: "CRITICAL", 3: "CHARGING", 4: "FULL"}
     return (f"battery={names.get(bst, bst)} {soc}% {mv}mV  "
             f"usb={usb} ble={ble}  cal_valid={cal}")
+
+
+_WD = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
+
+
+def decode_rtc(data: bytes):
+    """GET 0x0/0x02 response payload: year u16, month, day, weekday, hour, min, sec, is_set."""
+    if len(data) < 9:
+        return None
+    year, month, day, wd, hh, mm, ss, is_set = struct.unpack("<HBBBBBBB", data[:9])
+    tag = "" if is_set else "  (NOT SET)"
+    return f"{year:04d}-{month:02d}-{day:02d} {_WD.get(wd, wd)} {hh:02d}:{mm:02d}:{ss:02d}{tag}"
+
+
+def build_rtc_set(year, month, day, hour, minute, second) -> bytes:
+    """SET 0x1/0x02 payload (7 B): year u16 LE, month, day, hour, minute, second."""
+    return struct.pack("<HBBBBB", year, month, day, hour, minute, second)

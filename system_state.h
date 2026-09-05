@@ -35,11 +35,12 @@ typedef struct {
     uint16_t battery_charge_start_mv; /* below this, with USB present: enable charging */
     uint16_t vbat_scale_num;         /* ADC divider scale — part of the battery page */
     uint16_t vbat_scale_den;
-    uint16_t battery_page_reserved;  /* pad: keeps DeviceSettings a multiple of 4 bytes
-                                      * (the struct has int32/uint32 members, so it aligns
-                                      * to 4 — see svc_storage.c's "ends exactly at the
-                                      * struct's end" static assert). Reuse this slot for
-                                      * the next battery-page field. */
+    uint16_t auto_poweroff_s;        /* WP6: idle seconds before auto power-off into
+                                      * Standby; 0 = disabled. Was battery_page_reserved
+                                      * (a 4-byte-alignment pad); giving it a purpose
+                                      * keeps DeviceSettings the same size. Bumped
+                                      * EEPROM_BATTERY_SETTINGS_VERSION to 0x0003 so a
+                                      * stored v2 battery page reseeds from DEFAULT_*. */
 
     /* --- TMP236 (on-board temp sensor) page --- */
     uint16_t tmp236_seg1_voffs_mv;

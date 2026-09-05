@@ -5,6 +5,7 @@
 #include "app_scheduler.h"
 #include "system_state.h"
 #include "hal_power.h"
+#include "svc_power.h"
 
 UiState g_ui_state = {
     .current_screen   = UI_SCREEN_LIVE,
@@ -28,8 +29,10 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
     [UI_SETTING_STREAM_INTERVAL]  = { "Stream interval",  "ms",   50,   100,   2000 },
     [UI_SETTING_SETTLING_TIMEOUT] = { "Settling timeout", "ms", 1000,  5000,  60000 },
-    /* step 0 marks this an action row — see UiSettingMeta's comment. */
+    [UI_SETTING_AUTO_POWEROFF]    = { "Auto power-off",   "s",    30,     0,   3600 },
+    /* step 0 marks these action rows — see UiSettingMeta's comment. */
     [UI_SETTING_REBOOT_DFU]       = { "Reboot to DFU",    "",      0,     0,      0 },
+    [UI_SETTING_POWER_OFF]        = { "Power off",        "",      0,     0,      0 },
 };
 
 const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i)
@@ -47,6 +50,7 @@ int32_t app_ui_setting_read(UiSettingIndex i)
         case UI_SETTING_BATTERY_CRITICAL: return (int32_t)g_device_settings.battery_critical_mv;
         case UI_SETTING_STREAM_INTERVAL:  return (int32_t)g_device_settings.stream_interval_ms;
         case UI_SETTING_SETTLING_TIMEOUT: return (int32_t)g_device_settings.settling_timeout_ms;
+        case UI_SETTING_AUTO_POWEROFF:    return (int32_t)g_device_settings.auto_poweroff_s;
         default:                          return 0;
     }
 }
@@ -62,6 +66,8 @@ static void setting_write(UiSettingIndex i, int32_t v)
             g_device_settings.stream_interval_ms = (uint16_t)v;  break;
         case UI_SETTING_SETTLING_TIMEOUT:
             g_device_settings.settling_timeout_ms = (uint32_t)v; break;
+        case UI_SETTING_AUTO_POWEROFF:
+            g_device_settings.auto_poweroff_s = (uint16_t)v;     break;
         default:                                                 break;
     }
 }
@@ -265,17 +271,19 @@ void app_ui_update(void)
                 beep_confirm();
             }
         } else {
-            /* Action row (UI_SETTING_REBOOT_DFU): rotating does nothing;
-             * this second RIGHT press (the first got us into "editing" /
-             * confirm state below) performs the action immediately — see
-             * hal_power_reboot_to_dfu()'s comment for the mechanism
-             * (faking "blank flash" for the next reset, not a software
-             * jump — several rounds of the latter never stayed resident
-             * in the bootloader on this board). Never returns. */
+            /* Action row (step == 0): rotating does nothing; this second
+             * RIGHT press (the first got us into the "editing" / confirm
+             * state) performs the action immediately.
+             *   REBOOT_DFU — hal_power_reboot_to_dfu() (best-effort jump;
+             *     see its comment — self-resets on fall-through).
+             *   POWER_OFF  — svc_power_shutdown_now() -> Standby.
+             * Both never return. */
             if (e1_press) {
                 beep_confirm();
-                if ((UiSettingIndex)g_ui_state.settings_cursor == UI_SETTING_REBOOT_DFU) {
-                    hal_power_reboot_to_dfu();
+                switch ((UiSettingIndex)g_ui_state.settings_cursor) {
+                    case UI_SETTING_REBOOT_DFU: hal_power_reboot_to_dfu();  break;
+                    case UI_SETTING_POWER_OFF:  svc_power_shutdown_now();   break;
+                    default:                                               break;
                 }
             }
         }

@@ -39,6 +39,12 @@
 #define DEFAULT_BATTERY_LOW_MV          3600
 #define DEFAULT_BATTERY_CHARGE_START_MV 3700
 
+/* --- Auto power-off (WP6) ---
+ * Idle seconds (no encoder activity) before the instrument powers itself
+ * down into Standby. 0 disables it. EEPROM-backed (battery page), get/set
+ * over the API (Settings resource 0x1B) and on the SETTINGS screen. */
+#define DEFAULT_AUTO_POWEROFF_S        300     /* 5 minutes */
+
 /* --- ADC/sensor scaling calibration (2026-08-17) ---
  * General project rule: no numeric calibration constant lives only in
  * flash — everything here is a *default seed* for DeviceSettings, which
@@ -93,10 +99,13 @@
 #define EEPROM_SCHEDULER_SETTINGS_ADDR    0x0000  /* task periods, stream interval, settling, filter */
 #define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0001
 #define EEPROM_BATTERY_SETTINGS_ADDR      0x0100  /* thresholds + ADC divider scale */
-#define EEPROM_BATTERY_SETTINGS_VERSION   0x0002  /* 0x0002: added battery_charge_start_mv
-                                                     and retuned thresholds (WP2 debug) — a
-                                                     stored v1 battery page is discarded and
-                                                     reseeded from the new DEFAULT_* values. */
+#define EEPROM_BATTERY_SETTINGS_VERSION   0x0003  /* 0x0002: added battery_charge_start_mv
+                                                     and retuned thresholds (WP2 debug).
+                                                     0x0003 (WP6): the page's alignment pad
+                                                     became auto_poweroff_s — a stored v2
+                                                     page is discarded and reseeded from
+                                                     DEFAULT_* (which already hold the tuned
+                                                     threshold values). */
 #define EEPROM_TMP236_SETTINGS_ADDR       0x0200  /* on-board temp sensor piecewise-linear constants */
 #define EEPROM_TMP236_SETTINGS_VERSION    0x0001
 #define EEPROM_LM35_SETTINGS_ADDR         0x0300  /* external temp sensor scale */

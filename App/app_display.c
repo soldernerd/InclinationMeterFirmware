@@ -7,6 +7,7 @@
 #include "svc_battery.h"
 #include "svc_api.h"
 #include "svc_measurement.h"
+#include "hal_rtc.h"
 #include "hal_systick.h"
 #include "config.h"
 #include "u8g2.h"
@@ -229,6 +230,16 @@ static void draw_status_screen(void)
                   g_system_state.usb_connected ? "USB:       connected"
                                                : "USB:       offline");       y += 18;
     snprintf(line, sizeof line, "Uptime:    %s", up_str);
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);                          y += 18;
+
+    if (hal_rtc_is_set()) {
+        rtc_datetime_t dt;
+        hal_rtc_get(&dt);
+        snprintf(line, sizeof line, "Time:      %04u-%02u-%02u %02u:%02u:%02u",
+                 (unsigned)dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+    } else {
+        snprintf(line, sizeof line, "Time:      (not set)");
+    }
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
 }
 

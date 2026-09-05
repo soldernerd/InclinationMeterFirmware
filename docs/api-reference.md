@@ -74,7 +74,10 @@ promptly when subscribed.
 
 ---
 
-## System status (0x0) — GET only
+## System status (0x0)
+
+Identity and Device state are GET-only; **RTC (0x02) is GET and SET** — the
+one writable system-status resource.
 
 ### `GET 0x0/0x00` — Identity  → opcode `0x0000`
 Request payload: none. Response data (27 B):
@@ -101,6 +104,27 @@ Request payload: none. Response data (7 B):
 | 4 | u8 | usb_connected (0/1) |
 | 5 | u8 | ble_connected (0/1) |
 | 6 | u8 | calibration_valid (0/1) |
+
+### `GET 0x0/0x02` — RTC datetime  → opcode `0x0002`
+Request payload: none. Response data (9 B):
+
+| off | type | field |
+|---|---|---|
+| 0 | u16 | year (e.g. 2026) |
+| 2 | u8 | month (1–12) |
+| 3 | u8 | day (1–31) |
+| 4 | u8 | weekday (1 Mon … 7 Sun) |
+| 5 | u8 | hour (0–23) |
+| 6 | u8 | minute (0–59) |
+| 7 | u8 | second (0–59) |
+| 8 | u8 | is_set (0 = never set since power-up / 1 = set) |
+
+### `SET 0x0/0x02` — RTC datetime  → opcode `0x1002`
+Request payload (7 B): `year u16 LE, month, day, hour, minute, second`
+(weekday is recomputed from the date). `INVALID_PARAMETER` for an
+out-of-range field, `BUSY_RESOURCE` if the RTC write fails. The calendar
+keeps running through the auto power-off Standby; it is lost only on full
+power removal (no backup battery), after which `is_set` reads 0.
 
 ---
 
@@ -165,6 +189,11 @@ Payload is the raw little-endian field bytes.
 | 0x18 | tmp236_seg2_tinfl_cdeg | u16 | 0…20000 |
 | 0x19 | lm35_scale_mv_per_c | u16 | 1…1000 |
 | 0x1A | encoder_counts_per_detent | u16 | 1…100 |
+| 0x1B | auto_poweroff_s | u16 | 0…65535 (0 = disabled; idle seconds before Standby power-off) |
+
+> `0x1B` is appended out of struct order — its `DeviceSettings` field sits
+> mid-struct in the battery EEPROM page — so `0x00`–`0x1A` keep their wire
+> indices.
 
 - **GET** (`0x03xx`): payload none → `[OK][field bytes]`.
 - **SET** (`0x13xx`): payload = field bytes (`BAD_LENGTH` if wrong width).

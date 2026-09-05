@@ -15,6 +15,7 @@
 #include "svc_usb.h"
 #include "svc_ble.h"
 #include "svc_uart.h"
+#include "svc_power.h"
 #include "config.h"
 #include "system_state.h"
 #include <stddef.h>
@@ -107,6 +108,7 @@ static void task_api(void)
     svc_api_measurement_subscriptions_update();
 }
 static void task_measurement(void) { svc_measurement_update(); }
+static void task_power(void)        { svc_power_task();          }
 
 /* ---- task table ----
  * Order matters when multiple tasks share a tick: task_ui before
@@ -120,6 +122,7 @@ static SchedulerEntry s_tasks[] = {
     { task_battery,     0,                   0 },
     { task_storage,     0,                   0 },
     { task_input,       0,                   0 },
+    { task_power,       0,                   0 },
     { task_buzzer,      0,                   0 },
     { task_usb,         0,                   0 },
     { task_ble,         0,                   0 },
@@ -148,15 +151,16 @@ void app_scheduler_reload_periods(void)
     s_tasks[2].period_ms  = g_device_settings.task_battery_ms;
     s_tasks[3].period_ms  = SYSTICK_PERIOD_MS;     /* storage — every tick */
     s_tasks[4].period_ms  = SYSTICK_PERIOD_MS;     /* input — every tick */
-    s_tasks[5].period_ms  = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
-    s_tasks[6].period_ms  = g_device_settings.task_usb_ms;
-    s_tasks[7].period_ms  = g_device_settings.task_ble_ms;
-    s_tasks[8].period_ms  = SYSTICK_PERIOD_MS;   /* uart — every tick (no EEPROM setting; RX latency + TX drain) */
-    s_tasks[9].period_ms  = SYSTICK_PERIOD_MS;   /* api — every tick (subscription timing accuracy) */
-    s_tasks[10].period_ms = g_device_settings.task_sensors_ms;   /* measurement */
-    s_tasks[11].period_ms = g_device_settings.task_display_ms;   /* ui */
-    s_tasks[12].period_ms = g_device_settings.task_display_ms;   /* display */
-    /* s_tasks[13] (LEDs) period is the fixed literal set in the table above —
+    s_tasks[5].period_ms  = SYSTICK_PERIOD_MS;     /* power — every tick (idle-timer accuracy) */
+    s_tasks[6].period_ms  = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
+    s_tasks[7].period_ms  = g_device_settings.task_usb_ms;
+    s_tasks[8].period_ms  = g_device_settings.task_ble_ms;
+    s_tasks[9].period_ms  = SYSTICK_PERIOD_MS;   /* uart — every tick (no EEPROM setting; RX latency + TX drain) */
+    s_tasks[10].period_ms = SYSTICK_PERIOD_MS;   /* api — every tick (subscription timing accuracy) */
+    s_tasks[11].period_ms = g_device_settings.task_sensors_ms;   /* measurement */
+    s_tasks[12].period_ms = g_device_settings.task_display_ms;   /* ui */
+    s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* display */
+    /* s_tasks[14] (LEDs) period is the fixed literal set in the table above —
      * not user/BLE-configurable like the others. */
 }
 

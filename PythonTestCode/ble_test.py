@@ -11,6 +11,7 @@ If connect fails: remove the device from Windows Settings > Bluetooth first
 """
 
 import asyncio
+import datetime
 import struct
 import sys
 
@@ -82,6 +83,16 @@ async def run_basic(link):
               f"[{a.STATUS.get(st2, st2)}] -> read back {back}")
     else:
         print(f"  SETTINGS      GET stream_interval_ms [{a.STATUS.get(st, st)}]")
+
+    # RTC: read, set to this host's wall clock, read back.
+    st, data = await request(link, a.opcode(a.GET, a.CAT_SYSTEM, a.SYS_RTC))
+    before = a.decode_rtc(data) if st == 0 else (a.STATUS.get(st, st))
+    n = datetime.datetime.now()
+    st2, _ = await request(link, a.opcode(a.SET, a.CAT_SYSTEM, a.SYS_RTC),
+                           a.build_rtc_set(n.year, n.month, n.day, n.hour, n.minute, n.second))
+    st3, data3 = await request(link, a.opcode(a.GET, a.CAT_SYSTEM, a.SYS_RTC))
+    after = a.decode_rtc(data3) if st3 == 0 else (a.STATUS.get(st3, st3))
+    print(f"  RTC           [{before}] -> set [{a.STATUS.get(st2, st2)}] -> [{after}]")
 
 
 async def run_log(link, min_sev=0):

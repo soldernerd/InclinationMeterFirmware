@@ -38,6 +38,7 @@
 #include "hal_adc.h"
 #include "hal_uart.h"
 #include "hal_power.h"
+#include "hal_rtc.h"
 #include "system_state.h"
 #include "drv_tmp236.h"
 #include "drv_24lc256.h"
@@ -54,6 +55,7 @@
 #include "svc_usb.h"
 #include "svc_ble.h"
 #include "svc_uart.h"
+#include "svc_power.h"
 #include "svc_api.h"
 #include "svc_log.h"
 #include "svc_measurement.h"
@@ -234,6 +236,14 @@ int main(void)
   svc_uart_init();
   svc_battery_init();
   svc_log(API2_LOG_INFO, "boot: comms stack up");
+
+  /* WP6 power management: RTC (calendar keeps running through Standby) and
+   * the auto power-off idle timer. After svc_input_init()/svc_storage_init()
+   * so svc_power_init() sees valid encoder state and the loaded
+   * auto_poweroff_s. */
+  hal_rtc_init();
+  svc_power_init();
+
   app_scheduler_init();
   hal_adc_start();             /* kick off the first ADC scan */
   /* USER CODE END 2 */

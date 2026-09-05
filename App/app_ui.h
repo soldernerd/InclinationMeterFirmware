@@ -20,9 +20,11 @@ typedef enum {
                                      * "battery cutoff"; see config.h */
     UI_SETTING_STREAM_INTERVAL,
     UI_SETTING_SETTLING_TIMEOUT,
+    UI_SETTING_AUTO_POWEROFF,       /* auto_poweroff_s (WP6); 0 = disabled */
     UI_SETTING_REBOOT_DFU,          /* action, not a value — see its
                                      * UiSettingMeta.step == 0 and
                                      * app_ui.c's app_ui_update() */
+    UI_SETTING_POWER_OFF,           /* action — Standby power-off */
     UI_SETTING_COUNT,
 } UiSettingIndex;
 
