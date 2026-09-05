@@ -49,7 +49,11 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13|GPIO_PIN_3|GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_3|GPIO_PIN_7, GPIO_PIN_RESET);
+  /* PC13 = AD9833 FSYNC (WP7), active LOW — idle HIGH (deasserted). A
+   * CubeMX regen sets PC13.PinState=GPIO_PIN_SET (WylerLeveltronic.ioc),
+   * so it would emit this too; kept explicit in case that .ioc key is lost. */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13|GPIO_PIN_14, GPIO_PIN_RESET);

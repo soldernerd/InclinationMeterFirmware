@@ -3,15 +3,22 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "drv_common.h"
 
 typedef enum {
     HAL_SPI_DISPLAY  = 0,
-    HAL_SPI_SCL3300  = 1,
+    HAL_SPI_SCL3300  = 1,   /* stub — SCL3300 not on REV B hardware */
+    HAL_SPI_DAC      = 2,   /* AD9833 waveform generator (WP7), SPI3, write-only (no MISO) */
+    HAL_SPI_COUNT,
 } HalSpiInstance;
 
 typedef void (*HalSpiDmaCallback)(HalSpiInstance instance, bool success);
 
 void hal_spi_init(HalSpiInstance instance);
+
+/* Blocking write. DRV_OK on success, DRV_ERR_COMM on a HAL failure,
+ * DRV_ERR_INVALID for a bad instance/args. (The display path ignores the
+ * return; the AD9833 driver checks it — CLAUDE.md 7.6.) */
 
 /* Full hardware re-init (HAL_SPI_DeInit + MX_SPIx_Init) for recovery after
  * a wedged peripheral (e.g. SPI_SR_BSY stuck set past drv_sharp_lcd's
@@ -19,7 +26,7 @@ void hal_spi_init(HalSpiInstance instance);
  * actually cycling the peripheral (and its clock, via Msp Deinit/Init)
  * does. Safe to call any time the instance is idle. */
 void hal_spi_reinit(HalSpiInstance instance);
-void hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t len);
+DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t len);
 void hal_spi_write_dma(HalSpiInstance instance, const uint8_t *data, uint16_t len);
 void hal_spi_register_dma_callback(HalSpiInstance instance, HalSpiDmaCallback cb);
 void hal_spi_cs_assert(HalSpiInstance instance);

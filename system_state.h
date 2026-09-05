@@ -95,6 +95,12 @@ typedef struct {
                                   * battery/temperature readings are absent
                                   * (not a boot-halting condition) */
 
+    bool     dac_ok;             /* AD9833 DAC (WP7) init succeeded at boot
+                                  * — all 5 SPI3 setup writes returned OK.
+                                  * If false the waveform output is absent;
+                                  * not boot-halting (write-only device, no
+                                  * readback to confirm anyway). */
+
     bool     display_ok;         /* False if the Sharp LCD's SPI2 peripheral
                                   * wedged and a flush had to be abandoned —
                                   * see drv_sharp_lcd_update(). Self-clears

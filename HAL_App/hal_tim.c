@@ -2,6 +2,7 @@
 #include "stm32g0xx_hal.h"
 #include "pin_config.h"
 
+extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim3;
 extern TIM_HandleTypeDef htim6;
 
@@ -139,6 +140,14 @@ void hal_tim_buzzer_stop(void)
     __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
     s_buzzer_periods_left = 0U;
     HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_4);
+}
+
+void hal_tim_dac_clock_start(void)
+{
+    /* Prescaler / Period / Pulse are fixed by MX_TIM1_Init() (Core/Src/tim.c)
+     * at 1 / 5 / 3 — nothing to program per call, unlike the buzzer. Runs
+     * forever afterward; see hal_tim.h. */
+    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 }
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)

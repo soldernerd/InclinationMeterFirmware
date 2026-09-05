@@ -350,11 +350,32 @@
 /* SWD: PA13 SWDIO, PA14 SWCLK — configured by CubeMX. NRST is the dedicated
  * MCU reset pin, not a GPIO. */
 
+/* SPI3 — AD9833 waveform generator DAC (WP7). AD9833BRMZ-REEL7. Write-only:
+ * only MOSI is wired, no MISO — matches the chip's own 3-wire
+ * (SCLK / SDATA / FSYNC) serial interface, which has no return data path. */
+#define AD9833_SCK_PORT      GPIOC
+#define AD9833_SCK_PIN       GPIO_PIN_10     /* PC10, SPI3_SCK */
+#define AD9833_MOSI_PORT     GPIOC
+#define AD9833_MOSI_PIN      GPIO_PIN_12     /* PC12, SPI3_MOSI -> AD9833 SDATA */
+#define AD9833_FSYNC_PORT    GPIOC
+#define AD9833_FSYNC_PIN     GPIO_PIN_13     /* PC13, plain GPIO, active LOW — the
+                                               * AD9833's FSYNC (frame sync) is a
+                                               * level-triggered input, NOT SPI3_NSS.
+                                               * Same software-CS pattern as the
+                                               * display's DISP_CS; SPI3 is
+                                               * SPI_NSS_SOFT. Idles HIGH. */
+#define AD9833_CLOCK_PORT    GPIOC
+#define AD9833_CLOCK_PIN     GPIO_PIN_11     /* PC11, TIM1_CH4 PWM — the DAC's MCLK
+                                               * feed (5.333 MHz, see
+                                               * hal_tim_dac_clock_start()); a
+                                               * separate signal from SPI3_SCK
+                                               * above despite the name. */
+
 /* Reserved for later work packages:
  *   SCL3300 / PCAP04            — removed from REV B hardware, no longer applicable
  *   RN4871 UART                 — WP5 (USART6 now, was USART2)
  *   USB DP/DM                   — WP4 (PA11/PA12, unchanged, standard pins)
- *   External ADC/DAC front end (SPI1/SPI3) — unidentified, future WP
+ *   External ADC front end (SPI1) — unidentified, future WP (DAC above is WP7)
  *
  * Encoder A/B quadrature and buzzer TIM3_CH4 were WP3 scope — now
  * implemented, see their #defines above. */

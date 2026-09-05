@@ -152,4 +152,14 @@
  * out even when a stream has filled the rest. */
 #define API_TX_RING_SIZE               1024U
 
+/* --- AD9833 waveform generator DAC (WP7) ---
+ * MCLK is fed from TIM1_CH4 / PC11, CubeMX-configured (Core/Src/tim.c) for
+ * a fixed 64 MHz / (2 x 6) = 5.3333... MHz square wave — see
+ * hal_tim_dac_clock_start(). AD9833 output frequency is
+ * FREQREG x MCLK / 2^28 (datasheet "Frequency and Phase Registers"). To
+ * land exactly 2048 MCLK cycles per output wave (fOUT = MCLK/2048 ~=
+ * 2604.2 Hz), FREQREG = 2^28 / 2048 = 2^17 = 131072 exactly — no rounding
+ * error, which is why 2048 cycles/wave was the target. */
+#define AD9833_FREQREG                 131072UL   /* = 0x00020000, = 2^17 */
+
 #endif /* CONFIG_H */

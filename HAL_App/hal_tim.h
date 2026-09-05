@@ -23,4 +23,13 @@ void hal_tim_buzzer_beep(uint16_t freq_hz, uint16_t duration_ms);
 void hal_tim_buzzer_isr(void);
 void hal_tim_buzzer_stop(void);
 
+/* AD9833 DAC master clock (WP7) — TIM1 CH4 on PC11, fixed
+ * 64 MHz / (2 x 6) = 5.3333... MHz (Prescaler 1 / Period 5 / Pulse 3,
+ * CubeMX-configured in Core/Src/tim.c; see Config/config.h's
+ * AD9833_FREQREG comment for why this exact frequency). Started once at
+ * boot by drv_ad9833_init() and left running forever — the AD9833 needs
+ * a continuous MCLK to keep generating its waveform. No stop / no
+ * dynamic reconfig, unlike the buzzer. */
+void hal_tim_dac_clock_start(void);
+
 #endif /* HAL_TIM_H */

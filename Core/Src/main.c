@@ -44,6 +44,7 @@
 #include "drv_24lc256.h"
 #include "drv_encoder.h"
 #include "drv_buzzer.h"
+#include "drv_ad9833.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
@@ -139,6 +140,7 @@ int main(void)
   MX_I2C3_Init();
   MX_USB_Device_Init();
   MX_RTC_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
   /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
    * directly between the individual MX_*_Init() calls above, each step a
@@ -219,6 +221,18 @@ int main(void)
   svc_input_init();
   app_ui_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: UI layer up */
+
+  /* AD9833 waveform-generator DAC (WP7) — SPI3 + TIM1 MCLK, both
+   * CubeMX-generated above; needs the 3V3/5V rails already up. One-shot
+   * init: it programs the chip for a fixed sine output, starts its MCLK,
+   * and the DDS then free-runs on-chip with no scheduler task (see
+   * Drivers_App/drv_ad9833.h). Not boot-critical — a failure here is
+   * logged, not fatal, same as the ADC. */
+  if (drv_ad9833_init() != DRV_OK) {
+    g_system_state.dac_ok = false;
+  } else {
+    g_system_state.dac_ok = true;
+  }
 
   /* WP4 comms stack. svc_api_init() before the three transport inits:
    * each registers itself via svc_api_register_transport(), which needs
