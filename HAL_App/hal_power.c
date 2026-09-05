@@ -1,6 +1,7 @@
 #include "hal_power.h"
 #include "stm32g0xx_hal.h"
 #include "rtc.h"
+#include "pin_config.h"
 
 /* RTC is a real CubeMX-managed peripheral now (Core/Src/rtc.c,
  * MX_RTC_Init() called unconditionally at boot from main.c, clocked from
@@ -133,13 +134,30 @@ void hal_power_reboot_to_dfu(void)
     HAL_FLASHEx_ForceFlashEmpty(FLASH_PROG_EMPTY);
     HAL_FLASH_Lock();
 
+    /* Bench diagnostic (WP4): the two failure modes below — "never even
+     * tried Standby" vs. "genuinely entered/woke but boot config still
+     * wasn't re-sampled" — both look identical from the outside (device
+     * lands back on the live screen) unless something distinguishes them
+     * visually. A fast LED_STS flash means this code reached
+     * HAL_PWR_EnterSTANDBYMode(); a fast LED_PWR flash instead means
+     * HAL_RTCEx_SetWakeUpTimer_IT() itself failed and this fell straight
+     * through without ever attempting Standby. Remove once DFU-reboot is
+     * confirmed working. */
     if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, 0, RTC_WAKEUPCLOCK_RTCCLK_DIV16) == HAL_OK) {
         HAL_PWR_DisableWakeUpPin(PWR_WAKEUP_PIN1 | PWR_WAKEUP_PIN4 | PWR_WAKEUP_PIN5);
         __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF);
+        for (int i = 0; i < 10; i++) {
+            HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);
+            HAL_Delay(40);
+        }
         HAL_PWR_EnterSTANDBYMode();
         /* Unreachable if Standby actually engaged. Falls through below. */
     }
 
+    for (int i = 0; i < 10; i++) {
+        HAL_GPIO_TogglePin(LED_PWR_PORT, LED_PWR_PIN);
+        HAL_Delay(40);
+    }
     NVIC_SystemReset();
     for (;;) { }   /* NVIC_SystemReset() does not return */
 }
