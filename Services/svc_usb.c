@@ -1,5 +1,6 @@
 #include "svc_usb.h"
 #include "svc_api.h"
+#include "svc_log.h"
 #include "hal_usb.h"
 #include "config.h"
 #include "system_state.h"
@@ -63,8 +64,10 @@ void svc_usb_update(void)
     bool now_connected = hal_usb_is_connected();
     if (now_connected && !s_was_connected) {
         svc_api_connected(API_TRANSPORT_USB);
+        svc_log(API2_LOG_INFO, "usb: host connected");
     } else if (!now_connected && s_was_connected) {
         svc_api_disconnected(API_TRANSPORT_USB);
+        svc_log(API2_LOG_INFO, "usb: host disconnected");
     }
     s_was_connected = now_connected;
 

@@ -95,7 +95,15 @@ static void task_leds(void)
 
 static void task_usb(void)         { svc_usb_update();         }
 static void task_ble(void)         { svc_ble_task();           }
-static void task_api(void)         { svc_api_update();         }
+static void task_api(void)
+{
+    /* Both every tick: svc_api_update() drains the debug-log push queue
+     * (self-limited to a few lines per call); the subscriptions poll must
+     * be every tick so a 50 ms Measurements interval isn't coarsened to a
+     * slower cadence — see svc_api.c's comment on that function. */
+    svc_api_update();
+    svc_api_measurement_subscriptions_update();
+}
 static void task_measurement(void) { svc_measurement_update(); }
 
 /* ---- task table ----
@@ -140,7 +148,7 @@ void app_scheduler_reload_periods(void)
     s_tasks[5].period_ms  = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
     s_tasks[6].period_ms  = g_device_settings.task_usb_ms;
     s_tasks[7].period_ms  = g_device_settings.task_ble_ms;
-    s_tasks[8].period_ms  = g_device_settings.task_sensors_ms;   /* api — poll rate for stream/progress checks */
+    s_tasks[8].period_ms  = SYSTICK_PERIOD_MS;   /* api — every tick (subscription timing accuracy) */
     s_tasks[9].period_ms  = g_device_settings.task_sensors_ms;   /* measurement */
     s_tasks[10].period_ms = g_device_settings.task_display_ms;   /* ui */
     s_tasks[11].period_ms = g_device_settings.task_display_ms;   /* display */

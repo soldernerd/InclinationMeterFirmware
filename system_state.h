@@ -174,6 +174,13 @@ typedef struct {
      * write timed out). No retry queue — a dropped notification is gone.
      * Saturates rather than wraps. */
     uint16_t ble_tx_dropped_count;
+
+    /* API v2: incremented by svc_api.c whenever a received frame can't be
+     * dispatched or answered — too short to hold a header+CRC, a declared
+     * LEN that doesn't match what arrived, or an oversized response a
+     * resource handler tried to build. CLAUDE.md 7.6 escalation for the
+     * cases where echoing a status back isn't possible or safe. */
+    uint16_t api_rx_malformed_count;
 } SystemState;
 
 typedef struct {

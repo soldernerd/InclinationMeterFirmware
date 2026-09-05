@@ -1,18 +1,11 @@
 #!/usr/bin/env python3
 """
-Quick HID data-flow test for the InclinationMeter  (VID 0x04D8 / PID 0xF08F).
+USB HID data-flow test for the InclinationMeter, API v2.
 
-No dedicated host app exists yet; this drives the svc_api protocol directly
-over the vendor-defined HID interface, to prove reports flow both ways.
+  python hid_test.py           # identity / device-state / temp / settings round-trip
+  python hid_test.py --log     # subscribe to the device debug-log stream and print it live
 
-Install:   pip install hidapi        (the cython-hidapi package -> "import hid")
-           Windows: that's all. Linux: may need a udev rule or sudo.
-
-Protocol (Services/svc_api.c):
-  frame = [CMD][LEN][PAYLOAD ...][CRC16_LSB][CRC16_MSB], zero-padded to 64 bytes
-  LEN   = payload byte count only
-  CRC16 = CRC16-CCITT, poly 0x1021, init 0xFFFF, no reflection, no final XOR,
-          computed over [CMD][LEN][PAYLOAD], sent little-endian
+Install:   pip install hidapi        ("import hid")
 """
 
 import struct
@@ -22,115 +15,102 @@ import time
 try:
     import hid
 except ImportError:
-    sys.exit("Need the hidapi module:  pip install hidapi")
+    sys.exit("Need hidapi:  pip install hidapi")
 
-VID, PID   = 0x04D8, 0xF08F
+import apiv2 as a
+
+VID, PID = 0x04D8, 0xF08F
 REPORT_LEN = 64
 
-CMD_GET_STATUS     = 0x01
-CMD_START_STREAM   = 0x04
-CMD_STOP_STREAM    = 0x05
-CMD_GET_IDENTITY   = 0x0D
-RSP_GET_STATUS     = 0x81
-RSP_GET_IDENTITY   = 0x8D
-RSP_ACK            = 0xA0
-RSP_NACK           = 0xA1
-NOTIFY_STREAM_DATA = 0xF2
+
+class UsbLink:
+    def __init__(self):
+        self.dev = hid.device()
+        self.dev.open(VID, PID)
+        self.dev.set_nonblocking(False)
+
+    def send(self, pkt: bytes):
+        self.dev.write(b"\x00" + pkt)          # leading report-id byte (device uses none)
+
+    def recv(self, timeout_ms=1500):
+        data = self.dev.read(REPORT_LEN, timeout_ms=timeout_ms)
+        return a.parse(bytes(data)) if data else (None, None, None)
+
+    def close(self):
+        self.dev.close()
 
 
-def crc16_ccitt(data: bytes) -> int:
-    crc = 0xFFFF
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
-    return crc
+def request(link, op, payload=b"", timeout_ms=1500):
+    link.send(a.build(op, payload))
+    r_op, status, data = link.recv(timeout_ms)
+    return status, data
 
 
-def build_frame(cmd: int, payload: bytes = b"") -> bytes:
-    body  = bytes([cmd, len(payload)]) + payload
-    frame = body + struct.pack("<H", crc16_ccitt(body))
-    return frame + b"\x00" * (REPORT_LEN - len(frame))
+def run_basic(link):
+    print(f"  manufacturer: {link.dev.get_manufacturer_string()!r}   "
+          f"product: {link.dev.get_product_string()!r}")
+
+    st, data = request(link, a.OP_SYS_IDENTITY)
+    print(f"  IDENTITY      [{a.STATUS.get(st, st)}] {a.decode_identity(data) if st == 0 else data.hex()}")
+
+    st, data = request(link, a.OP_SYS_DEVICE_STATE)
+    print(f"  DEVICE_STATE  [{a.STATUS.get(st, st)}] {a.decode_device_state(data) if st == 0 else data.hex()}")
+
+    st, data = request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP))
+    if st == 0 and len(data) >= 2:
+        print(f"  TEMP          [OK] {struct.unpack('<h', data[:2])[0] / 100:+.2f} C")
+    else:
+        print(f"  TEMP          [{a.STATUS.get(st, st)}] {data.hex()}")
+
+    # Settings round-trip: read stream_interval_ms, bump it, read back.
+    getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)
+    setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)
+    st, data = request(link, getop)
+    if st == 0 and len(data) >= 2:
+        cur = struct.unpack("<H", data[:2])[0]
+        new = 250 if cur != 250 else 200
+        st2, _ = request(link, setop, struct.pack("<H", new))
+        st3, data3 = request(link, getop)
+        back = struct.unpack("<H", data3[:2])[0] if (st3 == 0 and len(data3) >= 2) else None
+        print(f"  SETTINGS      stream_interval_ms {cur} -> set {new} "
+              f"[{a.STATUS.get(st2, st2)}] -> read back {back}")
+    else:
+        print(f"  SETTINGS      GET stream_interval_ms [{a.STATUS.get(st, st)}]")
 
 
-def send(dev, cmd, payload=b""):
-    # hidapi wants a leading report-ID byte; this device uses no report IDs -> 0x00
-    dev.write(b"\x00" + build_frame(cmd, payload))
-
-
-def recv(dev, timeout_ms=1000):
-    data = dev.read(REPORT_LEN, timeout_ms=timeout_ms)
-    if not data:
-        return None, b""
-    frame = bytes(data)
-    cmd, ln = frame[0], frame[1]
-    return cmd, frame[2:2 + ln]
+def run_log(link, min_sev=0):
+    print(f"Subscribing to debug log (min severity {a.SEVERITY[min_sev]}). Ctrl+C to stop.\n")
+    link.send(a.build(a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM), bytes([min_sev])))
+    sub_op = a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)
+    try:
+        while True:
+            op, st, data = link.recv(timeout_ms=2000)
+            if op is None:
+                continue
+            if op != sub_op or st != 0 or len(data) < 3:
+                continue
+            issue, page, sev = data[0], data[1], data[2]
+            msg = data[3:].decode("ascii", "replace")
+            print(f"  [{a.SEVERITY.get(sev, sev):5}] #{issue:<3} {msg}")
+    except KeyboardInterrupt:
+        link.send(a.build(a.opcode(a.UNSUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)))
+        time.sleep(0.1)
+        print("\nunsubscribed.")
 
 
 def main():
     print(f"Opening {VID:#06x}:{PID:#06x} ...")
-    dev = hid.device()
     try:
-        dev.open(VID, PID)
+        link = UsbLink()
     except OSError as e:
-        sys.exit(f"open failed ({e}). Device unplugged, or another program has it open.")
-    dev.set_nonblocking(False)
-
+        sys.exit(f"open failed ({e}). Unplugged, or another program has it open.")
     try:
-        print(f"  manufacturer: {dev.get_manufacturer_string()!r}   "
-              f"product: {dev.get_product_string()!r}")
-
-        send(dev, CMD_GET_IDENTITY)
-        cmd, p = recv(dev)
-        if cmd == RSP_GET_IDENTITY and len(p) >= 27:
-            maj, minr, pat = p[0], p[1], p[2]
-            prod = p[3:19].split(b"\x00")[0].decode("ascii", "replace")
-            ser  = p[19:27].split(b"\x00")[0].decode("ascii", "replace")
-            print(f"  IDENTITY  fw v{maj}.{minr}.{pat}  product={prod!r}  serial={ser!r}")
+        if "--log" in sys.argv:
+            run_log(link)
         else:
-            print(f"  IDENTITY  unexpected reply cmd={cmd} payload={p.hex()}")
-
-        send(dev, CMD_GET_STATUS)
-        cmd, p = recv(dev)
-        if cmd == RSP_GET_STATUS and len(p) >= 13:
-            # ApiStatusPayload packs to 13 bytes: u8 u16 u8*10  (little-endian)
-            soc, mv, bst, ble, usb, scl, pc1, pc2, cal, fj, fn, fp = \
-                struct.unpack("<BHBBBBBBBBBB", p[:13])
-            print(f"  STATUS    soc={soc}%  vbat={mv}mV  batt_state={bst}  "
-                  f"usb={usb} ble={ble}  scl3300_ok={scl} pcap1_ok={pc1} pcap2_ok={pc2}  "
-                  f"cal_valid={cal}  fw v{fj}.{fn}.{fp}")
-        else:
-            print(f"  STATUS    unexpected reply cmd={cmd} payload={p.hex()}")
-
-        print("\nStarting stream (Ctrl+C to stop). Tilt the device — numbers should move.\n")
-        send(dev, CMD_START_STREAM)
-        cmd, _ = recv(dev)
-        print(f"  START_STREAM -> {'ACK' if cmd == RSP_ACK else ('NACK' if cmd == RSP_NACK else cmd)}")
-
-        n = 0
-        while True:
-            cmd, p = recv(dev, timeout_ms=2000)
-            if cmd is None:
-                print("  (no stream packet in 2 s)")
-                continue
-            if cmd != NOTIFY_STREAM_DATA or len(p) < 20:
-                print(f"  other packet cmd={cmd} {p.hex()}")
-                continue
-            # ApiStreamPayload: i32 i32 i32 i16 u8 u8 u32  (packed, little-endian)
-            tp, tx, ty, tc, soc, fl, ts = struct.unpack("<iiihBBI", p[:20])
-            n += 1
-            print(f"  #{n:<4} t={ts:>9}ms  pcap={tp:+9d}  scl_x={tx:+9d}  scl_y={ty:+9d} "
-                  f"(um/m)  temp={tc/100:+.2f}C  soc={soc}%  flags={fl:#04x}")
-
-    except KeyboardInterrupt:
-        print("\nStopping stream ...")
-        try:
-            send(dev, CMD_STOP_STREAM)
-            time.sleep(0.1)
-        except OSError:
-            pass
+            run_basic(link)
     finally:
-        dev.close()
+        link.close()
 
 
 if __name__ == "__main__":

@@ -25,7 +25,6 @@ typedef struct {
     bool     usb_connected;
     bool     battery_critical;
     MeasurementState meas_state;
-    ApiMode  api_mode_usb;
     UiScreen screen;
     uint8_t  settings_cursor;
     bool     settings_editing;
@@ -88,18 +87,9 @@ static void draw_top_bar(void)
         x = (u8g2_uint_t)(x - 2 - w);
         u8g2_DrawUTF8(&s_u8g2, x, 12, t);
     }
-    ApiMode m_usb = svc_api_get_mode(API_TRANSPORT_USB);
-    if (m_usb == API_MODE_RAW_STREAM) {
-        const char *t = "[RAW]";
-        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
-        x = (u8g2_uint_t)(x - 2 - w);
-        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
-    } else if (m_usb == API_MODE_STREAM) {
-        const char *t = "[STR]";
-        u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
-        x = (u8g2_uint_t)(x - 2 - w);
-        u8g2_DrawUTF8(&s_u8g2, x, 12, t);
-    }
+    /* v1's [STR]/[RAW] stream badges are gone — API v2 has no per-transport
+     * "mode", just per-resource subscriptions. Re-add a badge here off a
+     * svc_api "any subscription active" helper if it's wanted back. */
     if (g_system_state.battery_charging) {
         const char *t = "[CHG]";
         u8g2_uint_t w = u8g2_GetUTF8Width(&s_u8g2, t);
@@ -341,7 +331,6 @@ static bool snapshot_changed(void)
         || s_last.usb_connected    != g_system_state.usb_connected
         || s_last.battery_critical != g_system_state.battery_critical
         || s_last.meas_state       != svc_measurement_get_state()
-        || s_last.api_mode_usb     != svc_api_get_mode(API_TRANSPORT_USB)
         || s_last.screen           != g_ui_state.current_screen
         || s_last.settings_cursor  != g_ui_state.settings_cursor
         || s_last.settings_editing != g_ui_state.settings_editing
@@ -359,7 +348,6 @@ static void snapshot_capture(void)
     s_last.usb_connected    = g_system_state.usb_connected;
     s_last.battery_critical = g_system_state.battery_critical;
     s_last.meas_state       = svc_measurement_get_state();
-    s_last.api_mode_usb     = svc_api_get_mode(API_TRANSPORT_USB);
     s_last.screen           = g_ui_state.current_screen;
     s_last.settings_cursor  = g_ui_state.settings_cursor;
     s_last.settings_editing = g_ui_state.settings_editing;

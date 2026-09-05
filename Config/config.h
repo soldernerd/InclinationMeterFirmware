@@ -132,4 +132,8 @@
  * Keep <= 15 chars so the serialized form fits the BLE advertisement. */
 #define BLE_DEVICE_NAME                 "Leveltronic"
 
+/* API v2 (WP11). */
+#define API_RX_PACKET_TIMEOUT_MS        250U   /* abandon a stalled partial packet */
+#define SVC_LOG_MSG_MAX                 48U    /* longest debug-log line kept, bytes */
+
 #endif /* CONFIG_H */

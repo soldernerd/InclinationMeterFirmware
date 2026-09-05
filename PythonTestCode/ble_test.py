@@ -1,21 +1,13 @@
 #!/usr/bin/env python3
 """
-Quick BLE data-flow test for the InclinationMeter (RN4871 Transparent UART).
+BLE data-flow test for the InclinationMeter (RN4871 Transparent UART), API v2.
 
-The BLE sibling of hid_test.py: same svc_api protocol, same commands, over
-the RN4871's Transparent UART service instead of USB HID.
+  python ble_test.py           # identity / device-state / temp / settings round-trip
+  python ble_test.py --log     # subscribe to the device debug-log stream, print it live
 
-Install:   pip install bleak         (cross-platform BLE; Windows 10 1709+)
-
-If connect fails: remove the device from Windows Settings > Bluetooth
-first. GATT access to this (unencrypted) service does not need an OS-level
-pairing/bond, and an existing bond sometimes gets in bleak's way.
-
-Protocol (Services/svc_api.c):
-  frame = [CMD][LEN][PAYLOAD ...][CRC16_LSB][CRC16_MSB]   (no 64-byte pad on BLE)
-  LEN   = payload byte count only
-  CRC16 = CRC16-CCITT, poly 0x1021, init 0xFFFF, no reflection, no final XOR,
-          over [CMD][LEN][PAYLOAD], little-endian on the wire
+Install:   pip install bleak
+If connect fails: remove the device from Windows Settings > Bluetooth first
+(GATT access to this unencrypted service needs no OS bond).
 """
 
 import asyncio
@@ -27,138 +19,108 @@ try:
 except ImportError:
     sys.exit("Need bleak:  pip install bleak")
 
-NAME_PREFIX = sys.argv[1] if len(sys.argv) > 1 else "Leveltronic"
+import apiv2 as a
 
-# RN4871 / Microchip "ISSC Transparent UART" UUIDs
+NAME_PREFIX = "Leveltronic"
 SVC_UUID = "49535343-fe7d-4ae5-8fa9-9fafd205e455"
 TX_UUID  = "49535343-1e4d-4bd9-ba61-23c647249616"   # module -> host, Notify
 RX_UUID  = "49535343-8841-43f4-a8d4-ecbe34729bb3"   # host -> module, Write
 
-CMD_GET_STATUS     = 0x01
-CMD_START_STREAM   = 0x04
-CMD_STOP_STREAM    = 0x05
-CMD_GET_IDENTITY   = 0x0D
-RSP_GET_STATUS     = 0x81
-RSP_GET_IDENTITY   = 0x8D
-RSP_ACK            = 0xA0
-RSP_NACK           = 0xA1
-NOTIFY_STREAM_DATA = 0xF2
 
-MAX_PAYLOAD = 60
+class BleLink:
+    def __init__(self, client):
+        self.client = client
+        self.reasm = a.Reassembler()
+        self.q = asyncio.Queue()
 
+    def _on_notify(self, _sender, data: bytearray):
+        for pkt in self.reasm.feed(bytes(data)):
+            self.q.put_nowait(pkt)
 
-def crc16_ccitt(data: bytes) -> int:
-    crc = 0xFFFF
-    for b in data:
-        crc ^= b << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
-    return crc
+    async def start(self):
+        await self.client.start_notify(TX_UUID, self._on_notify)
 
+    async def send(self, pkt: bytes):
+        await self.client.write_gatt_char(RX_UUID, pkt, response=False)
 
-def build_frame(cmd: int, payload: bytes = b"") -> bytes:
-    body = bytes([cmd, len(payload)]) + payload
-    return body + struct.pack("<H", crc16_ccitt(body))
+    async def recv(self, timeout=3.0):
+        try:
+            return await asyncio.wait_for(self.q.get(), timeout)
+        except asyncio.TimeoutError:
+            return (None, None, None)
 
 
-class Reassembler:
-    """Notifications can split or coalesce frames; rebuild [CMD][LEN][..][CRC]."""
-    def __init__(self):
-        self.buf = bytearray()
-        self.frames = asyncio.Queue()
-
-    def feed(self, data: bytes):
-        self.buf += data
-        while len(self.buf) >= 2:
-            paylen = self.buf[1]
-            if paylen > MAX_PAYLOAD:
-                del self.buf[0]           # misaligned — resync
-                continue
-            need = 2 + paylen + 2
-            if len(self.buf) < need:
-                break
-            frame = bytes(self.buf[:need])
-            del self.buf[:need]
-            self.frames.put_nowait(frame)
+async def request(link, op, payload=b""):
+    await link.send(a.build(op, payload))
+    _op, status, data = await link.recv()
+    return status, data
 
 
-def parse(frame: bytes):
-    return frame[0], frame[2:2 + frame[1]]
+async def run_basic(link):
+    st, data = await request(link, a.OP_SYS_IDENTITY)
+    print(f"  IDENTITY      [{a.STATUS.get(st, st)}] {a.decode_identity(data) if st == 0 else (data or b'').hex()}")
+
+    st, data = await request(link, a.OP_SYS_DEVICE_STATE)
+    print(f"  DEVICE_STATE  [{a.STATUS.get(st, st)}] {a.decode_device_state(data) if st == 0 else (data or b'').hex()}")
+
+    st, data = await request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP))
+    if st == 0 and len(data) >= 2:
+        print(f"  TEMP          [OK] {struct.unpack('<h', data[:2])[0] / 100:+.2f} C")
+    else:
+        print(f"  TEMP          [{a.STATUS.get(st, st)}] {(data or b'').hex()}")
+
+    getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)
+    setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)
+    st, data = await request(link, getop)
+    if st == 0 and len(data) >= 2:
+        cur = struct.unpack("<H", data[:2])[0]
+        new = 250 if cur != 250 else 200
+        st2, _ = await request(link, setop, struct.pack("<H", new))
+        st3, data3 = await request(link, getop)
+        back = struct.unpack("<H", data3[:2])[0] if (st3 == 0 and len(data3) >= 2) else None
+        print(f"  SETTINGS      stream_interval_ms {cur} -> set {new} "
+              f"[{a.STATUS.get(st2, st2)}] -> read back {back}")
+    else:
+        print(f"  SETTINGS      GET stream_interval_ms [{a.STATUS.get(st, st)}]")
 
 
-async def get_reply(reasm, timeout=3.0):
+async def run_log(link, min_sev=0):
+    print(f"Subscribing to debug log (min severity {a.SEVERITY[min_sev]}). Ctrl+C to stop.\n")
+    await link.send(a.build(a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM), bytes([min_sev])))
+    sub_op = a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)
     try:
-        return parse(await asyncio.wait_for(reasm.frames.get(), timeout))
-    except asyncio.TimeoutError:
-        return None, b""
+        while True:
+            op, st, data = await link.recv(timeout=5.0)
+            if op != sub_op or st != 0 or data is None or len(data) < 3:
+                continue
+            issue, page, sev = data[0], data[1], data[2]
+            print(f"  [{a.SEVERITY.get(sev, sev):5}] #{issue:<3} {data[3:].decode('ascii', 'replace')}")
+    except KeyboardInterrupt:
+        await link.send(a.build(a.opcode(a.UNSUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)))
+        await asyncio.sleep(0.1)
+        print("\nunsubscribed.")
 
 
 async def main():
-    print(f"Scanning for a device named {NAME_PREFIX}* ...")
+    print(f"Scanning for {NAME_PREFIX}* ...")
     dev = None
     for d in await BleakScanner.discover(timeout=6.0):
         if d.name and d.name.startswith(NAME_PREFIX):
             dev = d
             break
     if not dev:
-        sys.exit(f"No {NAME_PREFIX}* device found. Is it advertising / already connected elsewhere?")
+        sys.exit(f"No {NAME_PREFIX}* device found.")
     print(f"  found {dev.name}  [{dev.address}]")
-
-    reasm = Reassembler()
 
     async with BleakClient(dev.address) as client:
         print(f"  connected: {client.is_connected}")
-        await client.start_notify(TX_UUID, lambda _s, data: reasm.feed(bytes(data)))
-
-        async def send(cmd, payload=b""):
-            await client.write_gatt_char(RX_UUID, build_frame(cmd, payload), response=False)
-
-        await send(CMD_GET_IDENTITY)
-        cmd, p = await get_reply(reasm)
-        if cmd == RSP_GET_IDENTITY and len(p) >= 27:
-            maj, minr, pat = p[0], p[1], p[2]
-            prod = p[3:19].split(b"\x00")[0].decode("ascii", "replace")
-            ser  = p[19:27].split(b"\x00")[0].decode("ascii", "replace")
-            print(f"  IDENTITY  fw v{maj}.{minr}.{pat}  product={prod!r}  serial={ser!r}")
+        link = BleLink(client)
+        await link.start()
+        if "--log" in sys.argv:
+            await run_log(link)
         else:
-            print(f"  IDENTITY  unexpected reply cmd={cmd} payload={p.hex()}")
-
-        await send(CMD_GET_STATUS)
-        cmd, p = await get_reply(reasm)
-        if cmd == RSP_GET_STATUS and len(p) >= 13:
-            soc, mv, bst, ble, usb, scl, pc1, pc2, cal, fj, fn, fp = \
-                struct.unpack("<BHBBBBBBBBBB", p[:13])
-            print(f"  STATUS    soc={soc}%  vbat={mv}mV  batt_state={bst}  "
-                  f"usb={usb} ble={ble}  scl3300_ok={scl} pcap1_ok={pc1} pcap2_ok={pc2}  "
-                  f"cal_valid={cal}  fw v{fj}.{fn}.{fp}")
-        else:
-            print(f"  STATUS    unexpected reply cmd={cmd} payload={p.hex()}")
-
-        print("\nStarting stream (Ctrl+C to stop). temp/soc/timestamp should move.\n")
-        await send(CMD_START_STREAM)
-        cmd, _ = await get_reply(reasm)
-        print(f"  START_STREAM -> {'ACK' if cmd == RSP_ACK else ('NACK' if cmd == RSP_NACK else cmd)}")
-
-        n = 0
-        try:
-            while True:
-                cmd, p = await get_reply(reasm, timeout=3.0)
-                if cmd is None:
-                    print("  (no stream packet in 3 s)")
-                    continue
-                if cmd != NOTIFY_STREAM_DATA or len(p) < 20:
-                    print(f"  other packet cmd={cmd} {p.hex()}")
-                    continue
-                tp, tx, ty, tc, soc, fl, ts = struct.unpack("<iiihBBI", p[:20])
-                n += 1
-                print(f"  #{n:<4} t={ts:>9}ms  pcap={tp:+9d}  scl_x={tx:+9d}  scl_y={ty:+9d} "
-                      f"(um/m)  temp={tc/100:+.2f}C  soc={soc}%  flags={fl:#04x}")
-        except KeyboardInterrupt:
-            print("\nStopping stream ...")
-            await send(CMD_STOP_STREAM)
-            await asyncio.sleep(0.2)
-        finally:
-            await client.stop_notify(TX_UUID)
+            await run_basic(link)
+        await client.stop_notify(TX_UUID)
 
 
 if __name__ == "__main__":
