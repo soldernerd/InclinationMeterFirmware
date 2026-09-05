@@ -93,29 +93,30 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-/* --- TEMP boot diagnostic (v0.6.3) — remove after locating the wake hang ---
- * Blinks LED_PWR (PB13, active high) n times, raw busy-wait, no dependency
- * on the HAL / SysTick / system clock. Count the LAST full group you see
- * before it freezes; the step listed for count N+1 is the one that hung:
- *   1  reached main()              9  after MX_I2C1_Init
- *   2  after SystemClock_Config    10 after MX_SPI3_Init
- *   3  after MX_GPIO_Init          11 after MX_TIM6_Init
- *   4  after MX_DMA_Init           12 after MX_USART3_UART_Init
- *   5  after MX_TIM3_Init          13 after MX_USART6_UART_Init
- *   6  after MX_SPI1_Init          14 after MX_I2C3_Init
- *   7  after MX_SPI2_Init          15 after MX_USB_Device_Init
- *   8  after MX_ADC1_Init          16 after MX_RTC_Init (normal boot follows) */
+/* --- TEMP boot diagnostic (v0.6.4) — remove after locating the wake hang ---
+ * SLOW blinks of LED_PWR (PB13, active high): n long blinks (~0.6 s on,
+ * ~0.4 s off) then a ~2 s dark gap. Raw busy-wait, self-calibrated to the
+ * live CPU clock via a one-shot HSI-vs-current estimate is overkill — the
+ * loop counts below are sized for 64 MHz (post-SystemClock_Config, which
+ * we already know is reached). Count the LAST full group before it freezes;
+ * the init listed for count N+1 is the one that hung:
+ *   1 after MX_GPIO_Init          5 after MX_USART6_UART_Init
+ *   2 after MX_ADC1_Init          6 after MX_I2C3_Init
+ *   3 after MX_I2C1_Init          7 after MX_USB_Device_Init
+ *   4 after MX_USART3_UART_Init   (then normal boot: LED_PWR solid + LED_STS heartbeat)
+ * The intervening inits (DMA/TIM3/SPI1/SPI2/SPI3/TIM6) are pure register
+ * writes with no wait loop and cannot hang, so they are not checkpointed. */
 static void dbg_cp(int n)
 {
     __HAL_RCC_GPIOB_CLK_ENABLE();
     GPIOB->MODER = (GPIOB->MODER & ~(3UL << (13U * 2U))) | (1UL << (13U * 2U));
     for (int k = 0; k < n; k++) {
         GPIOB->BSRR = (1UL << 13U);
-        for (volatile uint32_t d = 0; d < 350000UL; d++) { }
+        for (volatile uint32_t d = 0; d < 6000000UL; d++) { }   /* ~0.6 s on @64MHz */
         GPIOB->BSRR = (1UL << (13U + 16U));
-        for (volatile uint32_t d = 0; d < 350000UL; d++) { }
+        for (volatile uint32_t d = 0; d < 4000000UL; d++) { }   /* ~0.4 s off */
     }
-    for (volatile uint32_t d = 0; d < 3000000UL; d++) { }   /* long gap between groups */
+    for (volatile uint32_t d = 0; d < 20000000UL; d++) { }      /* ~2 s dark gap */
 }
 
 /* USER CODE END 0 */
@@ -136,7 +137,6 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  dbg_cp(1);   /* TEMP v0.6.2: reached main(), before SystemClock_Config() */
   /* Deliberate boot order (agreed 2026-09-03; restructured 2026-09-05 —
    * see the long comment in USER CODE 2 below for why and where the rest
    * of this sequence now lives). Checked/cleared as early as possible,
@@ -148,26 +148,24 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-  dbg_cp(2);   /* TEMP v0.6.2: SystemClock_Config() returned OK */
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();          dbg_cp(3);   /* TEMP v0.6.3 */
-  MX_DMA_Init();           dbg_cp(4);
-  MX_TIM3_Init();          dbg_cp(5);
-  MX_SPI1_Init();          dbg_cp(6);
-  MX_SPI2_Init();          dbg_cp(7);
-  MX_ADC1_Init();          dbg_cp(8);
-  MX_I2C1_Init();          dbg_cp(9);
-  MX_SPI3_Init();          dbg_cp(10);
-  MX_TIM6_Init();          dbg_cp(11);
-  MX_USART3_UART_Init();   dbg_cp(12);
-  MX_USART6_UART_Init();   dbg_cp(13);
-  MX_I2C3_Init();          dbg_cp(14);
-  MX_USB_Device_Init();    dbg_cp(15);
+  MX_GPIO_Init();          dbg_cp(1);   /* TEMP v0.6.4 */
+  MX_DMA_Init();
+  MX_TIM3_Init();
+  MX_SPI1_Init();
+  MX_SPI2_Init();
+  MX_ADC1_Init();          dbg_cp(2);
+  MX_I2C1_Init();          dbg_cp(3);
+  MX_SPI3_Init();
+  MX_TIM6_Init();
+  MX_USART3_UART_Init();   dbg_cp(4);
+  MX_USART6_UART_Init();   dbg_cp(5);
+  MX_I2C3_Init();          dbg_cp(6);
+  MX_USB_Device_Init();    dbg_cp(7);
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
-  dbg_cp(16);   /* TEMP v0.6.3: all MX_*_Init() done, entering USER CODE 2 */
   /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
    * directly between the individual MX_*_Init() calls above, each step a
    * checkpoint observable on LED_STS without a debugger attached — but
