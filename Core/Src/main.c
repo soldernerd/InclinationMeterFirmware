@@ -93,6 +93,28 @@ void SystemClock_Config(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+/* --- TEMP boot diagnostic (v0.6.2) — remove after locating the wake hang ---
+ * Blinks LED_PWR (PB13, active high) n times using a raw busy-wait, with no
+ * dependency on the HAL, SysTick or the system clock, so it works at every
+ * point in boot including before SystemClock_Config(). Watch the count on a
+ * warm (encoder) wake vs a cold power-on:
+ *   1 then frozen        -> hang in SystemClock_Config()
+ *   1,2 then frozen      -> hang in MX_GPIO_Init()..MX_I2C3_Init()
+ *   1,2,9 then frozen    -> hang in MX_RTC_Init()  (USB init survived)
+ *   1,2,9,3 then normal  -> all early init survived; hang is later          */
+static void dbg_cp(int n)
+{
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    GPIOB->MODER = (GPIOB->MODER & ~(3UL << (13U * 2U))) | (1UL << (13U * 2U));
+    for (int k = 0; k < n; k++) {
+        GPIOB->BSRR = (1UL << 13U);
+        for (volatile uint32_t d = 0; d < 500000UL; d++) { }
+        GPIOB->BSRR = (1UL << (13U + 16U));
+        for (volatile uint32_t d = 0; d < 500000UL; d++) { }
+    }
+    for (volatile uint32_t d = 0; d < 1500000UL; d++) { }   /* gap before next group */
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -111,6 +133,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
+  dbg_cp(1);   /* TEMP v0.6.2: reached main(), before SystemClock_Config() */
   /* Deliberate boot order (agreed 2026-09-03; restructured 2026-09-05 —
    * see the long comment in USER CODE 2 below for why and where the rest
    * of this sequence now lives). Checked/cleared as early as possible,
@@ -122,7 +145,7 @@ int main(void)
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
+  dbg_cp(2);   /* TEMP v0.6.2: SystemClock_Config() returned OK */
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
@@ -139,8 +162,10 @@ int main(void)
   MX_USART6_UART_Init();
   MX_I2C3_Init();
   MX_USB_Device_Init();
+  dbg_cp(9);   /* TEMP v0.6.2: MX_USB_Device_Init() returned OK */
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
+  dbg_cp(3);   /* TEMP v0.6.2: all MX_*_Init() done, entering USER CODE 2 */
   /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
    * directly between the individual MX_*_Init() calls above, each step a
    * checkpoint observable on LED_STS without a debugger attached — but
