@@ -46,12 +46,6 @@ void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len);
  * generic poll cadence -- see the .c comment. */
 void svc_api_measurement_subscriptions_update(void);
 
-/* v1 vestige: Services/svc_measurement.c's single-shot state machine used
- * to notify the host here. v2 has no single-shot-measurement push in the
- * ported subset; kept as a no-op so svc_measurement.c still links.
- * Redesign against a Measurements SUBSCRIBE when single-shot comes back. */
-void svc_api_notify_single_ready(void);
-
 /* ---------------- packet framing (docs/api-v2-spec.md §2) ----------------
  * [OPCODE 2B LE][LEN 2B LE][PAYLOAD 0..LEN][CRC16 2B LE], no padding.
  * Total on the wire is always 6 + LEN. */

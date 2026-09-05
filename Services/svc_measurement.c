@@ -1,5 +1,4 @@
 #include "svc_measurement.h"
-#include "svc_api.h"
 #include "math_settling.h"
 #include "hal_systick.h"
 #include "system_state.h"
@@ -129,7 +128,9 @@ void svc_measurement_update(void)
         if (s_buf_count >= SETTLING_BUFFER_SIZE) {
             finalise_packet(r.dc_umpm, r.sample_count);
             s_state = MEAS_STATE_COMPLETE;
-            svc_api_notify_single_ready();
+            /* Completion is picked up by whoever polls
+             * svc_measurement_get_state(); API v2 has no single-shot
+             * measurement push in the ported subset. */
             return;
         }
     }

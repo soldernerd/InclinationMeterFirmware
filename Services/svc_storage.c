@@ -573,9 +573,8 @@ void svc_storage_init(void)
                 /* Not silently discarded (CLAUDE.md 7.6) -- g_device_settings
                  * still holds the correct in-RAM default either way, so this
                  * boot runs correctly; only the reseed-to-EEPROM step failed,
-                 * meaning the same reseed will be retried next boot. No
-                 * DBG_PRINT infra exists yet (WP1.5 was never wired up), so
-                 * this reuses settings_save_failed as the escalation point --
+                 * meaning the same reseed will be retried next boot. This
+                 * reuses settings_save_failed as the escalation point --
                  * broader than just commit_edit()'s user-initiated saves, but
                  * the same underlying condition (a settings EEPROM write
                  * failed) and the same SETTINGS-screen indicator applies. */

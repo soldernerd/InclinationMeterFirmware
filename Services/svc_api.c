@@ -676,8 +676,3 @@ void svc_api_measurement_subscriptions_update(void)
         }
     }
 }
-
-void svc_api_notify_single_ready(void)
-{
-    /* v1 vestige — no-op (see svc_api.h). */
-}

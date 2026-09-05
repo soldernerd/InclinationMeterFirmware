@@ -43,8 +43,11 @@ void hal_power_enter_standby(void);
  * full history of why the other two (a jump missing a memory barrier,
  * then forcing FLASH_ACR.PROGEMPTY and reaching it via various kinds of
  * reset) didn't work. Does not erase or otherwise touch the application
- * in flash — if the jump doesn't stick, the application is exactly as it
- * was and a power cycle gets back to it immediately. Never returns. */
+ * in flash. The jump has not stuck on this hardware to date — the ROM
+ * bootloader bounces straight back to the app — so on fall-through this
+ * issues NVIC_SystemReset() to return the device to a working state
+ * rather than hang. Reach DFU for real by power-cycling with BOOT0
+ * asserted. Never returns. */
 void hal_power_reboot_to_dfu(void);
 
 #endif /* HAL_POWER_H */

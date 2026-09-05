@@ -158,5 +158,12 @@ void hal_power_reboot_to_dfu(void)
     __enable_irq();
     bootloader_jump();
 
-    for (;;) { }   /* never reached */
+    /* The jump has never actually stuck on this hardware (see the history
+     * above): the ROM bootloader hands control straight back to the app
+     * in main flash. If we reach here, fall back to a clean reset so the
+     * device returns to a working state instead of hanging with RCC
+     * de-init'd and interrupts re-enabled against a torn-down clock tree.
+     * To reach DFU for real, power-cycle with BOOT0 asserted. */
+    NVIC_SystemReset();
+    for (;;) { }
 }

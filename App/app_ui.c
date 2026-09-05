@@ -175,9 +175,10 @@ static void commit_edit(void)
     } else {
         /* Save failed — stay in edit mode rather than silently pretending
          * it saved, and escalate into system_state (CLAUDE.md 7.6: no
-         * silent failures — "must be logged via DBG_PRINT at minimum and
-         * escalated to system state"). No debug-UART logging exists in
-         * this codebase yet (WP1.5 was never wired up) to also log it. */
+         * silent failures). App/app_display.c's SETTINGS screen renders
+         * settings_save_failed; that is the escalation surface for a
+         * UI-initiated save (a host-initiated save also gets a
+         * BUSY_RESOURCE status and a svc_log WARN, in svc_api.c). */
         g_ui_state.settings_editing = true;
         g_system_state.settings_save_failed = true;
     }
