@@ -21,10 +21,15 @@
 typedef enum {
     API_TRANSPORT_USB  = 0,
     API_TRANSPORT_BLE  = 1,
+    API_TRANSPORT_UART = 2,   /* USART3 debug/VCP header — see Services/svc_uart.c */
     API_TRANSPORT_COUNT,
 } ApiTransport;
 
-typedef void (*ApiSendFn)(const uint8_t *data, uint16_t len);
+/* `urgent` distinguishes a direct response to a host request (true — may
+ * use a transport's reserved TX space) from a subscription/stream push
+ * (false — must leave the reserve free so a response can always get out).
+ * See Services/svc_txframe.h. */
+typedef void (*ApiSendFn)(const uint8_t *data, uint16_t len, bool urgent);
 
 void svc_api_init(void);
 void svc_api_update(void);   /* scheduler hook — currently only drains the debug-log push */

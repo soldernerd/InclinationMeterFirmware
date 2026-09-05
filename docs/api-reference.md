@@ -24,13 +24,31 @@ and the WP7–11 sensor resources are not present yet.
 - Every response **echoes the request's OPCODE**. The first payload byte of
   every response is a **status code** (below); resource data follows only
   when status == `OK`.
-- **USB**: one HID OUT report = one request packet (all current requests
-  fit in 64 bytes). Responses arrive as HID IN reports, zero-padded to 64;
-  read `LEN` to find the real end.
+The identical framing runs over three transports:
+
+- **USB**: Custom HID, VID `0x04D8` / PID `0xF08F`. One HID OUT report =
+  one request packet (all current requests fit in 64 bytes). Responses
+  arrive as HID IN reports, zero-padded to 64; read `LEN` to find the
+  real end. (`PythonTestCode/hid_test.py`)
 - **BLE**: RN4871 Transparent UART, a raw byte stream — the host must
   reassemble packets by `LEN`. Service `49535343-FE7D-4AE5-8FA9-9FAFD205E455`;
   write requests to `49535343-8841-43F4-A8D4-ECBE34729BB3`; enable
   notifications on `49535343-1E4D-4BD9-BA61-23C647249616` for responses.
+  Advertises as `Leveltronic_<MAC>`. (`PythonTestCode/ble_test.py`)
+- **Wired UART**: USART3 on the J4 / STDC14 debug header, 115200 8N1, a
+  raw byte stream reassembled by `LEN` exactly like BLE. No connect
+  handshake — it is "connected" whenever the cable is attached; if
+  nothing is listening, responses are just transmitted into the void.
+  (`PythonTestCode/uart_test.py`)
+
+**Backpressure.** Each transport has a bounded outbound queue. Direct
+responses to your requests are prioritised — they use a slice of the
+queue reserved for exactly that — so a response always gets out even
+when a stream has filled the rest. Subscription/stream frames are
+dropped newest-first if you stop draining the link; each drop bumps an
+internal `*_tx_dropped_count` and emits one `WARN` on the debug-log
+stream at the start of each overflow episode. Keep reading notifications
+promptly when subscribed.
 
 ## OPCODE
 

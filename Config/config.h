@@ -136,4 +136,11 @@
 #define API_RX_PACKET_TIMEOUT_MS        250U   /* abandon a stalled partial packet */
 #define SVC_LOG_MSG_MAX                 48U    /* longest debug-log line kept, bytes */
 
+/* Per-transport outbound TX frame ring (CLAUDE.md §8.3, Services/svc_txframe.c).
+ * One per transport (USB, BLE, UART). Power of two. 1 KiB holds ~8 full
+ * 128-byte frames or many small subscription pushes while the link
+ * drains, with 64 bytes reserved so a command response can always get
+ * out even when a stream has filled the rest. */
+#define API_TX_RING_SIZE               1024U
+
 #endif /* CONFIG_H */

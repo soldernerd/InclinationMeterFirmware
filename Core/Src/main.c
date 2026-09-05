@@ -53,6 +53,7 @@
 #include "pin_config.h"
 #include "svc_usb.h"
 #include "svc_ble.h"
+#include "svc_uart.h"
 #include "svc_api.h"
 #include "svc_log.h"
 #include "svc_measurement.h"
@@ -218,17 +219,19 @@ int main(void)
   app_ui_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: UI layer up */
 
-  /* WP4 comms stack. svc_api_init() before svc_usb_init()/svc_ble_init():
-   * each registers itself as a transport via svc_api_register_transport(),
-   * which needs the transport table already zeroed. svc_ble_init() also
-   * pulses the RN4871's ~RESET and kicks off its (non-blocking) config
-   * state machine, pumped thereafter from task_ble. */
+  /* WP4 comms stack. svc_api_init() before the three transport inits:
+   * each registers itself via svc_api_register_transport(), which needs
+   * the transport table already zeroed. svc_ble_init() also pulses the
+   * RN4871's ~RESET and kicks off its (non-blocking) config state
+   * machine, pumped thereafter from task_ble. */
   svc_log_init();             /* log ring up before anything logs into it */
   svc_api_init();
   svc_measurement_init();
   svc_usb_init();
-  hal_uart_init();            /* USART6 RX DMA up before the RN4871 talks */
+  hal_uart_init(HAL_UART_BLE);    /* USART6 RX DMA up before the RN4871 talks */
   svc_ble_init();
+  hal_uart_init(HAL_UART_DEBUG);  /* USART3 — the wired debug/VCP API transport */
+  svc_uart_init();
   svc_battery_init();
   svc_log(API2_LOG_INFO, "boot: comms stack up");
   app_scheduler_init();

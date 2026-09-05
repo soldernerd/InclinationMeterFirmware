@@ -62,7 +62,11 @@ static void reset_assert(bool held)
 
 static void send_cmd(const char *s)
 {
-    (void)hal_uart_write((const uint8_t *)s, (uint16_t)strlen(s));
+    /* hal_uart_write() is non-blocking (DMA). Config commands are short
+     * (<20 B), sent one per state and spaced by an RX round-trip plus a
+     * timeout, so the previous transfer is always long done; a command
+     * dropped by a busy TX would just fall into the existing retry path. */
+    (void)hal_uart_write(HAL_UART_BLE, (const uint8_t *)s, (uint16_t)strlen(s));
 }
 
 /* Sliding window for rx_contains(). File-scope so a fresh handshake
@@ -80,7 +84,7 @@ static bool rx_contains(const char *needle)
     uint16_t n;
     size_t nlen = strlen(needle);
 
-    while ((n = hal_uart_read(buf, sizeof buf)) > 0U) {
+    while ((n = hal_uart_read(HAL_UART_BLE, buf, sizeof buf)) > 0U) {
         for (uint16_t i = 0; i < n; i++) {
             if (s_win_len == sizeof s_win) {
                 memmove(s_win, s_win + 1, sizeof s_win - 1U);
@@ -175,7 +179,7 @@ static void pump_data_mode(void)
     uint8_t  out[2U * RX_CHUNK + TOKEN_MAX];   /* headroom for token bail-out */
     uint16_t n;
 
-    while ((n = hal_uart_read(in, sizeof in)) > 0U) {
+    while ((n = hal_uart_read(HAL_UART_BLE, in, sizeof in)) > 0U) {
         uint16_t out_len = 0;
         for (uint16_t i = 0; i < n; i++) {
             feed_payload_byte(in[i], out, &out_len);
@@ -211,7 +215,7 @@ DrvStatus drv_rn4871_send(const uint8_t *data, uint16_t len)
     if (s_state != ST_READY || !s_connected) {
         return DRV_ERR_NOT_READY;
     }
-    return hal_uart_write(data, len);
+    return hal_uart_write(HAL_UART_BLE, data, len);
 }
 
 void drv_rn4871_task(void)
@@ -224,7 +228,7 @@ void drv_rn4871_task(void)
         reset_assert(true);
         if (elapsed >= RESET_LOW_MS) {
             reset_assert(false);
-            hal_uart_rx_flush();
+            hal_uart_rx_flush(HAL_UART_BLE);
             rx_scan_reset();
             enter(ST_RESET_HIGH);
         }
@@ -232,7 +236,7 @@ void drv_rn4871_task(void)
 
     case ST_RESET_HIGH:
         if (elapsed >= BOOT_MS) {
-            hal_uart_rx_flush();     /* drop the power-on banner */
+            hal_uart_rx_flush(HAL_UART_BLE);     /* drop the power-on banner */
             send_cmd("$$$");          /* no CR — command-mode escape */
             enter(ST_ENTER_CMD);
         }
@@ -267,7 +271,7 @@ void drv_rn4871_task(void)
 
     case ST_REBOOT:
         if (rx_contains("%REBOOT%") || elapsed >= REBOOT_TIMEOUT_MS) {
-            hal_uart_rx_flush();
+            hal_uart_rx_flush(HAL_UART_BLE);
             s_attempts  = 0;
             s_connected = false;
             enter(ST_READY);         /* module now auto-advertises */

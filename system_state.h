@@ -157,23 +157,27 @@ typedef struct {
      * SETTINGS screen renders it. */
     bool     settings_save_failed;
 
-    /* Counts USB HID IN reports svc_usb.c's send_via_usb() asked
-     * hal_usb_send() to transmit but that hal_usb_send() reported
-     * as failed (not connected, or USBD_CUSTOM_HID_SendReport returned
-     * USBD_BUSY — a previous IN report still in flight). There's no
-     * retry queue: a dropped notification is just gone. No DBG_PRINT
-     * infra exists yet, so this counter is the CLAUDE.md 7.6 escalation
-     * for that failure — makes it observable (e.g. via a future debug
-     * command or GET_STATUS extension) instead of silent. Saturates
-     * rather than wraps; never cleared once the count is nonzero. */
+    /* Counts API frames svc_usb.c's send_via_usb() could not enqueue in
+     * the per-transport TX ring (Services/svc_txframe.c) because it was
+     * full past the point its admission rule allows for that frame.
+     * hal_usb_send() returning USBD_BUSY is NOT counted here — that frame
+     * stays queued and is retried on the next pump. There's no retry
+     * queue for a ring-full drop: the frame is gone. This counter is the
+     * CLAUDE.md 7.6 escalation for that — observable via a GET on the API
+     * or the debug-log WARN emitted on the first drop of each full
+     * episode. Saturates rather than wraps; never cleared once nonzero. */
     uint16_t usb_tx_dropped_count;
 
     /* Same as usb_tx_dropped_count, for the BLE transport: svc_ble.c's
-     * send_via_ble() asked drv_rn4871_send() to transmit but it reported
-     * failure (module not ready, or no central connected, or the USART6
-     * write timed out). No retry queue — a dropped notification is gone.
-     * Saturates rather than wraps. */
+     * send_via_ble() could not enqueue a frame in the per-transport TX
+     * ring (Services/svc_txframe.c) — the ring was full past the point
+     * its admission rule allows for this frame. No retry queue — the
+     * dropped frame is gone. Saturates rather than wraps. */
     uint16_t ble_tx_dropped_count;
+
+    /* Same as ble_tx_dropped_count, for the wired UART transport
+     * (Services/svc_uart.c, USART3 debug header). Saturates. */
+    uint16_t uart_tx_dropped_count;
 
     /* API v2: incremented by svc_api.c whenever a received frame can't be
      * dispatched or answered — too short to hold a header+CRC, a declared

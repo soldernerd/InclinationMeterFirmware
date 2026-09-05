@@ -22,6 +22,10 @@ compile_commands.json
 *.list
 *.lst
 
+# Python (test scripts under PythonTestCode/)
+__pycache__/
+*.pyc
+
 # IDE / editor
 .vscode/ipch/
 .vscode/.cortex-debug.*.json

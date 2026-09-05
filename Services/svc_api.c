@@ -89,8 +89,12 @@ static void note_malformed(void)
     }
 }
 
-static void send_response(ApiTransport t, uint16_t opcode, Api2Status status,
-                          const uint8_t *data, uint16_t data_len)
+/* Build a framed packet and hand it to the transport. `urgent` is passed
+ * straight through to the transport's send_fn: true for a direct reply to
+ * a request (may use the transport's reserved TX space), false for a
+ * subscription/stream push (must not). */
+static void send_framed(ApiTransport t, uint16_t opcode, Api2Status status,
+                        const uint8_t *data, uint16_t data_len, bool urgent)
 {
     if (t >= API_TRANSPORT_COUNT)             return;
     if (!s_t[t].connected || !s_t[t].send_fn) return;
@@ -116,7 +120,14 @@ static void send_response(ApiTransport t, uint16_t opcode, Api2Status status,
     buf[before_crc + 0U] = (uint8_t)(crc & 0xFFU);
     buf[before_crc + 1U] = (uint8_t)((crc >> 8) & 0xFFU);
 
-    s_t[t].send_fn(buf, (uint16_t)(before_crc + API2_PACKET_CRC_BYTES));
+    s_t[t].send_fn(buf, (uint16_t)(before_crc + API2_PACKET_CRC_BYTES), urgent);
+}
+
+/* Direct reply to a received request — always urgent. */
+static void send_response(ApiTransport t, uint16_t opcode, Api2Status status,
+                          const uint8_t *data, uint16_t data_len)
+{
+    send_framed(t, opcode, status, data, data_len, true);
 }
 
 /* CRC over the full received frame. Called after category/verb/resource
@@ -631,7 +642,8 @@ void svc_api_update(void)
             push[1] = 0U;                 /* page */
             push[2] = (uint8_t)sev;
             memcpy(&push[3], msg, mlen);
-            send_response(t, opcode, API2_STATUS_OK, push, (uint16_t)(3U + mlen));
+            /* stream push — not urgent, must leave the TX reserve free */
+            send_framed(t, opcode, API2_STATUS_OK, push, (uint16_t)(3U + mlen), false);
         }
     }
 }
@@ -657,7 +669,8 @@ void svc_api_measurement_subscriptions_update(void)
             push[0] = slot->issue_seq++;
             push[1] = 0U;   /* page */
             memcpy(&push[2], val, vlen);
-            send_response(t, opcode, API2_STATUS_OK, push, (uint16_t)(2U + vlen));
+            /* stream push — not urgent, must leave the TX reserve free */
+            send_framed(t, opcode, API2_STATUS_OK, push, (uint16_t)(2U + vlen), false);
 
             slot->last_push_ms = now;
         }
