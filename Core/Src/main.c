@@ -36,6 +36,7 @@
 #include "hal_tim.h"
 #include "hal_i2c.h"
 #include "hal_adc.h"
+#include "hal_uart.h"
 #include "hal_power.h"
 #include "system_state.h"
 #include "drv_tmp236.h"
@@ -51,6 +52,7 @@
 #include "svc_input.h"
 #include "pin_config.h"
 #include "svc_usb.h"
+#include "svc_ble.h"
 #include "svc_api.h"
 #include "svc_measurement.h"
 #include "stm32g0xx_ll_gpio.h"
@@ -215,12 +217,16 @@ int main(void)
   app_ui_init();
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: UI layer up */
 
-  /* WP4 comms stack. svc_api_init() before svc_usb_init(): svc_usb
-   * registers itself as API_TRANSPORT_USB via svc_api_register_transport(),
-   * which needs the transport table already zeroed. */
+  /* WP4 comms stack. svc_api_init() before svc_usb_init()/svc_ble_init():
+   * each registers itself as a transport via svc_api_register_transport(),
+   * which needs the transport table already zeroed. svc_ble_init() also
+   * pulses the RN4871's ~RESET and kicks off its (non-blocking) config
+   * state machine, pumped thereafter from task_ble. */
   svc_api_init();
   svc_measurement_init();
   svc_usb_init();
+  hal_uart_init();            /* USART6 RX DMA up before the RN4871 talks */
+  svc_ble_init();
   svc_battery_init();
   app_scheduler_init();
   hal_adc_start();             /* kick off the first ADC scan */

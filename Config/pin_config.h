@@ -68,6 +68,16 @@
 #define LED_STS_PORT        GPIOB
 #define LED_STS_PIN         GPIO_PIN_14     /* PB14, active HIGH */
 
+/* RN4871 BLE module (WP4). UART is USART6 (PB8 TX / PB9 RX, handled by
+ * HAL_App/hal_uart.c). ~BLE_RESET is the only control line to the MCU:
+ * PB5, active LOW (low = held in reset, high = run). No MODE/P2_0 pin
+ * to the MCU — the module self-selects Application mode. The four
+ * BLE_P1_x pins (PB4/PB15/PA9/PA8) are wired but of TBD function; unused
+ * for now (drv_rn4871.c tracks connection state from the module's
+ * %CONNECT%/%DISCONNECT% UART messages instead). */
+#define BLE_RESET_PORT      GPIOB
+#define BLE_RESET_PIN       GPIO_PIN_5
+
 /* ADC1 — internal battery/temperature sensing.
  * NOT_FULLY_CONFIGURABLE sequencer: hardware always converts in ascending
  * channel-number order regardless of scan-list order, so the real/fixed

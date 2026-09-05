@@ -167,6 +167,13 @@ typedef struct {
      * command or GET_STATUS extension) instead of silent. Saturates
      * rather than wraps; never cleared once the count is nonzero. */
     uint16_t usb_tx_dropped_count;
+
+    /* Same as usb_tx_dropped_count, for the BLE transport: svc_ble.c's
+     * send_via_ble() asked drv_rn4871_send() to transmit but it reported
+     * failure (module not ready, or no central connected, or the USART6
+     * write timed out). No retry queue — a dropped notification is gone.
+     * Saturates rather than wraps. */
+    uint16_t ble_tx_dropped_count;
 } SystemState;
 
 typedef struct {

@@ -127,4 +127,9 @@
 #define USB_PRODUCT_STR                 "InclinationMeter"
 #define USB_SERIAL_STR                  "001"
 
+/* RN4871 advertised name. Set via the module's "S-,<name>" command, which
+ * serializes it as "<name>-<last 2 MAC bytes>" (e.g. "Leveltronic-A1B2").
+ * Keep <= 15 chars so the serialized form fits the BLE advertisement. */
+#define BLE_DEVICE_NAME                 "Leveltronic"
+
 #endif /* CONFIG_H */
