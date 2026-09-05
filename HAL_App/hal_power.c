@@ -1,16 +1,14 @@
 #include "hal_power.h"
 #include "stm32g0xx_hal.h"
-#include "rtc.h"
-#include "pin_config.h"
 
-/* RTC is a real CubeMX-managed peripheral now (Core/Src/rtc.c,
- * MX_RTC_Init() called unconditionally at boot from main.c, clocked from
- * LSE — Y1 is fitted on this board after all, CLAUDE.md's Open Item 2 was
- * stale). hal_power_reboot_to_dfu() below is the only consumer: it arms
- * the already-initialised hrtc's wakeup timer for exactly one purpose,
- * giving itself a self-triggered Standby wake-up (see that function's
- * comment for why). No separate init needed here — by the time any menu
- * action can run, MX_RTC_Init() has already executed. */
+/* RTC (Core/Src/rtc.c, MX_RTC_Init(), clocked from LSE — Y1 is fitted on
+ * this board after all, CLAUDE.md's Open Item 2 was stale) was added
+ * specifically for a Standby-bounce DFU-reboot mechanism that turned out
+ * to be structurally unworkable — see hal_power_reboot_to_dfu()'s comment.
+ * Nothing in this file uses RTC any more, but it's left enabled in CubeMX
+ * (harmless, and it did prove Standby entry/exit itself works correctly
+ * via the LED diagnostic that mechanism briefly had) rather than churning
+ * the .ioc again for something that may yet be useful. */
 
 void hal_power_configure_wakeup_pins(void)
 {
@@ -81,83 +79,84 @@ void hal_power_enter_standby(void)
 
 void hal_power_reboot_to_dfu(void)
 {
-    /* NOT a software jump into system memory — that approach (four rounds
-     * of fixes: interrupts disabled, dirty USB/CRS state, SCB->VTOR not
-     * following the SYSCFG remap, an NVIC array-bounds bug) never once
-     * stayed resident in System Memory.
+    /* Round 3 of this feature. History:
      *
-     * v0.4.25/26 replaced it with FLASH_ACR.PROGEMPTY + NVIC_SystemReset():
-     * force the "flash is blank" bit ST's own HAL_FLASHEx_ForceFlashEmpty()
-     * exists for, reusing the exact mechanism a real mass-erase test had
-     * already proven boots straight into System Memory and stays there for
-     * a full DFU flash. That STILL landed back on the live screen — same
-     * symptom as the software jump, despite being a completely different
-     * mechanism. The reason: the boot-address decision (nBOOT0/nBOOT_SEL,
-     * and this blank-chip override) is only RE-EVALUATED on a power-on
-     * reset or on exiting Standby mode (RM0444 §2.5 — "the BOOT0 pin and
-     * nBOOT1 bit are re-sampled when exiting from Standby mode"). A plain
-     * NVIC_SystemReset() (AIRCR.SYSRESETREQ) is neither — on this newer
-     * STM32 generation it's explicitly a "system reset" that leaves boot
-     * configuration exactly as it was already latched at the last real
-     * power-up, so forcing PROGEMPTY and then software-resetting can never
-     * have worked, no matter how correct the FLASH_ACR write itself was.
+     * v0.4.20-24: a direct software jump into System Memory (remap via
+     * __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH(), read the bootloader's own
+     * SP/PC through the 0x0/0x4 alias, jump). Fixed four real bugs one at
+     * a time (interrupts left disabled so the bootloader's own USB stack
+     * never saw a host; dirty USB/CRS peripheral state left over from our
+     * own not-yet-working stack; SCB->VTOR not following the SYSCFG remap
+     * so the first interrupt vectored through the wrong table; an
+     * NVIC->ICER/ICPR loop written for the 8-word M3/M4/M7 layout
+     * silently corrupting memory past the M0+'s real 1-word arrays) —
+     * and after all four, still landed straight back on the live screen.
      *
-     * Fix: force PROGEMPTY (unchanged, still the right mechanism), then
-     * get there via a Standby-mode bounce instead of a bare reset — this
-     * project already uses real Standby entry for shutdown
-     * (hal_power_enter_standby() above) and it demonstrably causes a full
-     * reset-vector restart on wake, so it's a proven path to the kind of
-     * reset that actually re-samples boot configuration. The one thing
-     * Standby needs is a wake source, and the existing WKUP pins are all
-     * wrong for this: VBUS_SENSE (WKUP4) is already asserted precisely
-     * because a host is plugged in for the DFU flash, and a level-
-     * triggered wake source that's already active at entry makes
-     * HAL_PWR_EnterSTANDBYMode() abort into a dead-looking "running but
-     * every rail is down" state instead of actually sleeping (see that
-     * function's own comment) — never resetting at all. So this arms the
-     * RTC wakeup timer instead: an internal source under firmware's own
-     * control, immune to any pin already sitting at its wake level,
-     * configured for the shortest possible period (raw RTCCLK/16, no
-     * counts — a fraction of a millisecond on LSE) so the bounce is
-     * effectively instant and needs no calendar/timekeeping setup.
+     * v0.4.25-30: switched to forcing FLASH_ACR.PROGEMPTY (the "flash is
+     * blank" override ST's own HAL_FLASHEx_ForceFlashEmpty() exists for,
+     * reusing the exact mechanism a real mass-erase test had already
+     * proven works on this board) and reaching it via a genuine reset —
+     * first a bare NVIC_SystemReset(), then, once that gave the same
+     * result, a real Standby-mode entry/exit self-woken by the RTC
+     * (confirmed by an LED flashing right before HAL_PWR_EnterSTANDBYMode
+     * that Standby was genuinely reached). Both landed back on the live
+     * screen too. The mechanical reason, worked out only after the
+     * Standby attempt: FLASH_ACR is almost certainly in a domain Standby
+     * itself powers down, so forcing PROGEMPTY and then triggering the
+     * one kind of reset that actually re-samples it (RM0444 §2.5) is
+     * self-defeating — Standby entry erases the forced bit before the
+     * resulting reboot ever gets to read it. Every variant of this
+     * approach needed a real reset to take effect, and every real reset
+     * available here is exactly the kind of event that also wipes it.
+     * Structurally unwinnable; abandoned.
      *
-     * The application itself is left completely intact in flash the whole
-     * time — nothing here erases or touches it. A genuine power-on reset
-     * always re-evaluates real flash content and clears PROGEMPTY back to
-     * "not empty" once real firmware exists again, so there's no way to
-     * get permanently stuck: worst case, a power cycle instead of this
-     * menu action gets back to the application immediately. Never
-     * returns — falls through to the old reset-only behavior only if the
-     * RTC/Standby setup itself fails, which is still strictly no worse
-     * than v0.4.25/26. */
-    HAL_FLASH_Unlock();
-    HAL_FLASHEx_ForceFlashEmpty(FLASH_PROG_EMPTY);
-    HAL_FLASH_Lock();
+     * Back to the direct jump, this time with the one fix identified but
+     * never actually tried: a missing memory barrier. SYSCFG's remap and
+     * the two reads immediately after it (bootloader SP/PC through the
+     * 0x0/0x4 alias) are both ordinary memory-mapped accesses with no
+     * ordering guarantee between them on their own — without a barrier,
+     * those reads can execute before the remap has actually taken effect,
+     * silently returning this application's own vector table instead of
+     * the bootloader's. v0.4.24 added __DSB()/__ISB() right before the
+     * final jump (after the reads), which does nothing for this — the
+     * barrier needs to sit BEFORE the reads, immediately after the remap
+     * write, which no prior version had. */
+    __disable_irq();
+    SysTick->CTRL = 0U;
+    HAL_RCC_DeInit();
+    /* Cortex-M0+ (this core) has exactly ONE NVIC ICER/ICPR register —
+     * CMSIS declares NVIC->ICER and NVIC->ICPR as [1], not [8]. */
+    NVIC->ICER[0] = 0xFFFFFFFFU;
+    NVIC->ICPR[0] = 0xFFFFFFFFU;
 
-    /* Bench diagnostic (WP4): the two failure modes below — "never even
-     * tried Standby" vs. "genuinely entered/woke but boot config still
-     * wasn't re-sampled" — both look identical from the outside (device
-     * lands back on the live screen) unless something distinguishes them
-     * visually. A fast LED_STS flash means this code reached
-     * HAL_PWR_EnterSTANDBYMode(); a fast LED_PWR flash instead means
-     * HAL_RTCEx_SetWakeUpTimer_IT() itself failed and this fell straight
-     * through without ever attempting Standby. Remove once DFU-reboot is
-     * confirmed working. */
-    if (HAL_RTCEx_SetWakeUpTimer_IT(&hrtc, 0, RTC_WAKEUPCLOCK_RTCCLK_DIV16) == HAL_OK) {
-        HAL_PWR_DisableWakeUpPin(PWR_WAKEUP_PIN1 | PWR_WAKEUP_PIN4 | PWR_WAKEUP_PIN5);
-        __HAL_PWR_CLEAR_FLAG(PWR_FLAG_WUF);
-        for (int i = 0; i < 10; i++) {
-            HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);
-            HAL_Delay(40);
-        }
-        HAL_PWR_EnterSTANDBYMode();
-        /* Unreachable if Standby actually engaged. Falls through below. */
-    }
+    __HAL_RCC_USB_FORCE_RESET();
+    __HAL_RCC_CRS_FORCE_RESET();
+    __HAL_RCC_USB_RELEASE_RESET();
+    __HAL_RCC_CRS_RELEASE_RESET();
 
-    for (int i = 0; i < 10; i++) {
-        HAL_GPIO_TogglePin(LED_PWR_PORT, LED_PWR_PIN);
-        HAL_Delay(40);
-    }
-    NVIC_SystemReset();
-    for (;;) { }   /* NVIC_SystemReset() does not return */
+    __HAL_RCC_SYSCFG_CLK_ENABLE();
+    __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
+    /* NEW: without this, nothing guarantees the remap above is actually
+     * visible yet to the two reads below — they could complete against
+     * the stale (pre-remap) memory map. */
+    __DSB();
+    __ISB();
+
+    /* SCB->VTOR is a separate register from the SYSCFG remap and does not
+     * follow it automatically — it's an absolute address used for every
+     * exception/interrupt vector fetch from here on. Set explicitly
+     * rather than assume it was already 0x00000000. */
+    SCB->VTOR = 0x00000000U;
+
+    typedef void (*BootJumpFn)(void);
+    uint32_t   bootloader_sp   = *(volatile uint32_t *)0x00000000U;
+    BootJumpFn bootloader_jump = (BootJumpFn)(*(volatile uint32_t *)0x00000004U);
+
+    __set_MSP(bootloader_sp);
+    __DSB();
+    __ISB();
+    __enable_irq();
+    bootloader_jump();
+
+    for (;;) { }   /* never reached */
 }
