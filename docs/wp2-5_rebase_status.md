@@ -1,5 +1,13 @@
 # WP2–WP5 Rebase onto REV B — Status
 
+> **SUPERSEDED (2026-09-05).** This is the historical record of the August branch-rebase
+> effort. Since then, WP2–WP4 were bench-debugged on real REV B hardware and landed on
+> `master` (tags `wp2-debugged` … `wp4-debugged`); the `wp2`–`wp4` branch pointers now
+> track `master`. WP4 also gained the BLE + wired-UART transports and API v2 (ported from
+> `wp11-api-v2`). Current state: `README.md`, `CLAUDE.md` §10, `docs/api-reference.md`,
+> and the `memory/` notes. The "Resuming this work" section at the bottom of this file is
+> obsolete. Everything below is kept for the per-branch history and code-review findings.
+
 **Goal:** rebase the `wp2`, `wp3`, `wp4`, `wp5` feature branches onto the REV B `master`
 (pinout finalized in `STM32G0B1RET6_Pinout.csv`), dropping each branch's now-obsolete
 CubeMX-regen-only commit, and fixing code that breaks from genuine REV B behavioral changes —

@@ -4,18 +4,25 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1–WP4 implemented on the `wp4` branch** (REV B hardware): display bring-up, power
-management/battery monitoring/EEPROM storage, the rotary-encoder + buzzer + multi-screen UI
-local interaction layer, and a transport-agnostic device API (USB Custom HID today, BLE and
-USART3 to follow in WP5) with a single-shot measurement state machine. Builds clean (zero
-warnings, `-Wall -Wextra -Werror`). WP1–WP4 have all been through multiple rounds of
-structured code review — WP4 through two full passes plus reconciliation against two real
-CubeMX regenerations, which caught real regen-induced regressions (including one that would
-have hard-hung the MCU on first encoder touch) in addition to the usual logic-level findings.
-**Not yet flashed to real hardware** — see `docs/wp2-5_rebase_status.md` for the full
-per-branch history, review findings, and what's still unverified against real silicon.
-`master` itself currently reflects WP1 only; `wp2`/`wp3`/`wp4` are feature branches pending
-their own review/merge.
+**WP1–WP4 complete and on `master`** (REV B hardware), all bench-tested on real silicon:
+
+- **WP1** — Sharp Memory LCD bring-up, VCOM timer, u8g2.
+- **WP2** — power rails, battery monitoring, Standby, EEPROM (per-subsystem pages).
+- **WP3** — rotary encoders + buzzer + multi-screen UI (LIVE / STATUS / SETTINGS).
+- **WP4** — transport-agnostic **device API v2** over **three transports** — USB Custom
+  HID, BLE (RN4871 Transparent UART), and a wired debug UART (USART3) — with per-transport
+  non-blocking TX frame rings and a live debug-log stream. USB DFU / "Reboot to DFU" is
+  parked (the STM32 ROM bootloader always bounces back to a valid app); a custom GATT
+  service was descoped in favour of the Transparent UART. See `docs/api-reference.md` and
+  CLAUDE.md §10.
+
+Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 27% / FLASH 25%. Tagged
+`wp1-debugged` … `wp4-debugged`. The `wp2`–`wp4` branch pointers track `master`.
+
+The `wp11-api-v2` branch holds sketched-but-not-bench-tested WP7–11 sensor drivers
+(BME280, AD9833, ADS131M04, displacement demod); these are cherry-picked onto `master`
+one at a time as each gets hardware time. `docs/wp2-5_rebase_status.md` is the historical
+record of the August branch-rebase effort (superseded by the September bench work).
 
 ## Hardware
 
