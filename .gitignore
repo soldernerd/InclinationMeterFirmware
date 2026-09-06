@@ -49,3 +49,6 @@ WP*_prompt.md
 
 # Windows shortcut files
 *.lnk
+
+# bulk-capture output
+PythonTestCode/*.csv
