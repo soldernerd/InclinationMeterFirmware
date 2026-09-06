@@ -2,6 +2,7 @@
 #include "math_settling.h"
 #include "hal_systick.h"
 #include "system_state.h"
+#include "svc_log.h"
 #include "config.h"
 #include <string.h>
 
@@ -62,10 +63,14 @@ void svc_measurement_trigger(void)
     s_start_ms          = hal_systick_get_ms();
     s_last_progress_ms  = s_start_ms;
     math_settling_reset(&s_buf_count, &s_buf_widx);
+    svc_log(API2_LOG_INFO, "meas: triggered (settling)");
 }
 
 void svc_measurement_cancel(void)
 {
+    if (s_state != MEAS_STATE_IDLE) {
+        svc_log(API2_LOG_INFO, "meas: cancelled");
+    }
     s_state = MEAS_STATE_IDLE;
 }
 
@@ -121,6 +126,9 @@ void svc_measurement_update(void)
     if (s_state == MEAS_STATE_SETTLING) {
         if (ss == SETTLING_SETTLED || ss == SETTLING_TIMEOUT) {
             s_state = MEAS_STATE_CAPTURING;
+            svc_log(API2_LOG_INFO, ss == SETTLING_TIMEOUT
+                    ? "meas: settling timed out, capturing"
+                    : "meas: settled, capturing");
         }
     }
 
@@ -128,6 +136,7 @@ void svc_measurement_update(void)
         if (s_buf_count >= SETTLING_BUFFER_SIZE) {
             finalise_packet(r.dc_umpm, r.sample_count);
             s_state = MEAS_STATE_COMPLETE;
+            svc_log(API2_LOG_INFO, "meas: complete");
             /* Completion is picked up by whoever polls
              * svc_measurement_get_state(); API v2 has no single-shot
              * measurement push in the ported subset. */

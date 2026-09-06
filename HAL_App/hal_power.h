@@ -50,4 +50,13 @@ void hal_power_enter_standby(void);
  * asserted. Never returns. */
 void hal_power_reboot_to_dfu(void);
 
+/* Current commanded state of the two switched rails, read back from the
+ * enable pins (PWR_3V3_EN active-LOW, PWR_5V_EN active-HIGH). Reflects
+ * what firmware last drove, not a physical rail-voltage sense (there is
+ * none). Both are on for the whole normal run — only Standby turns them
+ * off, and nothing polls this there. For the API `Topic groups` status
+ * stream. */
+bool hal_power_rail_3v3_on(void);
+bool hal_power_rail_5v_on(void);
+
 #endif /* HAL_POWER_H */

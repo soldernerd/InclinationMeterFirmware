@@ -62,6 +62,7 @@
 #include "svc_api.h"
 #include "svc_log.h"
 #include "svc_measurement.h"
+#include "app_version.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
 /* USER CODE END Includes */
@@ -275,6 +276,11 @@ int main(void)
   svc_uart_init();
   svc_battery_init();
   svc_log(API2_LOG_INFO, "boot: comms stack up");
+  svc_logf(API2_LOG_INFO, "boot fw %s adc%u dac%u ads%u bme%u ee%u",
+           FW_VERSION_STRING,
+           (unsigned)g_system_state.adc_ok, (unsigned)g_system_state.dac_ok,
+           (unsigned)g_system_state.ads_ok, (unsigned)g_system_state.bme280_ok,
+           (unsigned)g_system_state.eeprom_selftest);
 
   /* WP6 power management: RTC (calendar keeps running through Standby) and
    * the auto power-off idle timer. After svc_input_init()/svc_storage_init()

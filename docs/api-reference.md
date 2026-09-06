@@ -4,11 +4,15 @@ The complete contract for host software talking to this firmware build.
 Design rationale is in `api-v2-spec.md`; this document is what a host
 developer needs and nothing more.
 
-This build implements a **subset** of the full v2 design (ported onto the
-hardware-validated `master` line 2026-09-05): System status, Commands,
-Measurements (onboard temp + battery only), Settings (every
-`DeviceSettings` field), and a Debug-messages log stream. Calibrations
-and the WP7–11 sensor resources are not present yet.
+This build implements a **subset** of the full v2 design: System status,
+Commands (test beep / signal-analysis toggle / force-charge), Settings
+(every `DeviceSettings` field), Measurements (onboard temp, battery,
+BME280), Topic groups (environmental + device status), a Debug-messages
+log stream, Raw data (ADS131M04 diagnostics, `0x7/0x00`), and Bulk
+transfers (raw ADC capture, `0x8/0x00`). Calibrations (0x2) and the LM35
+external-temp resource are not present yet. Sections below cover the
+main categories; see `Services/svc_api.h` for the exhaustive resource
+list.
 
 ---
 
@@ -142,6 +146,10 @@ Request payload: none. Response: status only. Beeps the buzzer ~100 ms.
 | 0x00 onboard temp | `0x0400` | i16, centi-°C (TMP236) |
 | 0x01 battery mV | `0x0401` | u16, mV |
 | 0x02 battery SoC | `0x0402` | u8, percent |
+| 0x03 BME280 temp | `0x0403` | i16, centi-°C |
+| 0x04 BME280 pressure | `0x0404` | u32, Pa |
+| 0x05 BME280 humidity | `0x0405` | u16, centi-%RH |
+| 0x06 BME280 fresh | `0x0406` | u8, 0/1 (1 = last reading current) |
 
 - **GET**: request payload none → response `[OK][value]`.
 - **SUBSCRIBE** (`0x34xx`): request payload = `u32 interval_ms` LE, range
@@ -151,6 +159,45 @@ Request payload: none. Response: status only. Beeps the buzzer ~100 ms.
 - **UNSUBSCRIBE** (`0x44xx`): payload none. `NOT_SUBSCRIBED` if there was
   no active subscription on this transport.
 - All subscriptions are per-transport and cleared on connect/disconnect.
+
+---
+
+## Topic groups (0x5) — GET, SUBSCRIBE, UNSUBSCRIBE
+
+Fixed compile-time bundles of related values — subscribe once instead of
+to many individual Measurements resources. SUBSCRIBE payload / push
+framing / lifecycle are identical to Measurements (`u32 interval_ms` LE,
+pushes `[OK][issue_seq][page=0][payload]` under the same opcode). GET
+returns `[OK][payload]`. All fields little-endian.
+
+### `0x5/0x00` — Environmental  → GET `0x0500`, SUBSCRIBE `0x3500` (14 B payload)
+
+| off | type | field |
+|---|---|---|
+| 0 | i16 | BME280 temperature, centi-°C |
+| 2 | u32 | BME280 pressure, Pa |
+| 6 | u16 | BME280 humidity, centi-%RH |
+| 8 | u8  | BME280 fresh (0/1) |
+| 9 | i16 | onboard temperature, centi-°C (TMP236) |
+| 11 | i16 | external temperature, centi-°C (LM35 — 0, not wired yet) |
+| 13 | u8 | external temperature valid (0 until the LM35 driver lands) |
+
+### `0x5/0x01` — Device status  → GET `0x0501`, SUBSCRIBE `0x3501` (18 B payload)
+
+| off | type | field |
+|---|---|---|
+| 0 | u16 | battery mV |
+| 2 | u8 | battery SoC, percent |
+| 3 | u8 | battery state (0 NORMAL / 1 LOW / 2 CRITICAL / 3 CHARGING / 4 FULL) |
+| 4 | u8 | USB connected |
+| 5 | u8 | BLE connected |
+| 6 | u8 | charging (TP4056 CHRG) |
+| 7 | u8 | force-charge armed |
+| 8 | u8 | 3V3 rail on |
+| 9 | u8 | 5V rail on |
+| 10 | u16 | RTC year |
+| 12 | u8×5 | RTC month, day, hour, minute, second |
+| 17 | u8 | RTC set (1 once ever set) |
 
 ---
 

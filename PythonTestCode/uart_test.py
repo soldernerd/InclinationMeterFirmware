@@ -10,6 +10,7 @@ central. Same protocol and same checks as hid_test.py / ble_test.py.
   python uart_test.py --port COM7     # or name it
   python uart_test.py --log           # subscribe to the debug-log stream, print live
   python uart_test.py --env           # poll the BME280 (temp/pressure/humidity) once/sec
+  python uart_test.py --topics        # subscribe to the env + device-status topic groups, live
   python uart_test.py --charge        # force-start charging regardless of SOC (needs USB)
   python uart_test.py --port COM7 --log
 
@@ -136,6 +137,26 @@ def run_basic(link):
         fresh = "fresh" if ok else "STALE (sensor not connected)"
         print(f"  BME280        {t:+.2f} C  {p:.1f} hPa  {h:.1f} %RH   [{fresh}]")
 
+    # Topic groups (0x5) — one GET each
+    st, d = request(link, a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_ENV))
+    e = a.decode_topic_env(d) if st == 0 else None
+    if e:
+        print(f"  TOPIC env     bme280 {e['bme280_temp_C']:+.2f}C "
+              f"{e['bme280_press_hPa']:.1f}hPa {e['bme280_humid_pct']:.1f}% "
+              f"ok={e['bme280_ok']}  onboard {e['onboard_temp_C']:+.2f}C  "
+              f"ext {e['ext_temp_C']}")
+    else:
+        print(f"  TOPIC env     [{a.STATUS.get(st, st)}]")
+    st, d = request(link, a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_STATUS))
+    s = a.decode_topic_status(d) if st == 0 else None
+    if s:
+        print(f"  TOPIC status  {s['battery_mV']}mV {s['soc_pct']}% {s['state']}  "
+              f"usb={s['usb']} ble={s['ble']} chg={s['charging']} "
+              f"force={s['force_charging']}  rails 3v3={s['rail_3v3']} 5v={s['rail_5v']}  "
+              f"{s['rtc']}")
+    else:
+        print(f"  TOPIC status  [{a.STATUS.get(st, st)}]")
+
 
 def read_bme280(link):
     """GET the four BME280 Measurements resources. Returns
@@ -151,6 +172,31 @@ def read_bme280(link):
             struct.unpack("<I", dp[:4])[0] / 100,
             struct.unpack("<H", dh[:2])[0] / 100,
             bool(dok[0]))
+
+
+def run_topics(link, interval_ms=1000):
+    """Subscribe to both topic groups and print the pushes live."""
+    groups = [("env", a.TOPIC_ENV, a.decode_topic_env),
+              ("status", a.TOPIC_STATUS, a.decode_topic_status)]
+    by_op = {a.opcode(a.SUBSCRIBE, a.CAT_TOPICS, res): (name, dec)
+             for name, res, dec in groups}
+    for _, res, _ in groups:
+        link.send(a.build(a.opcode(a.SUBSCRIBE, a.CAT_TOPICS, res),
+                          a.build_interval(interval_ms)))
+        link.recv(timeout=2.0)   # ack
+    print(f"Subscribed to env + status @ {interval_ms} ms. Ctrl+C to stop.\n")
+    try:
+        while True:
+            op, st, data = link.recv(timeout=5.0)
+            if op not in by_op or st != 0 or data is None or len(data) < 2:
+                continue
+            name, dec = by_op[op]
+            print(f"  [{name:6}] #{data[0]:<3} {dec(data[2:])}")
+    except KeyboardInterrupt:
+        for _, res, _ in groups:
+            link.send(a.build(a.opcode(a.UNSUBSCRIBE, a.CAT_TOPICS, res)))
+        time.sleep(0.1)
+        print("\nunsubscribed.")
 
 
 def run_env(link, period=1.0):
@@ -203,6 +249,8 @@ def main():
             run_log(link)
         elif "--env" in args:
             run_env(link)
+        elif "--topics" in args:
+            run_topics(link)
         elif "--charge" in args:
             st, _ = request(link, a.OP_CMD_FORCE_CHARGE)
             print(f"  FORCE CHARGE  [{a.STATUS.get(st, st)}]  "

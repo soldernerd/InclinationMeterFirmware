@@ -18,6 +18,7 @@
 #include "svc_ble.h"
 #include "svc_uart.h"
 #include "svc_power.h"
+#include "svc_log.h"
 #include "config.h"
 #include "system_state.h"
 #include <stddef.h>
@@ -66,6 +67,11 @@ static void task_bme280(void)
      * good reading) even after the sensor stops responding, which
      * would otherwise leave bme280_ok stuck true forever. */
     bool ok = (drv_bme280_update() == DRV_OK);
+    static bool s_bme_was_ok = false;
+    if (ok != s_bme_was_ok) {
+        svc_log(API2_LOG_INFO, ok ? "bme280: connected" : "bme280: lost");
+        s_bme_was_ok = ok;
+    }
     g_system_state.bme280_ok = ok;
     if (ok) {
         bme280_data_t data;
@@ -131,6 +137,7 @@ static void task_api(void)
      * slower cadence — see svc_api.c's comment on that function. */
     svc_api_update();
     svc_api_measurement_subscriptions_update();
+    svc_api_topic_subscriptions_update();
 }
 static void task_measurement(void)     { svc_measurement_update();     }
 static void task_signal_analysis(void) { svc_signal_analysis_update(); }

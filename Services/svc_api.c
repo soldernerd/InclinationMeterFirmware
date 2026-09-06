@@ -5,6 +5,7 @@
 #include "drv_ads131m04.h"
 #include "svc_log.h"
 #include "hal_rtc.h"
+#include "hal_power.h"
 #include "app_scheduler.h"
 #include "drv_buzzer.h"
 #include "math_crc.h"
@@ -45,8 +46,40 @@ typedef struct {
     uint8_t  calibration_valid;
 } __attribute__((packed)) Api2DeviceStatePayload;
 
+typedef struct {
+    int16_t  bme280_temp_cdeg;
+    uint32_t bme280_pressure_pa;
+    uint16_t bme280_humidity_cpct;
+    uint8_t  bme280_ok;
+    int16_t  onboard_temp_cdeg;
+    int16_t  external_temp_cdeg;
+    uint8_t  external_temp_ok;
+} __attribute__((packed)) Api2TopicEnvPayload;
+
+typedef struct {
+    uint16_t battery_mv;
+    uint8_t  battery_soc_pct;
+    uint8_t  battery_state;
+    uint8_t  usb_connected;
+    uint8_t  ble_connected;
+    uint8_t  charging;
+    uint8_t  force_charging;
+    uint8_t  rail_3v3_on;
+    uint8_t  rail_5v_on;
+    uint16_t rtc_year;
+    uint8_t  rtc_month;
+    uint8_t  rtc_day;
+    uint8_t  rtc_hour;
+    uint8_t  rtc_minute;
+    uint8_t  rtc_second;
+    uint8_t  rtc_set;
+} __attribute__((packed)) Api2TopicStatusPayload;
+
 _Static_assert(sizeof(Api2IdentityPayload)    + 1U <= MAX_PAYLOAD, "IDENTITY response too large");
 _Static_assert(sizeof(Api2DeviceStatePayload) + 1U <= MAX_PAYLOAD, "DEVICE_STATE response too large");
+/* +3: stream pushes prefix [status][issue_seq][page] */
+_Static_assert(sizeof(Api2TopicEnvPayload)    + 3U <= MAX_PAYLOAD, "TOPIC env push too large");
+_Static_assert(sizeof(Api2TopicStatusPayload) + 3U <= MAX_PAYLOAD, "TOPIC status push too large");
 
 /* ---------------- per-transport state ---------------- */
 
@@ -69,6 +102,7 @@ typedef struct {
     ApiSendFn          send_fn;
     ApiReadyFn         ready_fn;   /* optional TX back-pressure hook (bulk pump only) */
     MeasurementSubSlot meas[API2_MEASUREMENT_SLOTS];
+    MeasurementSubSlot topic[API2_TOPIC_SLOTS];   /* Topic groups (0x5) — same slot shape */
     DebugSubState      dbg;
 } ApiTransportState;
 
@@ -615,6 +649,134 @@ static void dispatch_measurements(ApiTransport t, uint16_t opcode, uint8_t verb,
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
+/* ---------------- Topic groups (0x5: GET, SUBSCRIBE, UNSUBSCRIBE) ---------------- */
+
+#define TOPIC_VALUE_MAX_LEN 32U
+typedef uint16_t (*TopicBuildFn)(uint8_t *buf);
+
+static uint16_t build_topic_env(uint8_t *buf)
+{
+    Api2TopicEnvPayload p;
+    p.bme280_temp_cdeg     = g_system_state.bme280_temp_cdeg;
+    p.bme280_pressure_pa   = g_system_state.bme280_pressure_pa;
+    p.bme280_humidity_cpct = g_system_state.bme280_humidity_centipct;
+    p.bme280_ok            = g_system_state.bme280_ok ? 1U : 0U;
+    p.onboard_temp_cdeg    = g_system_state.temperature_cdeg;
+    p.external_temp_cdeg   = 0;      /* LM35 driver not ported yet */
+    p.external_temp_ok     = 0U;
+    memcpy(buf, &p, sizeof p);
+    return sizeof p;
+}
+
+static uint16_t build_topic_status(uint8_t *buf)
+{
+    Api2TopicStatusPayload p;
+    p.battery_mv      = svc_battery_get_vbat_mv();
+    p.battery_soc_pct = svc_battery_get_soc_pct();
+    p.battery_state   = (uint8_t)svc_battery_get_state();
+    p.usb_connected   = g_system_state.usb_connected     ? 1U : 0U;
+    p.ble_connected   = g_system_state.ble_connected     ? 1U : 0U;
+    p.charging        = svc_battery_is_charging()        ? 1U : 0U;
+    p.force_charging  = svc_battery_is_force_charging()  ? 1U : 0U;
+    p.rail_3v3_on     = hal_power_rail_3v3_on()          ? 1U : 0U;
+    p.rail_5v_on      = hal_power_rail_5v_on()           ? 1U : 0U;
+
+    rtc_datetime_t dt;
+    hal_rtc_get(&dt);
+    p.rtc_year   = dt.year;
+    p.rtc_month  = dt.month;
+    p.rtc_day    = dt.day;
+    p.rtc_hour   = dt.hour;
+    p.rtc_minute = dt.minute;
+    p.rtc_second = dt.second;
+    p.rtc_set    = hal_rtc_is_set() ? 1U : 0U;
+    memcpy(buf, &p, sizeof p);
+    return sizeof p;
+}
+
+typedef struct {
+    uint8_t      resource;
+    TopicBuildFn build;
+} TopicResourceDesc;
+
+static const TopicResourceDesc s_topic_resources[] = {
+    { API2_RES_TOPIC_ENV,    build_topic_env },
+    { API2_RES_TOPIC_STATUS, build_topic_status },
+};
+#define TOPIC_RESOURCE_COUNT (sizeof(s_topic_resources) / sizeof(s_topic_resources[0]))
+
+static const TopicResourceDesc *find_topic_resource(uint8_t res)
+{
+    for (size_t i = 0; i < TOPIC_RESOURCE_COUNT; ++i) {
+        if (s_topic_resources[i].resource == res) return &s_topic_resources[i];
+    }
+    return 0;
+}
+
+static void dispatch_topic_groups(ApiTransport t, uint16_t opcode, uint8_t verb,
+                                  uint8_t res, const uint8_t *frame, uint16_t paylen)
+{
+    if (verb != API2_VERB_GET && verb != API2_VERB_SUBSCRIBE && verb != API2_VERB_UNSUBSCRIBE) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    const TopicResourceDesc *desc = find_topic_resource(res);
+    if (desc == 0 || res >= API2_TOPIC_SLOTS) {
+        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
+        return;
+    }
+    if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (verb == API2_VERB_GET) {
+        if (paylen != 0U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint8_t  val[TOPIC_VALUE_MAX_LEN];
+        uint16_t vlen = desc->build(val);
+        send_response(t, opcode, API2_STATUS_OK, val, vlen);
+        return;
+    }
+
+    if (verb == API2_VERB_SUBSCRIBE) {
+        if (paylen != 4U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint32_t interval_ms = (uint32_t)frame[API2_PACKET_HDR_BYTES + 0U]
+                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 1U] << 8)
+                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 2U] << 16)
+                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 3U] << 24);
+        if (interval_ms < API2_MEASUREMENT_MIN_INTERVAL_MS
+            || interval_ms > API2_MEASUREMENT_MAX_INTERVAL_MS) {
+            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+            return;
+        }
+        MeasurementSubSlot *slot = &s_t[t].topic[res];
+        if (!slot->active) {
+            slot->issue_seq = 0;
+        }
+        slot->active       = true;
+        slot->interval_ms  = interval_ms;
+        slot->last_push_ms = hal_systick_get_ms();
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        return;
+    }
+
+    /* UNSUBSCRIBE */
+    if (paylen != 0U) {
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+    MeasurementSubSlot *slot = &s_t[t].topic[res];
+    if (!slot->active) {
+        send_response(t, opcode, API2_STATUS_NOT_SUBSCRIBED, 0, 0);
+        return;
+    }
+    slot->active = false;
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
 /* ---------------- Settings (0x3: GET, SET) ---------------- */
 
 typedef enum { SF_U16, SF_U32, SF_I32 } SettingsFieldType;
@@ -828,6 +990,9 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
         case API2_CAT_MEASUREMENTS:
             dispatch_measurements(t, opcode, verb, res, frame, paylen);
             return;
+        case API2_CAT_TOPIC_GROUPS:
+            dispatch_topic_groups(t, opcode, verb, res, frame, paylen);
+            return;
         case API2_CAT_DEBUG_MSGS:
             dispatch_debug(t, opcode, verb, res, frame, paylen);
             return;
@@ -838,8 +1003,8 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
             dispatch_bulk(t, opcode, verb, res, frame, paylen);
             return;
         default:
-            /* Calibrations (0x2) and 0x5-0xF: not built in this ported
-             * subset. Spec §7 -- "not implemented yet" and "not a real
+            /* Calibrations (0x2) and 0x6-0xF beyond Debug/Raw/Bulk: not
+             * built yet. Spec §7 -- "not implemented yet" and "not a real
              * category" are the same answer on the wire. */
             send_response(t, opcode, API2_STATUS_UNKNOWN_CATEGORY, 0, 0);
             return;
@@ -852,6 +1017,7 @@ static void clear_subs(ApiTransport t)
 {
     if (t >= API_TRANSPORT_COUNT) return;
     memset(s_t[t].meas, 0, sizeof s_t[t].meas);
+    memset(s_t[t].topic, 0, sizeof s_t[t].topic);
     memset(&s_t[t].dbg, 0, sizeof s_t[t].dbg);
 }
 
@@ -988,6 +1154,34 @@ void svc_api_measurement_subscriptions_update(void)
             push[1] = 0U;   /* page */
             memcpy(&push[2], val, vlen);
             /* stream push — not urgent, must leave the TX reserve free */
+            send_framed(t, opcode, API2_STATUS_OK, push, (uint16_t)(2U + vlen), false);
+
+            slot->last_push_ms = now;
+        }
+    }
+}
+
+void svc_api_topic_subscriptions_update(void)
+{
+    uint32_t now = hal_systick_get_ms();
+    for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
+        if (!s_t[t].connected) continue;
+        for (uint8_t res = 0; res < API2_TOPIC_SLOTS; ++res) {
+            MeasurementSubSlot *slot = &s_t[t].topic[res];
+            if (!slot->active) continue;
+            if ((uint32_t)(now - slot->last_push_ms) < slot->interval_ms) continue;
+
+            const TopicResourceDesc *desc = find_topic_resource(res);
+            if (desc == 0) continue;
+
+            uint16_t opcode = API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_TOPIC_GROUPS, res);
+            uint8_t  val[TOPIC_VALUE_MAX_LEN];
+            uint16_t vlen = desc->build(val);
+
+            uint8_t push[2U + TOPIC_VALUE_MAX_LEN];
+            push[0] = slot->issue_seq++;
+            push[1] = 0U;   /* page */
+            memcpy(&push[2], val, vlen);
             send_framed(t, opcode, API2_STATUS_OK, push, (uint16_t)(2U + vlen), false);
 
             slot->last_push_ms = now;

@@ -5,6 +5,7 @@
 #include "hal_power.h"
 #include "hal_systick.h"
 #include "svc_storage.h"
+#include "svc_log.h"
 #include "system_state.h"
 #include "config.h"
 #include "pin_config.h"
@@ -282,6 +283,23 @@ void svc_battery_update(void)
     update_charge_enable();
     classify_battery_state();
 
+    /* Granular INFO log on the charger-state edges (debug stream). */
+    static bool s_prev_charging = false;
+    static bool s_prev_complete = false;
+    static bool s_prev_usb      = false;
+    if (s_usb_connected != s_prev_usb) {
+        svc_log(API2_LOG_INFO, s_usb_connected ? "battery: USB power in" : "battery: USB power out");
+        s_prev_usb = s_usb_connected;
+    }
+    if (s_charging != s_prev_charging) {
+        svc_log(API2_LOG_INFO, s_charging ? "battery: charging" : "battery: charge stopped");
+        s_prev_charging = s_charging;
+    }
+    if (s_charge_complete && !s_prev_complete) {
+        svc_log(API2_LOG_INFO, "battery: charge complete");
+    }
+    s_prev_complete = s_charge_complete;
+
     /* Reflect into shared state */
     g_system_state.battery_soc_pct  = s_soc_pct;
     g_system_state.battery_charging = s_charging;
@@ -304,4 +322,5 @@ void svc_battery_force_charge(void)
     /* Latch the override; update_charge_enable() acts on it next tick
      * (and ignores it if USB isn't actually present). */
     s_force_charge = true;
+    svc_log(API2_LOG_INFO, "battery: force-charge armed");
 }

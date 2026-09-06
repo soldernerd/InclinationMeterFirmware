@@ -55,6 +55,10 @@ void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len);
  * generic poll cadence -- see the .c comment. */
 void svc_api_measurement_subscriptions_update(void);
 
+/* Same, for Topic groups (0x5) subscriptions. Its own scheduler hook for
+ * the same reason as the Measurements one. */
+void svc_api_topic_subscriptions_update(void);
+
 /* ---------------- packet framing (docs/api-v2-spec.md §2) ----------------
  * [OPCODE 2B LE][LEN 2B LE][PAYLOAD 0..LEN][CRC16 2B LE], no padding.
  * Total on the wire is always 6 + LEN. */
@@ -178,6 +182,40 @@ typedef enum {
 #define API2_MEASUREMENT_MIN_INTERVAL_MS 50U
 #define API2_MEASUREMENT_MAX_INTERVAL_MS 3600000U   /* 1 hour */
 #define API2_MEASUREMENT_SLOTS           16U        /* direct-indexed by resource id */
+
+/* ---------------- Topic groups (0x5: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
+ * Fixed compile-time bundles of related values — subscribe once instead
+ * of to many individual Measurements resources. SUBSCRIBE payload is a
+ * 4-byte LE interval_ms (same range/rules as Measurements). GET responses
+ * and subscription pushes carry the same packed little-endian layout;
+ * pushes are prefixed with [issue_seq][page=0] like every other stream.
+ *
+ * 0x00 Environmental — temperature / atmosphere (14 B):
+ *   int16  bme280_temp_cdeg      (0.01 degC)
+ *   uint32 bme280_pressure_pa    (Pa)
+ *   uint16 bme280_humidity_cpct  (0.01 %RH)
+ *   uint8  bme280_ok
+ *   int16  onboard_temp_cdeg     (TMP236, g_system_state.temperature_cdeg)
+ *   int16  external_temp_cdeg    (LM35 — not wired yet, 0)
+ *   uint8  external_temp_ok      (0 until the LM35 driver lands)
+ *
+ * 0x01 Device status — the "inner workings" (18 B):
+ *   uint16 battery_mv
+ *   uint8  battery_soc_pct
+ *   uint8  battery_state         (battery_state_t)
+ *   uint8  usb_connected
+ *   uint8  ble_connected
+ *   uint8  charging              (TP4056 CHRG line)
+ *   uint8  force_charging        (manual override armed)
+ *   uint8  rail_3v3_on
+ *   uint8  rail_5v_on
+ *   uint16 rtc_year
+ *   uint8  rtc_month, rtc_day, rtc_hour, rtc_minute, rtc_second
+ *   uint8  rtc_set               (1 once the clock has ever been set)
+ */
+#define API2_RES_TOPIC_ENV      0x00U
+#define API2_RES_TOPIC_STATUS   0x01U
+#define API2_TOPIC_SLOTS        4U          /* direct-indexed by resource id */
 
 /* ---------------- Settings (0x3: GET, SET) ----------------
  * Indices in DeviceSettings field order (the pad `battery_page_reserved`

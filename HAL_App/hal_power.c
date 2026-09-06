@@ -1,5 +1,6 @@
 #include "hal_power.h"
 #include "stm32g0xx_hal.h"
+#include "pin_config.h"
 
 /* RTC (Core/Src/rtc.c, MX_RTC_Init(), clocked from LSE — Y1 is fitted on
  * this board after all, CLAUDE.md's Open Item 2 was stale) was added
@@ -166,4 +167,16 @@ void hal_power_reboot_to_dfu(void)
      * To reach DFU for real, power-cycle with BOOT0 asserted. */
     NVIC_SystemReset();
     for (;;) { }
+}
+
+bool hal_power_rail_3v3_on(void)
+{
+    /* PWR_3V3_EN active-LOW: pin LOW == rail ON. */
+    return HAL_GPIO_ReadPin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN) == GPIO_PIN_RESET;
+}
+
+bool hal_power_rail_5v_on(void)
+{
+    /* PWR_5V_EN active-HIGH: pin HIGH == rail ON. */
+    return HAL_GPIO_ReadPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN) == GPIO_PIN_SET;
 }

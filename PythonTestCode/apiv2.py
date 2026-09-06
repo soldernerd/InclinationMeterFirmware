@@ -52,6 +52,37 @@ MEAS_BME280_HUMID = 0x05   # uint16 centi-%RH
 MEAS_BME280_OK    = 0x06   # uint8  0/1  (last reading fresh)
 DBG_LOG_STREAM = 0x00
 
+# Topic groups (CAT_TOPICS = 5) — GET or SUBSCRIBE (4-byte LE interval_ms payload)
+TOPIC_ENV    = 0x00   # BME280 + onboard + external temp
+TOPIC_STATUS = 0x01   # battery / connections / charging / rails / RTC
+
+
+def build_interval(ms: int) -> bytes:
+    return struct.pack("<I", ms)
+
+
+def decode_topic_env(d: bytes):
+    if len(d) < 14:
+        return None
+    t, p, h, ok, ot, et, eok = struct.unpack("<hIHBhhB", d[:14])
+    return dict(bme280_temp_C=t / 100, bme280_press_hPa=p / 100,
+                bme280_humid_pct=h / 100, bme280_ok=bool(ok),
+                onboard_temp_C=ot / 100,
+                ext_temp_C=(et / 100 if eok else None))
+
+
+def decode_topic_status(d: bytes):
+    if len(d) < 18:
+        return None
+    (mv, soc, st, usb, ble, chg, fchg, r3, r5,
+     yr, mo, da, hh, mm, ss, rset) = struct.unpack("<HBBBBBBBBHBBBBBB", d[:18])
+    names = {0: "NORMAL", 1: "LOW", 2: "CRITICAL", 3: "CHARGING", 4: "FULL"}
+    return dict(battery_mV=mv, soc_pct=soc, state=names.get(st, st),
+                usb=bool(usb), ble=bool(ble), charging=bool(chg),
+                force_charging=bool(fchg), rail_3v3=bool(r3), rail_5v=bool(r5),
+                rtc=(f"{yr:04d}-{mo:02d}-{da:02d} {hh:02d}:{mm:02d}:{ss:02d}"
+                     + ("" if rset else " (not set)")))
+
 # Settings resource indices (DeviceSettings field order) — a few useful ones:
 SET_STREAM_INTERVAL_MS = 0x07
 SET_TASK_BLE_MS        = 0x03
