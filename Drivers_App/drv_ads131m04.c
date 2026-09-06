@@ -48,6 +48,7 @@
 
 static Ads131m04SampleCb s_on_sample = 0;
 static uint16_t          s_dropped_count = 0;
+static bool              s_running = false;
 
 static const uint8_t s_tx_zero[FRAME_BYTES] = { 0 };   /* NULL command, no CRC */
 static uint8_t       s_rx_buf[FRAME_BYTES];
@@ -143,6 +144,9 @@ static void on_dma_complete(HalSpiInstance instance, bool success)
  * since the ADC's own DRDY will still be waiting next tick. */
 static void on_trigger(void)
 {
+    if (!s_running) {
+        return;
+    }
     if (hal_gpio_get(ADC_READY_PORT, ADC_READY_PIN)) {
         /* DRDY still high -- not ready yet. */
         note_dropped();
@@ -167,6 +171,7 @@ DrvStatus drv_ads131m04_init(void)
 {
     s_on_sample     = 0;
     s_dropped_count = 0;
+    s_running       = false;
 
     hal_spi_init(HAL_SPI_ADC);
     hal_spi_register_dma_callback(HAL_SPI_ADC, on_dma_complete);
@@ -193,10 +198,43 @@ DrvStatus drv_ads131m04_init(void)
     if (write_register(REG_GAIN1, GAIN1_REG_VALUE) != DRV_OK) return DRV_ERR_COMM;
     if (write_register(REG_MODE,  MODE_REG_VALUE)  != DRV_OK) return DRV_ERR_COMM;
 
+    /* Trigger callback is registered here but the timer is left stopped —
+     * drv_ads131m04_start() arms it. See the header comment. */
     hal_tim_adc_trigger_register_callback(on_trigger);
-    hal_tim_adc_trigger_start();
 
     return DRV_OK;
+}
+
+DrvStatus drv_ads131m04_start(void)
+{
+    if (s_running) {
+        return DRV_OK;
+    }
+    s_dropped_count = 0;
+    s_running = true;
+    hal_tim_adc_trigger_start();
+    return DRV_OK;
+}
+
+void drv_ads131m04_stop(void)
+{
+    if (!s_running) {
+        return;
+    }
+    hal_tim_adc_trigger_stop();
+    s_running = false;
+    /* Let any transfer already kicked from on_trigger() finish before we
+     * park CS — bounded wait, task context only (see header). At 16 MHz a
+     * FRAME_BYTES transfer is a few microseconds; this is generous. */
+    for (uint32_t i = 0; i < 100000U && hal_spi_is_busy(HAL_SPI_ADC); ++i) {
+        __asm volatile("nop");
+    }
+    hal_spi_cs_deassert(HAL_SPI_ADC);
+}
+
+bool drv_ads131m04_is_running(void)
+{
+    return s_running;
 }
 
 void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb)

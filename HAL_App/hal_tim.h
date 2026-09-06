@@ -44,8 +44,15 @@ typedef void (*HalTimCallback)(void);
  * output, interrupting at 20833.33 Hz (Prescaler 0 / Period 3071) =
  * the ADC's own sample rate. The registered callback runs in interrupt
  * context — keep it short. HAL_App stays ignorant of what "ADC" means;
- * the per-sample logic lives in Drivers_App/drv_ads131m04.c. */
+ * the per-sample logic lives in Drivers_App/drv_ads131m04.c.
+ *
+ * The trigger is NOT started at boot (WP8, v0.8.2): the 20833 Hz stream
+ * has no consumer yet and running it unconditionally starved the
+ * scheduler's SysTick. drv_ads131m04_start()/stop() gate it at runtime
+ * (toggled over the API — API2_RES_CMD_SIGNAL_ANALYSIS); _stop() calls
+ * hal_tim_adc_trigger_stop(). */
 void hal_tim_adc_trigger_start(void);
+void hal_tim_adc_trigger_stop(void);
 void hal_tim_adc_trigger_register_callback(HalTimCallback cb);
 
 #endif /* HAL_TIM_H */

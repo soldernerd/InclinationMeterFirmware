@@ -22,7 +22,8 @@ def opcode(verb, cat, res):
 # ---- well-known opcodes ----
 OP_SYS_IDENTITY     = opcode(GET, CAT_SYSTEM, 0x00)
 OP_SYS_DEVICE_STATE = opcode(GET, CAT_SYSTEM, 0x01)
-OP_CMD_TEST_BEEP    = opcode(EXECUTE, CAT_COMMANDS, 0x00)
+OP_CMD_TEST_BEEP       = opcode(EXECUTE, CAT_COMMANDS, 0x00)
+OP_CMD_SIGNAL_ANALYSIS = opcode(EXECUTE, CAT_COMMANDS, 0x01)  # payload: 1 byte, 0=stop 1=start
 
 SYS_IDENTITY, SYS_DEVICE_STATE, SYS_RTC = 0x00, 0x01, 0x02
 MEAS_ONBOARD_TEMP, MEAS_BATTERY_MV, MEAS_BATTERY_SOC = 0x00, 0x01, 0x02

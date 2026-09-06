@@ -2,6 +2,7 @@
 #define SVC_SIGNAL_ANALYSIS_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "drv_common.h"
 
 /* Wires itself to Drivers_App/drv_ads131m04.c's per-sample callback and
@@ -14,8 +15,23 @@
  * it, phase fixed relative to channel 2 (= 0 by definition, per the task
  * spec). See the .c file's top comment for the math this is built on and
  * its current calibration caveats -- explicitly a first cut; "additional
- * math may follow later" per the original request. */
+ * math may follow later" per the original request.
+ *
+ * v0.8.2: _init() only *configures* the ADS131M04 (register writes +
+ * MCLK) and registers the per-sample callback — it no longer starts the
+ * 20833 Hz sample stream. Nothing consumes the amplitude/phase output
+ * yet, and running the stream unconditionally starved the cooperative
+ * scheduler's SysTick (erratic status LED). Call
+ * svc_signal_analysis_start() to begin sampling; it is toggled at
+ * runtime over the API (EXECUTE / COMMANDS / API2_RES_CMD_SIGNAL_ANALYSIS). */
 DrvStatus svc_signal_analysis_init(void);
+
+/* Start / stop the ADC sample stream + DFT accumulation. start() also
+ * clears any half-accumulated batch so the first finalized result after
+ * a start is clean. Idempotent; task context only. */
+DrvStatus svc_signal_analysis_start(void);
+void      svc_signal_analysis_stop(void);
+bool      svc_signal_analysis_is_running(void);
 
 /* Finalizes the most recently completed accumulation batch, if one is
  * ready (see the .c file for why this is split from the per-sample

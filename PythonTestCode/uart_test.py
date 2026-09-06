@@ -119,6 +119,12 @@ def run_basic(link):
     after = a.decode_rtc(data3) if st3 == 0 else (a.STATUS.get(st3, st3))
     print(f"  RTC           [{before}] -> set [{a.STATUS.get(st2, st2)}] -> [{after}]")
 
+    # Signal analysis (ADS131M04 stream): off at boot; start then stop.
+    st_on, _  = request(link, a.OP_CMD_SIGNAL_ANALYSIS, b"\x01")
+    st_off, _ = request(link, a.OP_CMD_SIGNAL_ANALYSIS, b"\x00")
+    print(f"  SIGNAL_ANALYS start [{a.STATUS.get(st_on, st_on)}] "
+          f"-> stop [{a.STATUS.get(st_off, st_off)}]")
+
 
 def run_log(link, min_sev=0):
     print(f"Subscribing to debug log (min severity {a.SEVERITY[min_sev]}). Ctrl+C to stop.\n")

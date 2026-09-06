@@ -130,20 +130,43 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     }
 }
 
-DrvStatus svc_signal_analysis_init(void)
+static void reset_accumulators(void)
 {
     s_sample_idx  = 0;
     s_cycle_count = 0;
     s_batch_ready = false;
     for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
-        s_i_sum[i]        = 0;
-        s_q_sum[i]        = 0;
+        s_i_sum[i] = 0;
+        s_q_sum[i] = 0;
+    }
+}
+
+DrvStatus svc_signal_analysis_init(void)
+{
+    reset_accumulators();
+    for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
         s_amplitude_mv[i] = 0;
         s_phase_mdeg[i]   = 0;
     }
 
     drv_ads131m04_set_on_sample(on_sample);
-    return drv_ads131m04_init();
+    return drv_ads131m04_init();   /* configures only — does not start streaming */
+}
+
+DrvStatus svc_signal_analysis_start(void)
+{
+    reset_accumulators();
+    return drv_ads131m04_start();
+}
+
+void svc_signal_analysis_stop(void)
+{
+    drv_ads131m04_stop();
+}
+
+bool svc_signal_analysis_is_running(void)
+{
+    return drv_ads131m04_is_running();
 }
 
 void svc_signal_analysis_update(void)

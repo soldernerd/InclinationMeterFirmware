@@ -133,9 +133,18 @@ typedef enum {
 #define API2_OP_SYS_SET_RTC \
     API2_OPCODE(API2_VERB_SET, API2_CAT_SYSTEM_STATUS, API2_RES_SYS_RTC)
 
-/* ---------------- Commands (0x1, EXECUTE only) ---------------- */
+/* ---------------- Commands (0x1, EXECUTE only) ----------------
+ * 0x00 Test beep — no payload.
+ * 0x01 Signal analysis — 1-byte payload: 0 = stop the ADS131M04 sample
+ *      stream + DFT, 1 = start it. Off at boot (v0.8.2); see
+ *      Services/svc_signal_analysis.h for why. */
+#define API2_RES_CMD_TEST_BEEP        0x00U
+#define API2_RES_CMD_SIGNAL_ANALYSIS  0x01U
+
 #define API2_OP_CMD_TEST_BEEP \
-    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, 0x00U)
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
+#define API2_OP_CMD_SIGNAL_ANALYSIS \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_SIGNAL_ANALYSIS)
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
  * Only what REV B actually reads today. */

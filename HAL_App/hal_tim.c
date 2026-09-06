@@ -165,6 +165,10 @@ void hal_tim_adc_trigger_start(void)
 {
     HAL_TIM_Base_Start_IT(&htim7);
 }
+void hal_tim_adc_trigger_stop(void)
+{
+    HAL_TIM_Base_Stop_IT(&htim7);
+}
 
 void hal_tim_adc_trigger_register_callback(HalTimCallback cb)
 {

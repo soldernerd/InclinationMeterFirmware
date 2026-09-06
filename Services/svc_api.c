@@ -1,6 +1,7 @@
 #include "svc_api.h"
 #include "svc_battery.h"
 #include "svc_storage.h"
+#include "svc_signal_analysis.h"
 #include "svc_log.h"
 #include "hal_rtc.h"
 #include "app_scheduler.h"
@@ -250,11 +251,33 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
         return;
     }
-    if (res != 0x00U) {
+    if (res != API2_RES_CMD_TEST_BEEP && res != API2_RES_CMD_SIGNAL_ANALYSIS) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (res == API2_RES_CMD_SIGNAL_ANALYSIS) {
+        if (paylen != 1U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint8_t on = frame[API2_PACKET_HDR_BYTES];
+        if (on > 1U) {
+            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+            return;
+        }
+        if (on) {
+            (void)svc_signal_analysis_start();
+        } else {
+            svc_signal_analysis_stop();
+        }
+        svc_logf(API2_LOG_INFO, "cmd: signal analysis %s", on ? "start" : "stop");
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        return;
+    }
+
+    /* API2_RES_CMD_TEST_BEEP */
     if (paylen != 0U) {
         send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
         return;

@@ -2,15 +2,29 @@
 #define DRV_ADS131M04_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include "drv_common.h"
 
 /* Configures the ADS131M04 for continuous 4-channel simultaneous
  * sampling at a fixed ~20833.33 Hz (see Config/config.h's
- * ADS131M04_OSR_FIELD), PGA gain = 1 on all channels, and starts both
- * its MCLK feed and the acquisition trigger timer. Call
- * drv_ads131m04_set_on_sample() first so samples aren't silently
- * dropped from the moment streaming starts. */
+ * ADS131M04_OSR_FIELD), PGA gain = 1 on all channels, and starts its
+ * MCLK feed. Does NOT start the acquisition trigger — call
+ * drv_ads131m04_start() for that once a consumer is ready. Call
+ * drv_ads131m04_set_on_sample() before starting so samples aren't
+ * silently dropped from the moment streaming begins. */
 DrvStatus drv_ads131m04_init(void);
+
+/* Start / stop the 20833 Hz acquisition trigger. Split out from _init()
+ * in v0.8.2: the sample stream feeds only Services/svc_signal_analysis.c,
+ * which has no consumer of its own output yet, and running the pipeline
+ * unconditionally at boot starved the cooperative scheduler's SysTick
+ * (erratic status LED / 1-2 s stalls). Both are cheap and idempotent;
+ * _stop() also parks CS deasserted. Toggled at runtime over the API
+ * (API2_RES_CMD_SIGNAL_ANALYSIS). Not interrupt-safe — call from task
+ * context only. */
+DrvStatus drv_ads131m04_start(void);
+void      drv_ads131m04_stop(void);
+bool      drv_ads131m04_is_running(void);
 
 /* Fired once per sample, from the acquisition trigger's interrupt
  * context (HAL_App/hal_tim.c's TIM7 callback -> this driver's DMA
