@@ -6,9 +6,10 @@ The third API transport: USART3 on the J4 / STDC14 debug header, 115200 8N1.
 Reachable with nothing but a USB-serial cable — no USB enumeration, no BLE
 central. Same protocol and same checks as hid_test.py / ble_test.py.
 
-  python uart_test.py                 # auto-detect the port
+  python uart_test.py                 # auto-detect the port, one full round-trip
   python uart_test.py --port COM7     # or name it
   python uart_test.py --log           # subscribe to the debug-log stream, print live
+  python uart_test.py --env           # poll the BME280 (temp/pressure/humidity) once/sec
   python uart_test.py --port COM7 --log
 
 Install:   pip install pyserial
@@ -126,19 +127,46 @@ def run_basic(link):
           f"-> stop [{a.STATUS.get(st_off, st_off)}]")
 
     # BME280 (WP9) — GET temp / pressure / humidity / ok
+    env = read_bme280(link)
+    if env is None:
+        print("  BME280        GET failed")
+    else:
+        t, p, h, ok = env
+        fresh = "fresh" if ok else "STALE (sensor not connected)"
+        print(f"  BME280        {t:+.2f} C  {p:.1f} hPa  {h:.1f} %RH   [{fresh}]")
+
+
+def read_bme280(link):
+    """GET the four BME280 Measurements resources. Returns
+    (temp_C, pressure_hPa, humidity_pct, ok_bool) or None on any failure."""
     def meas(res):
         st, d = request(link, a.opcode(a.GET, a.CAT_MEAS, res))
         return d if st == 0 else None
     dt, dp, dh, dok = (meas(a.MEAS_BME280_TEMP), meas(a.MEAS_BME280_PRESS),
                        meas(a.MEAS_BME280_HUMID), meas(a.MEAS_BME280_OK))
-    if None not in (dt, dp, dh, dok):
-        t = struct.unpack("<h", dt[:2])[0] / 100
-        p = struct.unpack("<I", dp[:4])[0] / 100
-        h = struct.unpack("<H", dh[:2])[0] / 100
-        fresh = "fresh" if dok[0] else "STALE (sensor not connected)"
-        print(f"  BME280        {t:+.2f} C  {p:.1f} hPa  {h:.1f} %RH   [{fresh}]")
-    else:
-        print("  BME280        GET failed")
+    if None in (dt, dp, dh, dok):
+        return None
+    return (struct.unpack("<h", dt[:2])[0] / 100,
+            struct.unpack("<I", dp[:4])[0] / 100,
+            struct.unpack("<H", dh[:2])[0] / 100,
+            bool(dok[0]))
+
+
+def run_env(link, period=1.0):
+    print("Polling BME280 once/sec. Ctrl+C to stop.\n")
+    try:
+        while True:
+            env = read_bme280(link)
+            ts = datetime.datetime.now().strftime("%H:%M:%S")
+            if env is None:
+                print(f"  {ts}  GET failed")
+            else:
+                t, p, h, ok = env
+                print(f"  {ts}  {t:+6.2f} C   {p:8.2f} hPa   {h:5.1f} %RH"
+                      f"   {'' if ok else '[STALE]'}")
+            time.sleep(period)
+    except KeyboardInterrupt:
+        print("\nstopped.")
 
 
 def run_log(link, min_sev=0):
@@ -172,6 +200,8 @@ def main():
     try:
         if "--log" in args:
             run_log(link)
+        elif "--env" in args:
+            run_env(link)
         else:
             run_basic(link)
     finally:
