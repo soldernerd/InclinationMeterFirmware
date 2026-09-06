@@ -281,7 +281,12 @@
 #define BUZZER_PORT         GPIOC
 #define BUZZER_PIN          GPIO_PIN_9      /* PC9, TIM3_CH4 (AF1) */
 
-/* I2C1 — EEPROM (and BME280 in future WPs) */
+/* I2C1 — EEPROM (24LC256, drv_24lc256.c) and BME280 environmental sensor
+ * (WP9, drv_bme280.c) share this bus. No BME280-specific port/pin macros
+ * needed here -- unlike SPI's per-device CS pins, I2C addressing is
+ * per-transaction (hal_i2c.c's *_addr parameter), so a second device on
+ * the same bus needs no new CubeMX/pin config, just its own 7-bit address
+ * (BME280_I2C_ADDR, drv_bme280.h). */
 #define I2C1_SCL_PORT       GPIOB
 #define I2C1_SCL_PIN        GPIO_PIN_6      /* PB6, I2C1_SCL AF6 — unchanged */
 #define I2C1_SDA_PORT       GPIOB

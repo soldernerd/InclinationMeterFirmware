@@ -123,6 +123,22 @@ typedef struct {
      *   6 = read-back mismatch (pass B, inverted pattern) */
     uint8_t  eeprom_selftest;
 
+    /* BME280 environmental sensor (WP9, Drivers_App/drv_bme280.c),
+     * shares I2C1 with the EEPROM. bme280_temp_cdeg is a THIRD,
+     * independent temperature reading -- not the same sensor as
+     * temperature_cdeg above (that field is the pre-REV-B
+     * SCL3300/PCAP04-era on-board reading; REV B has since gained its
+     * own separate TMP236, see svc_battery.c) or TEMP_SENSE_EXT's future
+     * LM35. Updated once per second by App/app_scheduler.c's
+     * task_bme280() (mirrors task_temperature()'s TMP236 pattern -- no
+     * Services-layer wrapper needed since drv_bme280.c already does all
+     * the compensation math itself); bme280_ok stays false until the
+     * first successful conversion. */
+    int16_t  bme280_temp_cdeg;         /* 0.01 degC / LSB */
+    uint32_t bme280_pressure_pa;       /* Pa */
+    uint16_t bme280_humidity_centipct; /* 0.01 %RH / LSB */
+    bool     bme280_ok;
+
     bool     calibration_valid;
 
     /* Local UI input (WP3), published by Services/svc_input.c. Raw

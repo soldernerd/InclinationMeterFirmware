@@ -4,8 +4,8 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1–WP8 complete and on `master`** (REV B hardware), all bench-tested on real silicon
-(WP5 skipped):
+**WP1–WP8 complete and bench-tested on `master`** (REV B hardware, WP5 skipped); **WP9
+squash-ported, build/boot-verified, bench validation pending**:
 
 - **WP1** — Sharp Memory LCD bring-up, VCOM timer, u8g2.
 - **WP2** — power rails, battery monitoring, Standby, EEPROM (per-subsystem pages).
@@ -30,14 +30,20 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
   ×4-channel 24-bit-packed RAM buffer at full rate, then streams it out chunked over any
   transport — `docs/api-v2-spec.md` §4.5). Register/rate diagnostics under API `Raw data`
   resource 0x00. See `docs/wp8_ads131m04_adc.md`.
+- **WP9** — Bosch BME280 environmental sensor (`Drivers_App/drv_bme280.c`): temperature /
+  pressure / humidity at 1 Hz over I2C1 (shared with the EEPROM, no CubeMX change), a third
+  independent temperature source. Forced mode, ×1 oversampling, hot-plug tolerant. Readings
+  land in `g_system_state` (`bme280_*`); no API/display surface yet. *Squash-ported onto
+  `master`, build/boot-verified; bench validation of the readings pending.* See
+  `docs/wp9_bme280_env_sensor.md`.
 
-Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 78% / FLASH 29% (the bulk
+Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 78% / FLASH 30% (the WP8 bulk
 capture buffer is ~50% of SRAM on its own). Tagged `wp1-debugged` … `wp8-debugged`. The
-`wp2`–`wp8` branch pointers track `master`.
+`wp2`–`wp9` branch pointers track `master`.
 
-The `wp9`–`wp11` branches hold sketched-but-not-bench-tested sensor drivers
-(BME280, displacement demod, remaining API v2 resources). Each is squash-ported onto
-`master` and bench-validated one at a time. `docs/wp2-5_rebase_status.md` is the historical
+The `wp10`–`wp11` branches hold sketched-but-not-bench-tested code (displacement demod,
+remaining API v2 resources). Each is squash-ported onto `master` and bench-validated one at
+a time. `docs/wp2-5_rebase_status.md` is the historical
 record of the August branch-rebase effort (superseded by the September bench work).
 
 ## Hardware

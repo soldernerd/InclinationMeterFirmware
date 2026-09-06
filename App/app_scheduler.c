@@ -3,6 +3,7 @@
 #include "app_leds.h"
 #include "app_ui.h"
 #include "drv_tmp236.h"
+#include "drv_bme280.h"
 #include "drv_sharp_lcd.h"
 #include "drv_buzzer.h"
 #include "hal_adc.h"
@@ -51,6 +52,29 @@ static void task_temperature(void)
     /* drv_tmp236_start_read just calls hal_adc_start; safe to call even if
      * a scan is already running — hal_adc_start no-ops in that case. */
     (void)drv_tmp236_start_read();
+}
+
+static void task_bme280(void)
+{
+    /* One synchronous trigger+poll+read+compensate cycle per call
+     * (bounded, see config.h/drv_bme280.h) -- mirrors
+     * task_temperature()'s TMP236 pattern above, just with the whole
+     * cycle inside drv_bme280_update() instead of split across a
+     * start/get pair, since there's no async ADC hardware to wait on
+     * here. bme280_ok is keyed off update()'s own return, not
+     * get_result()'s -- get_result() keeps returning DRV_OK (the last
+     * good reading) even after the sensor stops responding, which
+     * would otherwise leave bme280_ok stuck true forever. */
+    bool ok = (drv_bme280_update() == DRV_OK);
+    g_system_state.bme280_ok = ok;
+    if (ok) {
+        bme280_data_t data;
+        if (drv_bme280_get_result(&data) == DRV_OK) {
+            g_system_state.bme280_temp_cdeg         = data.temp_cdeg;
+            g_system_state.bme280_pressure_pa       = data.pressure_pa;
+            g_system_state.bme280_humidity_centipct = data.humidity_centipct;
+        }
+    }
 }
 
 static void task_battery(void)
@@ -134,7 +158,8 @@ static SchedulerEntry s_tasks[] = {
     { task_signal_analysis, 0,                   0 },
     { task_ui,              0,                   0 },
     { task_display,         0,                   0 },
-    { task_leds,            DEFAULT_TASK_LED_MS, 0 },
+    { task_leds,            DEFAULT_TASK_LED_MS,    0 },
+    { task_bme280,          DEFAULT_TASK_BME280_MS, 0 },
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 
@@ -168,8 +193,10 @@ void app_scheduler_reload_periods(void)
                                                                  * svc_signal_analysis.c) */
     s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* ui */
     s_tasks[14].period_ms = g_device_settings.task_display_ms;   /* display */
-    /* s_tasks[15] (LEDs) period is the fixed literal set in the table above —
-     * not user/BLE-configurable like the others. */
+    /* s_tasks[15] (LEDs) and s_tasks[16] (BME280) periods are the fixed
+     * literals set in the table above — not user/BLE-configurable like the
+     * others (DeviceSettings has no room left for another field — see
+     * config.h's DEFAULT_TASK_UART_MS / DEFAULT_TASK_BME280_MS). */
 }
 
 void app_scheduler_init(void)
