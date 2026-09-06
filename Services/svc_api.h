@@ -31,10 +31,19 @@ typedef enum {
  * See Services/svc_txframe.h. */
 typedef void (*ApiSendFn)(const uint8_t *data, uint16_t len, bool urgent);
 
+/* Optional per-transport back-pressure hook: returns true when the
+ * transport's TX ring can take at least one more full-size (non-urgent)
+ * frame without eating the reserve. Only the bulk-transfer pump consults
+ * it — it paces chunk output to the wire instead of blindly filling the
+ * ring and dropping chunks. A transport that doesn't register one is
+ * treated as always-ready (best-effort; USB does this). */
+typedef bool (*ApiReadyFn)(void);
+
 void svc_api_init(void);
-void svc_api_update(void);   /* scheduler hook — currently only drains the debug-log push */
+void svc_api_update(void);   /* scheduler hook — drains the debug-log push and the bulk-transfer pump */
 
 void svc_api_register_transport(ApiTransport t, ApiSendFn send_fn);
+void svc_api_register_transport_ready(ApiTransport t, ApiReadyFn ready_fn);
 void svc_api_connected(ApiTransport t);
 void svc_api_disconnected(ApiTransport t);
 
@@ -203,5 +212,26 @@ typedef enum {
     API2_LOG_WARN  = 0x01U,
     API2_LOG_ERROR = 0x02U,
 } Api2LogSeverity;
+
+/* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ----------------
+ * 0x00 Raw ADC capture. START_BULK: no request payload (the transfer size
+ *      is fixed and known from this doc, spec §4.5). Ack is a bare status
+ *      byte. Then Config/config.h ADC_BULK_SAMPLE_COUNT samples are
+ *      streamed as chunk packets under the same opcode, each:
+ *        [status=OK][page:1][sample:16]xN,  N <= ADC_BULK_CHUNK_SAMPLES
+ *      one sample = ch0,ch1,ch2,ch3 as int32 LE, raw sign-extended 24-bit
+ *      ADC codes (1 LSB = 2.4 V / 2^23, gain 1). `page` is the wrapping
+ *      chunk counter (§2.3) for gap detection. The host knows it's done
+ *      when it has ADC_BULK_SAMPLE_COUNT samples; on a CRC error or gap it
+ *      CANCEL_BULKs and restarts (§4.5, no per-chunk resend).
+ *      Exclusivity: device-wide, one bulk at a time; also NACKs
+ *      BUSY_EXCLUSIVE while the real-time signal-analysis stream is running
+ *      and BUSY_RESOURCE if the ADS131M04 failed to init. */
+#define API2_RES_BULK_RAW_ADC   0x00U
+
+#define API2_OP_BULK_RAW_ADC_START \
+    API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
+#define API2_OP_BULK_RAW_ADC_CANCEL \
+    API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
 
 #endif /* SVC_API_H */

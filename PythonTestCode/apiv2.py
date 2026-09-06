@@ -25,6 +25,16 @@ OP_SYS_DEVICE_STATE = opcode(GET, CAT_SYSTEM, 0x01)
 OP_CMD_TEST_BEEP       = opcode(EXECUTE, CAT_COMMANDS, 0x00)
 OP_CMD_SIGNAL_ANALYSIS = opcode(EXECUTE, CAT_COMMANDS, 0x01)  # payload: 1 byte, 0=stop 1=start
 
+# Bulk raw-ADC capture (category 0x8). START_BULK has no request payload;
+# chunks come back under the SAME opcode, each: [status=OK][page:1][sample:16]xN
+# with one sample = ch0..ch3 as int32 LE (raw sign-extended 24-bit codes).
+BULK_RAW_ADC              = 0x00
+OP_BULK_RAW_ADC_START     = opcode(START_BULK,  CAT_BULK, BULK_RAW_ADC)
+OP_BULK_RAW_ADC_CANCEL    = opcode(CANCEL_BULK, CAT_BULK, BULK_RAW_ADC)
+ADC_BULK_SAMPLE_COUNT     = 4096   # must match Config/config.h
+ADC_BULK_CHUNK_SAMPLES    = 7      # must match Config/config.h
+ADC_RAW_LSB_V             = 2.4 / (1 << 23)   # 1 raw code = 2.4 V / 2^23 (gain 1)
+
 SYS_IDENTITY, SYS_DEVICE_STATE, SYS_RTC = 0x00, 0x01, 0x02
 MEAS_ONBOARD_TEMP, MEAS_BATTERY_MV, MEAS_BATTERY_SOC = 0x00, 0x01, 0x02
 DBG_LOG_STREAM = 0x00
@@ -129,6 +139,18 @@ def decode_rtc(data: bytes):
     year, month, day, wd, hh, mm, ss, is_set = struct.unpack("<HBBBBBBB", data[:9])
     tag = "" if is_set else "  (NOT SET)"
     return f"{year:04d}-{month:02d}-{day:02d} {_WD.get(wd, wd)} {hh:02d}:{mm:02d}:{ss:02d}{tag}"
+
+
+def decode_bulk_adc_chunk(data: bytes):
+    """A bulk raw-ADC chunk's payload-after-status: [page:1][sample:16]xN.
+    Returns (page, [(ch0,ch1,ch2,ch3), ...]) with channels as signed ints."""
+    if not data:
+        return (None, [])
+    page = data[0]
+    body = data[1:]
+    n = len(body) // 16
+    rows = [struct.unpack_from("<iiii", body, 16 * i) for i in range(n)]
+    return (page, rows)
 
 
 def build_rtc_set(year, month, day, hour, minute, second) -> bytes:

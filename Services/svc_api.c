@@ -66,11 +66,25 @@ typedef struct {
 typedef struct {
     bool               connected;
     ApiSendFn          send_fn;
+    ApiReadyFn         ready_fn;   /* optional TX back-pressure hook (bulk pump only) */
     MeasurementSubSlot meas[API2_MEASUREMENT_SLOTS];
     DebugSubState      dbg;
 } ApiTransportState;
 
 static ApiTransportState s_t[API_TRANSPORT_COUNT];
+
+/* ---------------- bulk transfer state (docs/api-v2-spec.md §4.5) ----------------
+ * One at a time, device-wide. CAPTURING while the RAM buffer fills at the
+ * ADC sample rate; SENDING streams it out in chunks paced by the
+ * transport's ready_fn. */
+static struct {
+    bool         active;
+    enum { BULK_IDLE = 0, BULK_CAPTURING, BULK_SENDING } phase;
+    ApiTransport transport;
+    uint16_t     opcode;
+    uint16_t     send_pos;   /* next sample index to send, during SENDING */
+    uint8_t      page;       /* wrapping chunk counter */
+} s_bulk;
 
 /* ---------------- helpers ---------------- */
 
@@ -285,6 +299,122 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
     drv_buzzer_beep(BUZZER_TONE_CLICK, 100U);
     svc_log(API2_LOG_INFO, "cmd: test beep");
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+/* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ---------------- */
+
+static void bulk_abort(void)
+{
+    svc_signal_analysis_capture_end();
+    s_bulk.active = false;
+    s_bulk.phase  = BULK_IDLE;
+}
+
+static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
+                          uint8_t res, const uint8_t *frame, uint16_t paylen)
+{
+    if (verb != API2_VERB_START_BULK && verb != API2_VERB_CANCEL_BULK) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    if (res != API2_RES_BULK_RAW_ADC) {
+        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
+        return;
+    }
+    if (!check_crc(t, opcode, frame, paylen)) return;
+    if (paylen != 0U) {
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+
+    if (verb == API2_VERB_CANCEL_BULK) {
+        if (!s_bulk.active) {
+            send_response(t, opcode, API2_STATUS_NOTHING_TO_CANCEL, 0, 0);
+            return;
+        }
+        bulk_abort();
+        svc_log(API2_LOG_INFO, "bulk: raw adc cancelled");
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        return;
+    }
+
+    /* START_BULK */
+    if (s_bulk.active) {
+        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
+        return;
+    }
+    if (!g_system_state.ads_ok) {
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    if (svc_signal_analysis_is_running()) {
+        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
+        return;
+    }
+    if (svc_signal_analysis_capture_begin() != DRV_OK) {
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    s_bulk.active    = true;
+    s_bulk.phase     = BULK_CAPTURING;
+    s_bulk.transport = t;
+    s_bulk.opcode    = opcode;
+    s_bulk.send_pos  = 0;
+    s_bulk.page      = 0;
+    svc_log(API2_LOG_INFO, "bulk: raw adc capture started");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+/* Chunk pump — runs from svc_api_update() each tick while a bulk transfer
+ * is active. CAPTURING: wait for the RAM buffer to fill. SENDING: emit up
+ * to ADC_BULK_CHUNKS_PER_TICK chunks, but only while the owning
+ * transport's TX ring has headroom (ready_fn) so we pace to the wire and
+ * yield to other traffic between bursts (spec §4.1). */
+static void bulk_pump(void)
+{
+    if (!s_bulk.active) return;
+
+    ApiTransport t = s_bulk.transport;
+    if (!s_t[t].connected) {           /* peer vanished mid-transfer */
+        bulk_abort();
+        return;
+    }
+
+    if (s_bulk.phase == BULK_CAPTURING) {
+        if (!svc_signal_analysis_capture_done()) return;
+        uint16_t drops = svc_signal_analysis_capture_drops();
+        svc_signal_analysis_capture_end();   /* stop the stream ASAP */
+        s_bulk.phase    = BULK_SENDING;
+        s_bulk.send_pos = 0;
+        s_bulk.page     = 0;
+        svc_logf(API2_LOG_INFO, "bulk: capture full, %u trigger drops", (unsigned)drops);
+    }
+
+    const int32_t *buf   = svc_signal_analysis_capture_buffer();   /* [total*4] */
+    const uint16_t total = svc_signal_analysis_capture_sample_count();
+    const ApiReadyFn ready = s_t[t].ready_fn;
+
+    for (uint8_t c = 0; c < ADC_BULK_CHUNKS_PER_TICK && s_bulk.send_pos < total; ++c) {
+        if (ready != 0 && !ready()) break;   /* let the link drain */
+
+        uint16_t k = (uint16_t)(total - s_bulk.send_pos);
+        if (k > ADC_BULK_CHUNK_SAMPLES) k = ADC_BULK_CHUNK_SAMPLES;
+
+        uint8_t payload[1U + ADC_BULK_CHUNK_SAMPLES * 4U * sizeof(int32_t)];
+        payload[0] = s_bulk.page++;
+        memcpy(&payload[1], &buf[(size_t)s_bulk.send_pos * 4U],
+               (size_t)k * 4U * sizeof(int32_t));
+
+        send_framed(t, s_bulk.opcode, API2_STATUS_OK, payload,
+                    (uint16_t)(1U + (size_t)k * 4U * sizeof(int32_t)), false);
+        s_bulk.send_pos = (uint16_t)(s_bulk.send_pos + k);
+    }
+
+    if (s_bulk.send_pos >= total) {
+        svc_logf(API2_LOG_INFO, "bulk: raw adc sent (%u samples)", (unsigned)total);
+        s_bulk.active = false;
+        s_bulk.phase  = BULK_IDLE;
+    }
 }
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ---------------- */
@@ -612,6 +742,9 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
         case API2_CAT_DEBUG_MSGS:
             dispatch_debug(t, opcode, verb, res, frame, paylen);
             return;
+        case API2_CAT_BULK:
+            dispatch_bulk(t, opcode, verb, res, frame, paylen);
+            return;
         default:
             /* Calibrations (0x2) and 0x5-0xF: not built in this ported
              * subset. Spec §7 -- "not implemented yet" and "not a real
@@ -633,12 +766,19 @@ static void clear_subs(ApiTransport t)
 void svc_api_init(void)
 {
     memset(s_t, 0, sizeof s_t);
+    memset(&s_bulk, 0, sizeof s_bulk);
 }
 
 void svc_api_register_transport(ApiTransport t, ApiSendFn send_fn)
 {
     if (t >= API_TRANSPORT_COUNT) return;
     s_t[t].send_fn = send_fn;
+}
+
+void svc_api_register_transport_ready(ApiTransport t, ApiReadyFn ready_fn)
+{
+    if (t >= API_TRANSPORT_COUNT) return;
+    s_t[t].ready_fn = ready_fn;
 }
 
 void svc_api_connected(ApiTransport t)
@@ -653,6 +793,9 @@ void svc_api_disconnected(ApiTransport t)
     if (t >= API_TRANSPORT_COUNT) return;
     s_t[t].connected = false;
     clear_subs(t);
+    if (s_bulk.active && s_bulk.transport == t) {
+        bulk_abort();
+    }
 }
 
 void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len)
@@ -705,6 +848,8 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
 
 void svc_api_update(void)
 {
+    bulk_pump();
+
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
         if (!s_t[t].connected || !s_t[t].dbg.active) continue;
         DebugSubState *d = &s_t[t].dbg;

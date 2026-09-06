@@ -68,6 +68,14 @@ static void send_via_ble(const uint8_t *data, uint16_t len, bool urgent)
     ble_tx_pump();
 }
 
+/* Bulk-transfer back-pressure: true when the ring can take a full-size
+ * non-urgent frame and still keep the reserve free. */
+static bool ble_tx_ready(void)
+{
+    return svc_txframe_free_bytes(&s_tx) >=
+           (uint16_t)(API2_PACKET_MAX_SIZE + SVC_TXFRAME_LEN_PREFIX + SVC_TXFRAME_RESERVE_BYTES);
+}
+
 void svc_ble_init(void)
 {
     s_was_connected = false;
@@ -75,6 +83,7 @@ void svc_ble_init(void)
     s_reasm.pos     = 0;
     svc_txframe_init(&s_tx, s_tx_buf, sizeof s_tx_buf);
     svc_api_register_transport(API_TRANSPORT_BLE, send_via_ble);
+    svc_api_register_transport_ready(API_TRANSPORT_BLE, ble_tx_ready);
     drv_rn4871_register_rx_callback(rx_handler);
     (void)drv_rn4871_init();
 }

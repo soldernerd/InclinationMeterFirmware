@@ -184,4 +184,28 @@
  * 20833.33 Hz — first-cut update rate, safe to retune. */
 #define SIGNAL_ANALYSIS_BATCH_CYCLES   64U
 
+/* --- Bulk raw-ADC capture (API v2, category 0x8 / START_BULK) ---
+ * Decouples high-rate sampling from transport speed: the device fills a
+ * RAM buffer at the full 20833.33 Hz sample rate, then streams it out in
+ * chunks over whatever transport at whatever speed the link allows
+ * (docs/api-v2-spec.md §4.5).
+ *
+ * Buffer = ADC_BULK_SAMPLE_COUNT samples x 4 channels x int32 (raw
+ * sign-extended 24-bit codes). 4096 x 4 x 4 = 65536 bytes ~= 44% of the
+ * 144 KB SRAM — well clear of .bss + stack. At 20833.33 Hz one capture
+ * spans ~197 ms (~512 cycles of the 2604 Hz DAC tone). Keep it a power of
+ * two. */
+#define ADC_BULK_SAMPLE_COUNT          4096U
+
+/* Samples per bulk chunk packet. Each chunk payload is
+ * [page:1][sample:16]xN; the whole API2 packet must fit API2_PACKET_MAX_SIZE
+ * (128): 6 (frame) + 1 (status) + 1 (page) + 16*N <= 128 -> N <= 7. */
+#define ADC_BULK_CHUNK_SAMPLES        7U
+
+/* Chunks pushed per svc_api_update() tick, upper bound — actual pace is
+ * governed by the transport TX-ring headroom (svc_api's ready_fn). Keeps
+ * the pump yielding so command responses / other traffic still get a turn
+ * mid-transfer (docs/api-v2-spec.md §4.1). */
+#define ADC_BULK_CHUNKS_PER_TICK      4U
+
 #endif /* CONFIG_H */

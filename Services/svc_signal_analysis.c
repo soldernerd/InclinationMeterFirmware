@@ -83,8 +83,32 @@ static volatile uint32_t s_pending_n;
 static int32_t s_amplitude_mv[NUM_CHANNELS];
 static int32_t s_phase_mdeg[NUM_CHANNELS];
 
+/* --- Bulk raw-ADC capture buffer --- raw sign-extended 24-bit codes,
+ * ch0..ch3 interleaved per sample. Filled from on_sample() (ISR) while
+ * s_cap_active; drained by svc_api's bulk pump (task) once s_cap_done. */
+static int32_t          s_cap_buf[ADC_BULK_SAMPLE_COUNT][NUM_CHANNELS];
+static volatile uint16_t s_cap_idx    = 0;
+static volatile bool     s_cap_active = false;
+static volatile bool     s_cap_done   = false;
+
 static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
 {
+    /* Bulk-capture mode: just store the raw codes and get out. The DFT
+     * MAC below is skipped so the ISR is trivially cheap for the ~0.2 s a
+     * capture runs (see svc_signal_analysis.h). */
+    if (s_cap_active) {
+        if (s_cap_idx < ADC_BULK_SAMPLE_COUNT) {
+            s_cap_buf[s_cap_idx][0] = ch0;
+            s_cap_buf[s_cap_idx][1] = ch1;
+            s_cap_buf[s_cap_idx][2] = ch2;
+            s_cap_buf[s_cap_idx][3] = ch3;
+            if (++s_cap_idx >= ADC_BULK_SAMPLE_COUNT) {
+                s_cap_done = true;
+            }
+        }
+        return;
+    }
+
     /* Runs in the ADC DMA-completion interrupt at 20833 Hz — keep it
      * cheap. Pre-shifted samples keep the products in int32 so this is a
      * 32x32->32 multiply plus a 64-bit add, not a 32x32->64 multiply. */
@@ -149,8 +173,12 @@ DrvStatus svc_signal_analysis_init(void)
         s_phase_mdeg[i]   = 0;
     }
 
+    /* init() first — it resets the driver's callback pointer to 0 — then
+     * install ours. (init() no longer starts the stream, so nothing fires
+     * between the two calls.) */
+    DrvStatus rc = drv_ads131m04_init();
     drv_ads131m04_set_on_sample(on_sample);
-    return drv_ads131m04_init();   /* configures only — does not start streaming */
+    return rc;
 }
 
 DrvStatus svc_signal_analysis_start(void)
@@ -167,6 +195,43 @@ void svc_signal_analysis_stop(void)
 bool svc_signal_analysis_is_running(void)
 {
     return drv_ads131m04_is_running();
+}
+
+DrvStatus svc_signal_analysis_capture_begin(void)
+{
+    if (s_cap_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    s_cap_idx    = 0;
+    s_cap_done   = false;
+    s_cap_active = true;   /* on_sample() now stores into s_cap_buf */
+    return drv_ads131m04_start();
+}
+
+bool svc_signal_analysis_capture_done(void)
+{
+    return s_cap_done;
+}
+
+void svc_signal_analysis_capture_end(void)
+{
+    s_cap_active = false;
+    drv_ads131m04_stop();
+}
+
+const int32_t *svc_signal_analysis_capture_buffer(void)
+{
+    return &s_cap_buf[0][0];
+}
+
+uint16_t svc_signal_analysis_capture_sample_count(void)
+{
+    return ADC_BULK_SAMPLE_COUNT;
+}
+
+uint16_t svc_signal_analysis_capture_drops(void)
+{
+    return drv_ads131m04_get_dropped_count();
 }
 
 void svc_signal_analysis_update(void)

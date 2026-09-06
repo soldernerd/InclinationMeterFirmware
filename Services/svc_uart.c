@@ -52,12 +52,21 @@ static void send_via_uart(const uint8_t *data, uint16_t len, bool urgent)
     uart_tx_pump();
 }
 
+/* Bulk-transfer back-pressure: true when the ring can take a full-size
+ * non-urgent frame and still keep the reserve free. */
+static bool uart_tx_ready(void)
+{
+    return svc_txframe_free_bytes(&s_tx) >=
+           (uint16_t)(API2_PACKET_MAX_SIZE + SVC_TXFRAME_LEN_PREFIX + SVC_TXFRAME_RESERVE_BYTES);
+}
+
 void svc_uart_init(void)
 {
     s_tx_overflowed = false;
     s_reasm.pos     = 0;
     svc_txframe_init(&s_tx, s_tx_buf, sizeof s_tx_buf);
     svc_api_register_transport(API_TRANSPORT_UART, send_via_uart);
+    svc_api_register_transport_ready(API_TRANSPORT_UART, uart_tx_ready);
     svc_api_connected(API_TRANSPORT_UART);   /* wired link: connected for good */
 }
 

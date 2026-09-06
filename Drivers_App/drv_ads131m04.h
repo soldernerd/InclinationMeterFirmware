@@ -9,9 +9,10 @@
  * sampling at a fixed ~20833.33 Hz (see Config/config.h's
  * ADS131M04_OSR_FIELD), PGA gain = 1 on all channels, and starts its
  * MCLK feed. Does NOT start the acquisition trigger — call
- * drv_ads131m04_start() for that once a consumer is ready. Call
- * drv_ads131m04_set_on_sample() before starting so samples aren't
- * silently dropped from the moment streaming begins. */
+ * drv_ads131m04_start() for that once a consumer is ready. Resets the
+ * per-sample callback to none; call drv_ads131m04_set_on_sample() AFTER
+ * this (and before drv_ads131m04_start()) so samples aren't silently
+ * dropped from the moment streaming begins. */
 DrvStatus drv_ads131m04_init(void);
 
 /* Start / stop the 20833 Hz acquisition trigger. Split out from _init()
