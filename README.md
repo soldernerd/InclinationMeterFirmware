@@ -4,8 +4,7 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1–WP8 complete and bench-tested on `master`** (REV B hardware, WP5 skipped); **WP9
-squash-ported, build/boot-verified, bench validation pending**:
+**WP1–WP9 complete and bench-tested on `master`** (REV B hardware, WP5 skipped):
 
 - **WP1** — Sharp Memory LCD bring-up, VCOM timer, u8g2.
 - **WP2** — power rails, battery monitoring, Standby, EEPROM (per-subsystem pages).
@@ -34,13 +33,12 @@ squash-ported, build/boot-verified, bench validation pending**:
   pressure / humidity at 1 Hz over I2C1 (shared with the EEPROM, no CubeMX change), a third
   independent temperature source. Forced mode, ×1 oversampling, hot-plug tolerant. Shown on
   the STATUS screen and readable/subscribable over the API (`Measurements` resources
-  0x03–0x06: temp / pressure / humidity / fresh-flag). *Squash-ported onto `master`,
-  build/boot-verified; bench validation of the readings pending a physical sensor — with
-  none connected the fresh-flag reads 0 and the values 0.* See
+  0x03–0x06: temp / pressure / humidity / fresh-flag). Bench-confirmed with a physical
+  sensor (~30 °C / 973 hPa / 37 %RH, compensation math verified). See
   `docs/wp9_bme280_env_sensor.md`.
 
 Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 78% / FLASH 30% (the WP8 bulk
-capture buffer is ~50% of SRAM on its own). Tagged `wp1-debugged` … `wp8-debugged`. The
+capture buffer is ~50% of SRAM on its own). Tagged `wp1-debugged` … `wp9-debugged`. The
 `wp2`–`wp9` branch pointers track `master`.
 
 The `wp10`–`wp11` branches hold sketched-but-not-bench-tested code (displacement demod,
