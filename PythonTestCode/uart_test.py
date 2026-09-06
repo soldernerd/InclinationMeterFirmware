@@ -125,6 +125,21 @@ def run_basic(link):
     print(f"  SIGNAL_ANALYS start [{a.STATUS.get(st_on, st_on)}] "
           f"-> stop [{a.STATUS.get(st_off, st_off)}]")
 
+    # BME280 (WP9) — GET temp / pressure / humidity / ok
+    def meas(res):
+        st, d = request(link, a.opcode(a.GET, a.CAT_MEAS, res))
+        return d if st == 0 else None
+    dt, dp, dh, dok = (meas(a.MEAS_BME280_TEMP), meas(a.MEAS_BME280_PRESS),
+                       meas(a.MEAS_BME280_HUMID), meas(a.MEAS_BME280_OK))
+    if None not in (dt, dp, dh, dok):
+        t = struct.unpack("<h", dt[:2])[0] / 100
+        p = struct.unpack("<I", dp[:4])[0] / 100
+        h = struct.unpack("<H", dh[:2])[0] / 100
+        fresh = "fresh" if dok[0] else "STALE (sensor not connected)"
+        print(f"  BME280        {t:+.2f} C  {p:.1f} hPa  {h:.1f} %RH   [{fresh}]")
+    else:
+        print("  BME280        GET failed")
+
 
 def run_log(link, min_sev=0):
     print(f"Subscribing to debug log (min severity {a.SEVERITY[min_sev]}). Ctrl+C to stop.\n")

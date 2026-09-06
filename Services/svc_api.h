@@ -156,10 +156,18 @@ typedef enum {
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_SIGNAL_ANALYSIS)
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
- * Only what REV B actually reads today. */
+ * Only what REV B actually reads today. All are subscribable. */
 #define API2_RES_MEAS_ONBOARD_TEMP   0x00U   /* int16 centi-degC, TMP236 */
 #define API2_RES_MEAS_BATTERY_MV     0x01U   /* uint16 mV */
 #define API2_RES_MEAS_BATTERY_SOC    0x02U   /* uint8 percent */
+/* BME280 (WP9), I2C1. All read from g_system_state.bme280_*; report the
+ * last value even when the sensor is absent/stale — pair with
+ * `System status` DEVICE_STATE or a dedicated flag to know freshness
+ * (bme280_ok). */
+#define API2_RES_MEAS_BME280_TEMP    0x03U   /* int16  centi-degC (0.01 degC/LSB) */
+#define API2_RES_MEAS_BME280_PRESS   0x04U   /* uint32 Pa */
+#define API2_RES_MEAS_BME280_HUMID   0x05U   /* uint16 centi-%RH (0.01 %RH/LSB) */
+#define API2_RES_MEAS_BME280_OK      0x06U   /* uint8 0/1 — is the last reading fresh */
 
 #define API2_MEASUREMENT_MIN_INTERVAL_MS 50U
 #define API2_MEASUREMENT_MAX_INTERVAL_MS 3600000U   /* 1 hour */

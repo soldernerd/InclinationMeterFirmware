@@ -489,6 +489,29 @@ static uint16_t read_battery_soc(uint8_t *buf)
     buf[0] = svc_battery_get_soc_pct();
     return 1U;
 }
+static uint16_t read_bme280_temp(uint8_t *buf)
+{
+    int16_t v = g_system_state.bme280_temp_cdeg;
+    memcpy(buf, &v, sizeof v);
+    return sizeof v;
+}
+static uint16_t read_bme280_press(uint8_t *buf)
+{
+    uint32_t v = g_system_state.bme280_pressure_pa;
+    memcpy(buf, &v, sizeof v);
+    return sizeof v;
+}
+static uint16_t read_bme280_humid(uint8_t *buf)
+{
+    uint16_t v = g_system_state.bme280_humidity_centipct;
+    memcpy(buf, &v, sizeof v);
+    return sizeof v;
+}
+static uint16_t read_bme280_ok(uint8_t *buf)
+{
+    buf[0] = g_system_state.bme280_ok ? 1U : 0U;
+    return 1U;
+}
 
 typedef struct {
     uint8_t           resource;
@@ -499,6 +522,10 @@ static const MeasurementResourceDesc s_meas_resources[] = {
     { API2_RES_MEAS_ONBOARD_TEMP, read_onboard_temp },
     { API2_RES_MEAS_BATTERY_MV,   read_battery_mv },
     { API2_RES_MEAS_BATTERY_SOC,  read_battery_soc },
+    { API2_RES_MEAS_BME280_TEMP,  read_bme280_temp },
+    { API2_RES_MEAS_BME280_PRESS, read_bme280_press },
+    { API2_RES_MEAS_BME280_HUMID, read_bme280_humid },
+    { API2_RES_MEAS_BME280_OK,    read_bme280_ok },
 };
 #define MEAS_RESOURCE_COUNT (sizeof(s_meas_resources) / sizeof(s_meas_resources[0]))
 

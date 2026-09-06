@@ -32,9 +32,11 @@ squash-ported, build/boot-verified, bench validation pending**:
   resource 0x00. See `docs/wp8_ads131m04_adc.md`.
 - **WP9** — Bosch BME280 environmental sensor (`Drivers_App/drv_bme280.c`): temperature /
   pressure / humidity at 1 Hz over I2C1 (shared with the EEPROM, no CubeMX change), a third
-  independent temperature source. Forced mode, ×1 oversampling, hot-plug tolerant. Readings
-  land in `g_system_state` (`bme280_*`); no API/display surface yet. *Squash-ported onto
-  `master`, build/boot-verified; bench validation of the readings pending.* See
+  independent temperature source. Forced mode, ×1 oversampling, hot-plug tolerant. Shown on
+  the STATUS screen and readable/subscribable over the API (`Measurements` resources
+  0x03–0x06: temp / pressure / humidity / fresh-flag). *Squash-ported onto `master`,
+  build/boot-verified; bench validation of the readings pending a physical sensor — with
+  none connected the fresh-flag reads 0 and the values 0.* See
   `docs/wp9_bme280_env_sensor.md`.
 
 Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 78% / FLASH 30% (the WP8 bulk

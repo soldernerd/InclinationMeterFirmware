@@ -240,7 +240,25 @@ static void draw_status_screen(void)
     } else {
         snprintf(line, sizeof line, "Time:      (not set)");
     }
-    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);                          y += 18;
+
+    /* BME280 environmental sensor (WP9). Refreshed here every second via
+     * the uptime redraw; the driver polls the sensor at 1 Hz. */
+    {
+        char env[56];
+        if (g_system_state.bme280_ok) {
+            int32_t  t   = g_system_state.bme280_temp_cdeg;              /* 0.01 degC */
+            uint32_t hpa10 = g_system_state.bme280_pressure_pa / 10U;    /* 0.1 hPa units */
+            uint32_t rh  = g_system_state.bme280_humidity_centipct;      /* 0.01 %RH */
+            snprintf(env, sizeof env, "Env:       %ld.%02ld C  %lu.%lu hPa  %lu.%lu %%",
+                     (long)(t / 100), (long)(t < 0 ? -(t % 100) : t % 100),
+                     (unsigned long)(hpa10 / 10), (unsigned long)(hpa10 % 10),
+                     (unsigned long)(rh / 100), (unsigned long)(rh % 100 / 10));
+        } else {
+            snprintf(env, sizeof env, "Env:       -- (BME280 not connected)");
+        }
+        u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, env);
+    }
 }
 
 /* ---- SETTINGS screen ---- */

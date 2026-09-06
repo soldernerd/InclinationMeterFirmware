@@ -44,6 +44,11 @@ _OSR_TABLE                = {0: 128, 1: 256, 2: 512, 3: 1024,
 
 SYS_IDENTITY, SYS_DEVICE_STATE, SYS_RTC = 0x00, 0x01, 0x02
 MEAS_ONBOARD_TEMP, MEAS_BATTERY_MV, MEAS_BATTERY_SOC = 0x00, 0x01, 0x02
+# BME280 (WP9) — GET or SUBSCRIBE under CAT_MEAS
+MEAS_BME280_TEMP  = 0x03   # int16  centi-degC
+MEAS_BME280_PRESS = 0x04   # uint32 Pa
+MEAS_BME280_HUMID = 0x05   # uint16 centi-%RH
+MEAS_BME280_OK    = 0x06   # uint8  0/1  (last reading fresh)
 DBG_LOG_STREAM = 0x00
 
 # Settings resource indices (DeviceSettings field order) — a few useful ones:
