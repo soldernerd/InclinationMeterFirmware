@@ -47,8 +47,13 @@ void MX_DMA_Init(void)
   /* DMA1_Channel1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-  /* DMA1_Channel2_3_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 0, 0);
+  /* DMA1_Channel2_3_IRQn interrupt configuration
+   * HAND-EDIT (WP8, 2026-09-06): priority 0 -> 2. This vector serves only
+   * SPI1 tx/rx (the ADS131M04 ADC stream); its HAL DMA-complete callback
+   * spin-waits on the SPI FIFO, and at 20833 Hz it must not sit above the
+   * encoder EXTI (0) / I2C1 (1) lines. CubeMX regen restores 0 — the .ioc
+   * NVIC.DMA1_Channel2_3_IRQn value is also set to 2. */
+  HAL_NVIC_SetPriority(DMA1_Channel2_3_IRQn, 2, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel2_3_IRQn);
   /* DMA1_Ch4_7_DMA2_Ch1_5_DMAMUX1_OVR_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Ch4_7_DMA2_Ch1_5_DMAMUX1_OVR_IRQn, 0, 0);

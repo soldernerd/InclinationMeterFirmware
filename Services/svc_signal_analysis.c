@@ -45,6 +45,16 @@
 #define SAMPLES_PER_CYCLE  8U
 #define REF_SCALE          16384   /* Q14 scale of the cos/sin table below */
 
+/* Right-shift applied to each raw 24-bit ADC code before the per-sample
+ * multiply-accumulate below. This turns the accumulation from a
+ * 32x32->64 multiply (~40 cycles each on the M0+, x8 per sample at
+ * 20833 Hz = enough to starve SysTick and stall the scheduler) into a
+ * plain 32x32->32 multiply into a 64-bit sum (~4 cycles). Costs 8 bits
+ * of amplitude resolution — 1 LSB goes from 143 nV to 37 uV, negligible
+ * for a volt-level sine. The final code->mV conversion in
+ * svc_signal_analysis_update() divides by 2^16 instead of 2^24 to match. */
+#define SAMPLE_SHIFT       8
+
 /* cos/sin at n*45 degrees (n=0..7), Q14-scaled (x16384). */
 static const int32_t s_cos_table[SAMPLES_PER_CYCLE] = {
     16384, 11585, 0, -11585, -16384, -11585, 0, 11585
@@ -75,13 +85,19 @@ static int32_t s_phase_mdeg[NUM_CHANNELS];
 
 static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
 {
-    const int32_t ch[NUM_CHANNELS] = { ch0, ch1, ch2, ch3 };
+    /* Runs in the ADC DMA-completion interrupt at 20833 Hz — keep it
+     * cheap. Pre-shifted samples keep the products in int32 so this is a
+     * 32x32->32 multiply plus a 64-bit add, not a 32x32->64 multiply. */
+    const int32_t ch[NUM_CHANNELS] = {
+        ch0 >> SAMPLE_SHIFT, ch1 >> SAMPLE_SHIFT,
+        ch2 >> SAMPLE_SHIFT, ch3 >> SAMPLE_SHIFT
+    };
     int32_t c = s_cos_table[s_sample_idx];
     int32_t s = s_sin_table[s_sample_idx];
 
     for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
-        s_i_sum[i] += (int64_t)ch[i] * c;
-        s_q_sum[i] += (int64_t)ch[i] * s;
+        s_i_sum[i] += (int32_t)(ch[i] * c);
+        s_q_sum[i] += (int32_t)(ch[i] * s);
     }
 
     s_sample_idx++;
@@ -163,10 +179,13 @@ void svc_signal_analysis_update(void)
         while (rel < -180.0f) { rel += 360.0f; }
         s_phase_mdeg[i] = (int32_t)(rel * 1000.0f);
 
-        /* Raw ADC code -> mV: 1 LSB = 2.4 V / Gain / 2^24, Gain = 1
-         * (datasheet "ADC Conversion Data", also cited in
-         * drv_ads131m04.h). amp_raw[i] is peak, not RMS. */
-        s_amplitude_mv[i] = (int32_t)(amp_raw[i] * (2400.0f / 16777216.0f));
+        /* Shifted ADC code -> mV: 1 raw LSB = 2.4 V / Gain / 2^24
+         * (Gain = 1, datasheet "ADC Conversion Data"), and on_sample()
+         * pre-shifts each code by SAMPLE_SHIFT, so 1 accumulated LSB =
+         * 2.4 V / 2^(24 - SAMPLE_SHIFT) = 2.4 V / 2^16. amp_raw[i] is
+         * peak, not RMS. */
+        s_amplitude_mv[i] = (int32_t)(amp_raw[i] *
+                                      (2400.0f / (float)(1UL << (24 - SAMPLE_SHIFT))));
     }
 }
 

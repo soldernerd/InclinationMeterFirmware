@@ -359,8 +359,13 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* tim_baseHandle)
     /* TIM7 clock enable */
     __HAL_RCC_TIM7_CLK_ENABLE();
 
-    /* TIM7 interrupt Init */
-    HAL_NVIC_SetPriority(TIM7_LPTIM2_IRQn, 0, 0);
+    /* TIM7 interrupt Init.
+     * HAND-EDIT (WP8, 2026-09-06): priority 0 -> 2. TIM7 fires the ADC
+     * acquisition trigger at 20833 Hz; it must not sit above the encoder
+     * EXTI (0) / I2C1 (1) lines or (with the SPI DMA callback's FIFO
+     * spin) it starves SysTick and stalls the scheduler. CubeMX regen
+     * restores 0 — the .ioc NVIC.TIM7_LPTIM2_IRQn value is also set to 2. */
+    HAL_NVIC_SetPriority(TIM7_LPTIM2_IRQn, 2, 0);
     HAL_NVIC_EnableIRQ(TIM7_LPTIM2_IRQn);
   /* USER CODE BEGIN TIM7_MspInit 1 */
 
