@@ -9,6 +9,7 @@ typedef enum {
     HAL_SPI_DISPLAY  = 0,
     HAL_SPI_SCL3300  = 1,   /* stub — SCL3300 not on REV B hardware */
     HAL_SPI_DAC      = 2,   /* AD9833 waveform generator (WP7), SPI3, write-only (no MISO) */
+    HAL_SPI_ADC      = 3,   /* ADS131M04 4-ch ADC (WP8), SPI1, true full-duplex (DIN + DOUT) */
     HAL_SPI_COUNT,
 } HalSpiInstance;
 
@@ -28,6 +29,16 @@ void hal_spi_init(HalSpiInstance instance);
 void hal_spi_reinit(HalSpiInstance instance);
 DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t len);
 void hal_spi_write_dma(HalSpiInstance instance, const uint8_t *data, uint16_t len);
+
+/* Full-duplex DMA transfer — HAL_SPI_ADC only. tx_data/rx_data must each
+ * be >= len bytes and stay valid until the registered HalSpiDmaCallback
+ * fires. Unlike hal_spi_write_dma() (transmit-only), this both sends and
+ * captures the response — the ADS131M04 always shifts the previous
+ * frame's response out on DOUT while a new frame is clocked in on DIN. */
+DrvStatus hal_spi_transmit_receive_dma(HalSpiInstance instance,
+                                       const uint8_t *tx_data, uint8_t *rx_data,
+                                       uint16_t len);
+
 void hal_spi_register_dma_callback(HalSpiInstance instance, HalSpiDmaCallback cb);
 void hal_spi_cs_assert(HalSpiInstance instance);
 void hal_spi_cs_deassert(HalSpiInstance instance);

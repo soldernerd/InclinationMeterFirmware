@@ -45,6 +45,7 @@
 #include "drv_encoder.h"
 #include "drv_buzzer.h"
 #include "drv_ad9833.h"
+#include "svc_signal_analysis.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
@@ -141,6 +142,8 @@ int main(void)
   MX_USB_Device_Init();
   MX_RTC_Init();
   MX_TIM1_Init();
+  MX_TIM2_Init();
+  MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
   /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
    * directly between the individual MX_*_Init() calls above, each step a
@@ -233,6 +236,13 @@ int main(void)
   } else {
     g_system_state.dac_ok = true;
   }
+
+  /* ADS131M04 4-ch ADC (WP8) — SPI1 full-duplex DMA + TIM2 MCLK + TIM7
+   * sample trigger (all CubeMX-generated above); samples the sine the DAC
+   * above drives onto the board. svc_signal_analysis_init() registers its
+   * per-sample callback then starts drv_ads131m04 itself. Not
+   * boot-critical — same non-fatal handling as the DAC / internal ADC. */
+  g_system_state.ads_ok = (svc_signal_analysis_init() == DRV_OK);
 
   /* WP4 comms stack. svc_api_init() before the three transport inits:
    * each registers itself via svc_api_register_transport(), which needs

@@ -10,6 +10,7 @@
 #include "svc_api.h"
 #include "svc_battery.h"
 #include "svc_measurement.h"
+#include "svc_signal_analysis.h"
 #include "svc_storage.h"
 #include "svc_input.h"
 #include "svc_usb.h"
@@ -107,8 +108,9 @@ static void task_api(void)
     svc_api_update();
     svc_api_measurement_subscriptions_update();
 }
-static void task_measurement(void) { svc_measurement_update(); }
-static void task_power(void)        { svc_power_task();          }
+static void task_measurement(void)     { svc_measurement_update();     }
+static void task_signal_analysis(void) { svc_signal_analysis_update(); }
+static void task_power(void)           { svc_power_task();             }
 
 /* ---- task table ----
  * Order matters when multiple tasks share a tick: task_ui before
@@ -127,11 +129,12 @@ static SchedulerEntry s_tasks[] = {
     { task_usb,         0,                   0 },
     { task_ble,         0,                   0 },
     { task_uart,        0,                   0 },
-    { task_api,         0,                   0 },
-    { task_measurement, 0,                   0 },
-    { task_ui,          0,                   0 },
-    { task_display,     0,                   0 },
-    { task_leds,        DEFAULT_TASK_LED_MS, 0 },
+    { task_api,             0,                   0 },
+    { task_measurement,     0,                   0 },
+    { task_signal_analysis, 0,                   0 },
+    { task_ui,              0,                   0 },
+    { task_display,         0,                   0 },
+    { task_leds,            DEFAULT_TASK_LED_MS, 0 },
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 
@@ -158,9 +161,14 @@ void app_scheduler_reload_periods(void)
     s_tasks[9].period_ms  = SYSTICK_PERIOD_MS;   /* uart — every tick (no EEPROM setting; RX latency + TX drain) */
     s_tasks[10].period_ms = SYSTICK_PERIOD_MS;   /* api — every tick (subscription timing accuracy) */
     s_tasks[11].period_ms = g_device_settings.task_sensors_ms;   /* measurement */
-    s_tasks[12].period_ms = g_device_settings.task_display_ms;   /* ui */
-    s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* display */
-    /* s_tasks[14] (LEDs) period is the fixed literal set in the table above —
+    s_tasks[12].period_ms = g_device_settings.task_sensors_ms;   /* signal analysis —
+                                                                 * finalizes at most this
+                                                                 * often; batches complete
+                                                                 * faster (see
+                                                                 * svc_signal_analysis.c) */
+    s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* ui */
+    s_tasks[14].period_ms = g_device_settings.task_display_ms;   /* display */
+    /* s_tasks[15] (LEDs) period is the fixed literal set in the table above —
      * not user/BLE-configurable like the others. */
 }
 

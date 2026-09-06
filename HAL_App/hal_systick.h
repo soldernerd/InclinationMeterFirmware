@@ -18,4 +18,10 @@ void     hal_systick_delay_us(uint32_t us);
  * `if (hal_systick_elapsed_ms(start) >= timeout_ms) { ... }`. */
 uint32_t hal_systick_elapsed_ms(uint32_t start_ms);
 
+/* Blocking millisecond delay — thin wrapper so Drivers_App/ one-time
+ * init sequences (e.g. drv_ads131m04.c's SYNC/RESET pulse) don't have to
+ * #include the ST HAL directly (CLAUDE.md 8.1). Not for periodic /
+ * scheduler-task code. */
+void hal_systick_delay_ms(uint32_t ms);
+
 #endif /* HAL_SYSTICK_H */

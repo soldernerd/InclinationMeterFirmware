@@ -49,11 +49,15 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_3|GPIO_PIN_7, GPIO_PIN_RESET);
-  /* PC13 = AD9833 FSYNC (WP7), active LOW — idle HIGH (deasserted). A
-   * CubeMX regen sets PC13.PinState=GPIO_PIN_SET (WylerLeveltronic.ioc),
-   * so it would emit this too; kept explicit in case that .ioc key is lost. */
-  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_RESET);
+  /* PC13 = AD9833 FSYNC (WP7) and PC3 = ADS131M04 SYNC/RESET (WP8), both
+   * active LOW — idle HIGH (deasserted). CubeMX's WylerLeveltronic.ioc
+   * sets .PinState=GPIO_PIN_SET for both, so a regen emits this too;
+   * kept explicit in case those .ioc keys are lost. */
+  HAL_GPIO_WritePin(GPIOC, GPIO_PIN_13|GPIO_PIN_3, GPIO_PIN_SET);
+  /* PA4 = ADS131M04 CS (WP8), active LOW — idle HIGH; also re-asserted
+   * defensively in hal_gpio_init(). */
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13|GPIO_PIN_14, GPIO_PIN_RESET);
@@ -148,8 +152,8 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA10 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
+  /*Configure GPIO pins : PA4 PA10  (PA4 = ADS131M04 CS, WP8) */
+  GPIO_InitStruct.Pin = GPIO_PIN_4|GPIO_PIN_10;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;

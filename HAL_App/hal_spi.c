@@ -4,6 +4,7 @@
 #include "pin_config.h"
 #include "spi.h"
 
+extern SPI_HandleTypeDef hspi1;
 extern SPI_HandleTypeDef hspi2;
 extern SPI_HandleTypeDef hspi3;
 
@@ -29,6 +30,14 @@ void hal_spi_init(HalSpiInstance instance)
          * below, active LOW — see pin_config.h's AD9833_* comments). */
         s_busy[HAL_SPI_DAC] = false;
         s_cb[HAL_SPI_DAC]   = 0;
+    } else if (instance == HAL_SPI_ADC) {
+        /* hspi1 already initialised by MX_SPI1_Init(): 8-bit, SPI Mode 1
+         * (CLKPolarity LOW / CLKPhase 2EDGE — datasheet "CPOL = 0 and
+         * CPHA = 1"), full-duplex 2-line, NSS soft (ADC_CS is a plain
+         * GPIO held low across the whole multi-word frame). Uses both RX
+         * and TX DMA channels, unlike the TX-only DISPLAY/DAC paths. */
+        s_busy[HAL_SPI_ADC] = false;
+        s_cb[HAL_SPI_ADC]   = 0;
     }
     /* HAL_SPI_SCL3300 — stub, sensor not on REV B hardware */
 }
@@ -63,7 +72,34 @@ DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t l
         s_busy[HAL_SPI_DAC] = false;
         return (rc == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
     }
+    if (instance == HAL_SPI_ADC) {
+        /* Blocking TX — only drv_ads131m04.c's one-time register writes
+         * at init. Streaming reads use hal_spi_transmit_receive_dma().
+         * MISO is still clocked; the caller just doesn't capture it. */
+        s_busy[HAL_SPI_ADC] = true;
+        HAL_StatusTypeDef rc = HAL_SPI_Transmit(&hspi1, (uint8_t *)data, len, HAL_MAX_DELAY);
+        s_busy[HAL_SPI_ADC] = false;
+        return (rc == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
+    }
     return DRV_ERR_INVALID;
+}
+
+DrvStatus hal_spi_transmit_receive_dma(HalSpiInstance instance,
+                                       const uint8_t *tx_data, uint8_t *rx_data,
+                                       uint16_t len)
+{
+    if (instance != HAL_SPI_ADC || tx_data == 0 || rx_data == 0 || len == 0) {
+        return DRV_ERR_INVALID;
+    }
+    if (s_busy[HAL_SPI_ADC]) {
+        return DRV_ERR_NOT_READY;
+    }
+    s_busy[HAL_SPI_ADC] = true;
+    if (HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)tx_data, rx_data, len) != HAL_OK) {
+        s_busy[HAL_SPI_ADC] = false;
+        return DRV_ERR_COMM;
+    }
+    return DRV_OK;
 }
 
 void hal_spi_write_dma(HalSpiInstance instance, const uint8_t *data, uint16_t len)
@@ -95,6 +131,9 @@ void hal_spi_cs_assert(HalSpiInstance instance)
     } else if (instance == HAL_SPI_DAC) {
         /* AD9833 FSYNC: active LOW */
         hal_gpio_set(AD9833_FSYNC_PORT, AD9833_FSYNC_PIN, false);
+    } else if (instance == HAL_SPI_ADC) {
+        /* ADS131M04 CS: active LOW */
+        hal_gpio_set(ADC_CS_PORT, ADC_CS_PIN, false);
     }
 }
 
@@ -104,6 +143,8 @@ void hal_spi_cs_deassert(HalSpiInstance instance)
         hal_gpio_set(DISP_CS_PORT, DISP_CS_PIN, false);
     } else if (instance == HAL_SPI_DAC) {
         hal_gpio_set(AD9833_FSYNC_PORT, AD9833_FSYNC_PIN, true);
+    } else if (instance == HAL_SPI_ADC) {
+        hal_gpio_set(ADC_CS_PORT, ADC_CS_PIN, true);
     }
 }
 
@@ -124,7 +165,8 @@ bool hal_spi_tx_idle(HalSpiInstance instance)
     return (hspi2.Instance->SR & (SPI_SR_FTLVL | SPI_SR_BSY)) == 0U;
 }
 
-/* HAL weak override — fires when DMA TX completes */
+/* HAL weak override — fires when a TX-only DMA transfer completes
+ * (HAL_SPI_Transmit_DMA — DISPLAY only). */
 void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI2) {
@@ -135,12 +177,29 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
     }
 }
 
+/* HAL weak override — fires when a full-duplex DMA transfer completes
+ * (HAL_SPI_TransmitReceive_DMA — ADC only, a distinct weak function). */
+void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
+{
+    if (hspi->Instance == SPI1) {
+        s_busy[HAL_SPI_ADC] = false;
+        if (s_cb[HAL_SPI_ADC]) {
+            s_cb[HAL_SPI_ADC](HAL_SPI_ADC, true);
+        }
+    }
+}
+
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI2) {
         s_busy[HAL_SPI_DISPLAY] = false;
         if (s_cb[HAL_SPI_DISPLAY]) {
             s_cb[HAL_SPI_DISPLAY](HAL_SPI_DISPLAY, false);
+        }
+    } else if (hspi->Instance == SPI1) {
+        s_busy[HAL_SPI_ADC] = false;
+        if (s_cb[HAL_SPI_ADC]) {
+            s_cb[HAL_SPI_ADC](HAL_SPI_ADC, false);
         }
     }
 }

@@ -7,8 +7,8 @@
  * FW_VERSION_STRING is derived from the three numbers below, so there is
  * only one place to edit. */
 #define FW_VERSION_MAJOR  0
-#define FW_VERSION_MINOR  7
-#define FW_VERSION_PATCH  1
+#define FW_VERSION_MINOR  8
+#define FW_VERSION_PATCH  0
 
 #define FW_VERSION_STR2(x)  #x
 #define FW_VERSION_STR(x)   FW_VERSION_STR2(x)

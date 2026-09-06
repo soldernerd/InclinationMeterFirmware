@@ -101,6 +101,12 @@ typedef struct {
                                   * not boot-halting (write-only device, no
                                   * readback to confirm anyway). */
 
+    bool     ads_ok;             /* ADS131M04 external ADC (WP8) init +
+                                  * svc_signal_analysis wiring succeeded at
+                                  * boot. If false the per-channel
+                                  * amplitude/phase readout is absent; not
+                                  * boot-halting. */
+
     bool     display_ok;         /* False if the Sharp LCD's SPI2 peripheral
                                   * wedged and a flush had to be abandoned —
                                   * see drv_sharp_lcd_update(). Self-clears
