@@ -4,7 +4,7 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1–WP6 complete and on `master`** (REV B hardware), all bench-tested on real silicon
+**WP1–WP7 complete and on `master`** (REV B hardware), all bench-tested on real silicon
 (WP5 skipped):
 
 - **WP1** — Sharp Memory LCD bring-up, VCOM timer, u8g2.
@@ -19,12 +19,14 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 - **WP6** — RTC (calendar on the STATUS screen + API `System status` resource 0x02, get/set),
   auto power-off after an idle timeout (EEPROM-backed, API `Settings` resource 0x1B), and a
   "Power off" menu action.
+- **WP7** — AD9833 DDS waveform generator (`Drivers_App/drv_ad9833.c`): one-shot init to a
+  fixed ~2604 Hz sine on `VOUT`, SPI3 + TIM1 CH4 MCLK; the DDS then free-runs on-chip.
 
 Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 27% / FLASH 25%. Tagged
-`wp1-debugged` … `wp6-debugged`. The `wp2`–`wp6` branch pointers track `master`.
+`wp1-debugged` … `wp7-debugged`. The `wp2`–`wp7` branch pointers track `master`.
 
-The `wp7`–`wp11` branches hold sketched-but-not-bench-tested sensor drivers
-(AD9833, ADS131M04, BME280, displacement demod). Each is squash-ported onto `master` and
+The `wp8`–`wp11` branches hold sketched-but-not-bench-tested sensor drivers
+(ADS131M04, BME280, displacement demod). Each is squash-ported onto `master` and
 bench-validated one at a time. `docs/wp2-5_rebase_status.md` is the historical record of
 the August branch-rebase effort (superseded by the September bench work).
 
