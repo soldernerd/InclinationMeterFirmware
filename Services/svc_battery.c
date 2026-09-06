@@ -26,6 +26,10 @@ static bool             s_charge_complete = false;
 /* Charge-enable latch — see the policy comment in update_charge_enable(). */
 static bool             s_charge_enabled  = false;
 
+/* Manual "charge regardless of SOC" override (svc_battery_force_charge()).
+ * Self-clears on charge-complete or USB removal — see update_charge_enable(). */
+static bool             s_force_charge    = false;
+
 /* Shutdown-arm latch — gives the display ~2 s to show a low-battery
  * warning before actually entering low power. Re-checked against USB
  * presence every tick (see update_shutdown_arm()), not just when armed. */
@@ -109,6 +113,7 @@ void svc_battery_init(void)
     s_charging           = false;
     s_charge_complete    = false;
     s_charge_enabled     = false;
+    s_force_charge       = false;
     s_shutdown_armed     = false;
     s_critical_streak    = 0;
     s_valid_sample_count = 0;
@@ -184,9 +189,15 @@ static void update_charge_enable(void)
      * battery_charge_start_mv — avoids keeping an already-near-full LiPo
      * topped off, which degrades its life over time. Once started, stay
      * latched on (don't oscillate as Vbat rises back above the threshold
-     * mid-charge) until the TP4056 reports complete or USB disappears. */
+     * mid-charge) until the TP4056 reports complete or USB disappears.
+     * s_force_charge (a menu/API override) bypasses the SOC gate but not
+     * the USB-present / not-complete guards, and clears itself once
+     * either of those goes away — a one-shot "top off now". */
     if (!s_usb_connected || s_charge_complete) {
         s_charge_enabled = false;
+        s_force_charge   = false;
+    } else if (s_force_charge) {
+        s_charge_enabled = true;
     } else if (s_valid_sample_count >= BATTERY_CHARGE_MIN_SAMPLES && s_vbat_mv > 0 &&
                s_vbat_mv < g_device_settings.battery_charge_start_mv) {
         s_charge_enabled = true;
@@ -286,3 +297,11 @@ uint8_t      svc_battery_get_soc_pct(void)       { return s_soc_pct; }
 uint16_t     svc_battery_get_vbat_mv(void)       { return s_vbat_mv; }
 bool         svc_battery_is_usb_connected(void)  { return s_usb_connected; }
 bool         svc_battery_is_charging(void)       { return s_charging; }
+bool         svc_battery_is_force_charging(void) { return s_force_charge; }
+
+void svc_battery_force_charge(void)
+{
+    /* Latch the override; update_charge_enable() acts on it next tick
+     * (and ignores it if USB isn't actually present). */
+    s_force_charge = true;
+}

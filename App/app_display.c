@@ -296,10 +296,15 @@ static void draw_settings_screen(void)
             /* Action row (step == 0, e.g. "Reboot to DFU") — no numeric
              * value to show; a confirm prompt replaces it once the row is
              * "entered" (the first RIGHT press), same highlight box as an
-             * ordinary edit. */
-            snprintf(line, sizeof line, "%s %-18s%s",
-                     cursor, m->label,
-                     is_selected_and_editing ? "  RIGHT again to confirm" : "");
+             * ordinary edit. "Force charge" also shows [active] once armed. */
+            const char *suffix = "";
+            if (is_selected_and_editing) {
+                suffix = "  RIGHT again to confirm";
+            } else if ((UiSettingIndex)i == UI_SETTING_FORCE_CHARGE
+                       && svc_battery_is_force_charging()) {
+                suffix = "  [active]";
+            }
+            snprintf(line, sizeof line, "%s %-18s%s", cursor, m->label, suffix);
         }
         if (is_selected_and_editing) {
             /* Highlight: invert background of this row */

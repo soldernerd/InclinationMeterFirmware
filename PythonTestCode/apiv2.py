@@ -24,6 +24,7 @@ OP_SYS_IDENTITY     = opcode(GET, CAT_SYSTEM, 0x00)
 OP_SYS_DEVICE_STATE = opcode(GET, CAT_SYSTEM, 0x01)
 OP_CMD_TEST_BEEP       = opcode(EXECUTE, CAT_COMMANDS, 0x00)
 OP_CMD_SIGNAL_ANALYSIS = opcode(EXECUTE, CAT_COMMANDS, 0x01)  # payload: 1 byte, 0=stop 1=start
+OP_CMD_FORCE_CHARGE    = opcode(EXECUTE, CAT_COMMANDS, 0x02)  # no payload — charge regardless of SOC
 
 # Bulk raw-ADC capture (category 0x8). START_BULK has no request payload;
 # chunks come back under the SAME opcode, each: [status=OK][page:1][sample:16]xN

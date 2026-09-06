@@ -10,6 +10,7 @@ central. Same protocol and same checks as hid_test.py / ble_test.py.
   python uart_test.py --port COM7     # or name it
   python uart_test.py --log           # subscribe to the debug-log stream, print live
   python uart_test.py --env           # poll the BME280 (temp/pressure/humidity) once/sec
+  python uart_test.py --charge        # force-start charging regardless of SOC (needs USB)
   python uart_test.py --port COM7 --log
 
 Install:   pip install pyserial
@@ -202,6 +203,10 @@ def main():
             run_log(link)
         elif "--env" in args:
             run_env(link)
+        elif "--charge" in args:
+            st, _ = request(link, a.OP_CMD_FORCE_CHARGE)
+            print(f"  FORCE CHARGE  [{a.STATUS.get(st, st)}]  "
+                  f"(charges while USB present; clears on full / unplug)")
         else:
             run_basic(link)
     finally:

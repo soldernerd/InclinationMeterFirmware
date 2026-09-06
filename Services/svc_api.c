@@ -266,11 +266,23 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
         return;
     }
-    if (res != API2_RES_CMD_TEST_BEEP && res != API2_RES_CMD_SIGNAL_ANALYSIS) {
+    if (res != API2_RES_CMD_TEST_BEEP && res != API2_RES_CMD_SIGNAL_ANALYSIS &&
+        res != API2_RES_CMD_FORCE_CHARGE) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (res == API2_RES_CMD_FORCE_CHARGE) {
+        if (paylen != 0U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        svc_battery_force_charge();
+        svc_log(API2_LOG_INFO, "cmd: force charge");
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        return;
+    }
 
     if (res == API2_RES_CMD_SIGNAL_ANALYSIS) {
         if (paylen != 1U) {

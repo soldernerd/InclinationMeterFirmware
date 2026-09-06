@@ -20,6 +20,15 @@ uint16_t     svc_battery_get_vbat_mv(void);
 bool         svc_battery_is_usb_connected(void);
 bool         svc_battery_is_charging(void);
 
+/* Manual override: enable the charger irrespective of Vbat / SOC for as
+ * long as USB is present. The auto-policy deliberately leaves a near-full
+ * LiPo alone (repeated top-offs shorten its life); this lets a user force
+ * an overnight top-off anyway. Cleared automatically once the pack
+ * reaches full (TP4056 STANDBY) or USB is unplugged — re-select the menu
+ * item to arm it again. No-op with no USB connected. */
+void         svc_battery_force_charge(void);
+bool         svc_battery_is_force_charging(void);
+
 /* Disables the LEDs and the 3.3V/5V rails, then enters STM32 Standby mode.
  * Does not return — Standby mode resets the MCU on wake (see
  * HAL_App/hal_power.h). Public so a later work package's user-initiated

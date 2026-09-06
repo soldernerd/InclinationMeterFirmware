@@ -146,14 +146,20 @@ typedef enum {
  * 0x00 Test beep — no payload.
  * 0x01 Signal analysis — 1-byte payload: 0 = stop the ADS131M04 sample
  *      stream + DFT, 1 = start it. Off at boot (v0.8.2); see
- *      Services/svc_signal_analysis.h for why. */
+ *      Services/svc_signal_analysis.h for why.
+ * 0x02 Force charge — no payload. Enables the charger regardless of SOC
+ *      while USB is present (a one-shot overnight top-off); self-clears on
+ *      full or USB removal. No-op with no USB. See svc_battery.h. */
 #define API2_RES_CMD_TEST_BEEP        0x00U
 #define API2_RES_CMD_SIGNAL_ANALYSIS  0x01U
+#define API2_RES_CMD_FORCE_CHARGE     0x02U
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
 #define API2_OP_CMD_SIGNAL_ANALYSIS \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_SIGNAL_ANALYSIS)
+#define API2_OP_CMD_FORCE_CHARGE \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_FORCE_CHARGE)
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
  * Only what REV B actually reads today. All are subscribable. */

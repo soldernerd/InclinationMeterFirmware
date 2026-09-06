@@ -6,6 +6,7 @@
 #include "system_state.h"
 #include "hal_power.h"
 #include "svc_power.h"
+#include "svc_battery.h"
 
 UiState g_ui_state = {
     .current_screen   = UI_SCREEN_LIVE,
@@ -31,6 +32,7 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_SETTLING_TIMEOUT] = { "Settling timeout", "ms", 1000,  5000,  60000 },
     [UI_SETTING_AUTO_POWEROFF]    = { "Auto power-off",   "s",    30,     0,   3600 },
     /* step 0 marks these action rows — see UiSettingMeta's comment. */
+    [UI_SETTING_FORCE_CHARGE]     = { "Force charge",     "",      0,     0,      0 },
     [UI_SETTING_REBOOT_DFU]       = { "Reboot to DFU",    "",      0,     0,      0 },
     [UI_SETTING_POWER_OFF]        = { "Power off",        "",      0,     0,      0 },
 };
@@ -274,13 +276,19 @@ void app_ui_update(void)
             /* Action row (step == 0): rotating does nothing; this second
              * RIGHT press (the first got us into the "editing" / confirm
              * state) performs the action immediately.
-             *   REBOOT_DFU — hal_power_reboot_to_dfu() (best-effort jump;
-             *     see its comment — self-resets on fall-through).
-             *   POWER_OFF  — svc_power_shutdown_now() -> Standby.
-             * Both never return. */
+             *   FORCE_CHARGE — svc_battery_force_charge(); returns, drop
+             *     back to the row list.
+             *   REBOOT_DFU   — hal_power_reboot_to_dfu() (best-effort jump;
+             *     see its comment — self-resets on fall-through). No return.
+             *   POWER_OFF    — svc_power_shutdown_now() -> Standby. No return. */
             if (e1_press) {
                 beep_confirm();
                 switch ((UiSettingIndex)g_ui_state.settings_cursor) {
+                    case UI_SETTING_FORCE_CHARGE:
+                        svc_battery_force_charge();
+                        g_ui_state.settings_editing = false;
+                        g_ui_state.redraw_needed    = true;
+                        break;
                     case UI_SETTING_REBOOT_DFU: hal_power_reboot_to_dfu();  break;
                     case UI_SETTING_POWER_OFF:  svc_power_shutdown_now();   break;
                     default:                                               break;
