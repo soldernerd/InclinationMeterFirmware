@@ -298,7 +298,15 @@ void TIM6_DAC_LPTIM1_IRQHandler(void)
 void TIM7_LPTIM2_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM7_LPTIM2_IRQn 0 */
-
+  /* Lean path: TIM7 is a basic timer with only the UPDATE source, polled
+   * at 62.5 kHz for the ADS131M04 DRDY (config.h). The full
+   * HAL_TIM_IRQHandler dispatch (long flag/channel if-chain) is too
+   * expensive at that rate — clear UIF and call straight through. */
+  if ((TIM7->SR & TIM_SR_UIF) != 0U) {
+    TIM7->SR = (uint32_t)~TIM_SR_UIF;
+    hal_tim_adc_trigger_isr();
+    return;
+  }
   /* USER CODE END TIM7_LPTIM2_IRQn 0 */
   HAL_TIM_IRQHandler(&htim7);
   /* USER CODE BEGIN TIM7_LPTIM2_IRQn 1 */

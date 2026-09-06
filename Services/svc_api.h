@@ -213,6 +213,23 @@ typedef enum {
     API2_LOG_ERROR = 0x02U,
 } Api2LogSeverity;
 
+/* ---------------- Raw data (0x7: GET) ----------------
+ * Development/debug intermediate values. 0x00 = ADS131M04 diagnostics,
+ * GET only, no request payload. Response payload (24 B, LE):
+ *   u16 reg_id, reg_status, reg_mode, reg_clock, reg_gain1, reg_cfg
+ *   u16 clock_expected      (what the driver wrote to CLOCK)
+ *   u8  regs_read_ok        (all RREG transfers succeeded)
+ *   u8  ads_ok              (g_system_state.ads_ok)
+ *   u16 last_capture_samples
+ *   u16 last_capture_drops
+ *   u32 last_capture_elapsed_ms
+ * CLOCK.OSR is bits [4:2]: 0=128,1=256,2=512,3=1024,4=2048,5=4096,6=8192,7=16256;
+ * fDATA = fCLKIN / (2 * OSR), fCLKIN ~= 5.3333 MHz. */
+#define API2_RES_RAW_ADC_DIAG   0x00U
+
+#define API2_OP_RAW_ADC_DIAG \
+    API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_ADC_DIAG)
+
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ----------------
  * 0x00 Raw ADC capture. START_BULK: no request payload (the transfer size
  *      is fixed and known from this doc, spec §4.5). Ack is a bare status

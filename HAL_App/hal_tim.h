@@ -55,4 +55,8 @@ void hal_tim_adc_trigger_start(void);
 void hal_tim_adc_trigger_stop(void);
 void hal_tim_adc_trigger_register_callback(HalTimCallback cb);
 
+/* Called from the lean TIM7 ISR fast path in Core/Src/stm32g0xx_it.c
+ * (UIF already cleared there). Not for application use. */
+void hal_tim_adc_trigger_isr(void);
+
 #endif /* HAL_TIM_H */

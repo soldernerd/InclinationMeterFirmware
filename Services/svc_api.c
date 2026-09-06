@@ -2,6 +2,7 @@
 #include "svc_battery.h"
 #include "svc_storage.h"
 #include "svc_signal_analysis.h"
+#include "drv_ads131m04.h"
 #include "svc_log.h"
 #include "hal_rtc.h"
 #include "app_scheduler.h"
@@ -417,6 +418,55 @@ static void bulk_pump(void)
     }
 }
 
+/* ---------------- Raw data (0x7: GET) ---------------- */
+
+static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
+                              uint8_t res, const uint8_t *frame, uint16_t paylen)
+{
+    if (verb != API2_VERB_GET) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    if (res != API2_RES_RAW_ADC_DIAG) {
+        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
+        return;
+    }
+    if (!check_crc(t, opcode, frame, paylen)) return;
+    if (paylen != 0U) {
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+
+    const Ads131m04Regs *r = drv_ads131m04_get_regs();
+    uint16_t samples = 0, drops = 0;
+    uint32_t elapsed = 0;
+    svc_signal_analysis_last_capture(&samples, &drops, &elapsed);
+
+    struct __attribute__((packed)) {
+        uint16_t id, status, mode, clock, gain1, cfg;
+        uint16_t clock_expected;
+        uint8_t  regs_read_ok;
+        uint8_t  ads_ok;
+        uint16_t last_samples;
+        uint16_t last_drops;
+        uint32_t last_elapsed_ms;
+    } p;
+    p.id              = r->id;
+    p.status          = r->status;
+    p.mode            = r->mode;
+    p.clock           = r->clock;
+    p.gain1           = r->gain1;
+    p.cfg             = r->cfg;
+    p.clock_expected  = r->clock_expected;
+    p.regs_read_ok    = r->read_ok ? 1U : 0U;
+    p.ads_ok          = g_system_state.ads_ok ? 1U : 0U;
+    p.last_samples    = samples;
+    p.last_drops      = drops;
+    p.last_elapsed_ms = elapsed;
+
+    send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
+}
+
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ---------------- */
 
 #define MEAS_VALUE_MAX_LEN 4U
@@ -741,6 +791,9 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
             return;
         case API2_CAT_DEBUG_MSGS:
             dispatch_debug(t, opcode, verb, res, frame, paylen);
+            return;
+        case API2_CAT_RAW_DATA:
+            dispatch_raw_data(t, opcode, verb, res, frame, paylen);
             return;
         case API2_CAT_BULK:
             dispatch_bulk(t, opcode, verb, res, frame, paylen);

@@ -6,16 +6,22 @@
 #include "pin_config.h"
 #include "config.h"
 
-/* Register addresses used here (datasheet Table 8-12, "Register Map") —
- * only the three registers this driver actually touches are named. */
+/* Register addresses used here (datasheet Table 8-12, "Register Map"). */
+#define REG_ID      0x00U
+#define REG_STATUS  0x01U
 #define REG_MODE    0x02U
 #define REG_CLOCK   0x03U
 #define REG_GAIN1   0x04U
+#define REG_CFG     0x06U
 
 /* WREG command word: 011a aaaa annn nnnn -- 011 prefix, 6-bit address,
  * 7-bit (count-1). This driver only ever writes one register at a time
  * (count-1 = 0), so the low 7 bits are always 0. */
 #define WREG_CMD(addr)  (uint16_t)(0x6000U | (((addr) & 0x3FU) << 7))
+
+/* RREG command word: 101a aaaa annn nnnn -- 101 prefix, same addr/count
+ * fields. The register contents come back in word 0 of the NEXT frame. */
+#define RREG_CMD(addr)  (uint16_t)(0xA000U | (((addr) & 0x3FU) << 7))
 
 /* CLOCK register (datasheet Table 8-17): CH3_EN..CH0_EN=1 (all four
  * channels), TBM=0, OSR[2:0]=ADS131M04_OSR_FIELD (config.h — 000b = 128,
@@ -49,6 +55,8 @@
 static Ads131m04SampleCb s_on_sample = 0;
 static uint16_t          s_dropped_count = 0;
 static bool              s_running = false;
+static bool              s_xfer_active = false;
+static Ads131m04Regs     s_regs;
 
 static const uint8_t s_tx_zero[FRAME_BYTES] = { 0 };   /* NULL command, no CRC */
 static uint8_t       s_rx_buf[FRAME_BYTES];
@@ -80,11 +88,50 @@ static DrvStatus write_register(uint8_t addr, uint16_t value)
     return rc;
 }
 
-static void note_dropped(void)
+/* Blocking single-register read. RREG in one frame, then a NULL frame to
+ * clock the response out of word 0. Init/diagnostic use only. The 16-bit
+ * register value sits in the top 16 bits of the 24-bit response word. */
+static DrvStatus read_register(uint8_t addr, uint16_t *value)
 {
-    if (s_dropped_count < UINT16_MAX) {
-        s_dropped_count++;
-    }
+    uint8_t tx[FRAME_BYTES] = { 0 };
+    uint8_t rx[FRAME_BYTES] = { 0 };
+    uint16_t cmd = RREG_CMD(addr);
+
+    tx[0] = (uint8_t)(cmd >> 8);
+    tx[1] = (uint8_t)(cmd & 0xFFU);
+
+    hal_spi_cs_assert(HAL_SPI_ADC);
+    DrvStatus rc = hal_spi_transmit_receive(HAL_SPI_ADC, tx, rx, FRAME_BYTES);
+    hal_spi_cs_deassert(HAL_SPI_ADC);
+    if (rc != DRV_OK) return rc;
+
+    uint8_t nul[FRAME_BYTES] = { 0 };
+    uint8_t resp[FRAME_BYTES] = { 0 };
+    hal_spi_cs_assert(HAL_SPI_ADC);
+    rc = hal_spi_transmit_receive(HAL_SPI_ADC, nul, resp, FRAME_BYTES);
+    hal_spi_cs_deassert(HAL_SPI_ADC);
+    if (rc != DRV_OK) return rc;
+
+    *value = (uint16_t)(((uint16_t)resp[0] << 8) | resp[1]);
+    return DRV_OK;
+}
+
+static void read_all_registers(void)
+{
+    s_regs.clock_expected = CLOCK_REG_VALUE;
+    bool ok = true;
+    ok &= (read_register(REG_ID,     &s_regs.id)     == DRV_OK);
+    ok &= (read_register(REG_STATUS, &s_regs.status) == DRV_OK);
+    ok &= (read_register(REG_MODE,   &s_regs.mode)   == DRV_OK);
+    ok &= (read_register(REG_CLOCK,  &s_regs.clock)  == DRV_OK);
+    ok &= (read_register(REG_GAIN1,  &s_regs.gain1)  == DRV_OK);
+    ok &= (read_register(REG_CFG,    &s_regs.cfg)    == DRV_OK);
+    s_regs.read_ok = ok;
+}
+
+const Ads131m04Regs *drv_ads131m04_get_regs(void)
+{
+    return &s_regs;
 }
 
 static int32_t sign_extend24(uint8_t msb, uint8_t mid, uint8_t lsb)
@@ -96,75 +143,51 @@ static int32_t sign_extend24(uint8_t msb, uint8_t mid, uint8_t lsb)
     return (int32_t)v;
 }
 
-/* DMA completion callback for the streaming read below -- fires from
- * HAL_SPI_TxRxCpltCallback (hal_spi.c), itself called from the SPI1 DMA
- * ISR. Deasserts CS (asserted just before the transfer was started, in
- * on_trigger() below) and hands the four channel values up to
- * whichever Services-layer module registered via
- * drv_ads131m04_set_on_sample() -- this driver never touches
- * system_state or calls into Services directly (CLAUDE.md 8.1 layering,
- * same reasoning as Drivers_App/drv_rn4871.c's on_config_complete
- * callback). */
-static void on_dma_complete(HalSpiInstance instance, bool success)
-{
-    if (instance != HAL_SPI_ADC) {
-        return;
-    }
-    hal_spi_cs_deassert(HAL_SPI_ADC);
-    if (!success) {
-        /* HAL_SPI_ErrorCallback fired instead of a clean completion (bus
-         * fault, DMA error) -- escalate same as on_trigger()'s drop paths
-         * below (CLAUDE.md 7.6), otherwise a real SPI fault on this
-         * channel would be invisible to both the drop counter and
-         * DBG_PRINT. */
-        note_dropped();
-        return;
-    }
-    if (s_on_sample == 0) {
-        return;
-    }
-    /* Frame layout (word index x WORD_BYTES): word0=response(discarded),
-     * word1=CH0, word2=CH1, word3=CH2, word4=CH3, word5=CRC(discarded). */
-    int32_t ch0 = sign_extend24(s_rx_buf[1 * WORD_BYTES], s_rx_buf[1 * WORD_BYTES + 1], s_rx_buf[1 * WORD_BYTES + 2]);
-    int32_t ch1 = sign_extend24(s_rx_buf[2 * WORD_BYTES], s_rx_buf[2 * WORD_BYTES + 1], s_rx_buf[2 * WORD_BYTES + 2]);
-    int32_t ch2 = sign_extend24(s_rx_buf[3 * WORD_BYTES], s_rx_buf[3 * WORD_BYTES + 1], s_rx_buf[3 * WORD_BYTES + 2]);
-    int32_t ch3 = sign_extend24(s_rx_buf[4 * WORD_BYTES], s_rx_buf[4 * WORD_BYTES + 1], s_rx_buf[4 * WORD_BYTES + 2]);
-    s_on_sample(ch0, ch1, ch2, ch3);
-}
-
-/* Acquisition trigger -- called from TIM7's interrupt context at
- * exactly the ADC's own sample rate (hal_tim_adc_trigger_start(),
- * registered below). Polls DRDY's GPIO level rather than reacting to
- * its falling edge -- see pin_config.h's ADC_READY_PIN comment for why
- * (PA1/PB1 EXTI1 conflict with the encoder). Given the deterministic,
- * shared-clock relationship between this timer and the ADC's own
- * sample rate, DRDY should always already be low by the time this
- * fires; if it isn't yet (clock start-up transient, jitter), skip this
- * tick rather than reading stale/not-yet-updated data -- self-healing,
- * since the ADC's own DRDY will still be waiting next tick. */
+/* DRDY poll + raw-DMA frame read -- called from TIM7's lean ISR at 2x the
+ * ADC data rate (config.h ADS131M04_TRIGGER_TIMER_PERIOD). DRDY is polled
+ * as a level, not an edge (PA1/PB1 EXTI1 conflicts with the encoder --
+ * pin_config.h's ADC_READY_PIN comment); in MODE register DRDY_FMT=0 it
+ * stays low from the end of a conversion until the frame is read, so
+ * "DRDY low" == "an unread conversion is waiting".
+ *
+ * State machine, one step per tick:
+ *   - a frame in flight and finished  -> collect it, deassert CS
+ *   - a frame in flight, not finished -> nothing to do this tick
+ *   - idle and DRDY low               -> kick a new frame
+ * The read is raw DMA (hal_spi_adc_stream_*), ~10 us wall and almost no
+ * CPU, so at 2x oversample the frame always completes within one tick and
+ * every conversion is read exactly once -- uniform sampling at fDATA. */
 static void on_trigger(void)
 {
     if (!s_running) {
         return;
     }
-    if (hal_gpio_get(ADC_READY_PORT, ADC_READY_PIN)) {
-        /* DRDY still high -- not ready yet. */
-        note_dropped();
-        return;
-    }
-    if (hal_spi_is_busy(HAL_SPI_ADC)) {
-        /* Previous transfer still in flight -- should not happen at this
-         * timer rate given FRAME_BYTES take a few microseconds over SPI,
-         * but don't stack a second DMA request on top of one already
-         * running. */
-        note_dropped();
-        return;
-    }
-    hal_spi_cs_assert(HAL_SPI_ADC);
-    if (hal_spi_transmit_receive_dma(HAL_SPI_ADC, s_tx_zero, s_rx_buf, FRAME_BYTES) != DRV_OK) {
+
+    if (s_xfer_active) {
+        if (!hal_spi_adc_stream_done()) {
+            return;                       /* still shifting */
+        }
+        hal_spi_adc_stream_end();
         hal_spi_cs_deassert(HAL_SPI_ADC);
-        note_dropped();
+        s_xfer_active = false;
+
+        if (s_on_sample != 0) {
+            /* word0=response, word1..4 = CH0..CH3, word5 = CRC. */
+            int32_t ch0 = sign_extend24(s_rx_buf[1 * WORD_BYTES], s_rx_buf[1 * WORD_BYTES + 1], s_rx_buf[1 * WORD_BYTES + 2]);
+            int32_t ch1 = sign_extend24(s_rx_buf[2 * WORD_BYTES], s_rx_buf[2 * WORD_BYTES + 1], s_rx_buf[2 * WORD_BYTES + 2]);
+            int32_t ch2 = sign_extend24(s_rx_buf[3 * WORD_BYTES], s_rx_buf[3 * WORD_BYTES + 1], s_rx_buf[3 * WORD_BYTES + 2]);
+            int32_t ch3 = sign_extend24(s_rx_buf[4 * WORD_BYTES], s_rx_buf[4 * WORD_BYTES + 1], s_rx_buf[4 * WORD_BYTES + 2]);
+            s_on_sample(ch0, ch1, ch2, ch3);
+        }
     }
+
+    if (hal_gpio_get(ADC_READY_PORT, ADC_READY_PIN)) {
+        return;                           /* DRDY high -- nothing new */
+    }
+
+    hal_spi_cs_assert(HAL_SPI_ADC);
+    hal_spi_adc_stream_begin(s_tx_zero, s_rx_buf, FRAME_BYTES);
+    s_xfer_active = true;
 }
 
 DrvStatus drv_ads131m04_init(void)
@@ -172,9 +195,9 @@ DrvStatus drv_ads131m04_init(void)
     s_on_sample     = 0;
     s_dropped_count = 0;
     s_running       = false;
+    s_xfer_active   = false;
 
     hal_spi_init(HAL_SPI_ADC);
-    hal_spi_register_dma_callback(HAL_SPI_ADC, on_dma_complete);
 
     /* MCLK first -- the ADC's internal logic (including SYNC/RESET
      * handling below) is synchronous to it, same reasoning as the DAC's
@@ -198,6 +221,14 @@ DrvStatus drv_ads131m04_init(void)
     if (write_register(REG_GAIN1, GAIN1_REG_VALUE) != DRV_OK) return DRV_ERR_COMM;
     if (write_register(REG_MODE,  MODE_REG_VALUE)  != DRV_OK) return DRV_ERR_COMM;
 
+    /* Read the config back so a host can see whether the WREGs actually
+     * landed (drv_ads131m04_get_regs()). */
+    read_all_registers();
+
+    /* Hand SPI1 + its DMA channels over to the raw streaming path (no more
+     * blocking/HAL-SPI calls on this bus after this point). */
+    hal_spi_adc_stream_init();
+
     /* Trigger callback is registered here but the timer is left stopped —
      * drv_ads131m04_start() arms it. See the header comment. */
     hal_tim_adc_trigger_register_callback(on_trigger);
@@ -211,6 +242,7 @@ DrvStatus drv_ads131m04_start(void)
         return DRV_OK;
     }
     s_dropped_count = 0;
+    s_xfer_active   = false;
     s_running = true;
     hal_tim_adc_trigger_start();
     return DRV_OK;
@@ -223,11 +255,14 @@ void drv_ads131m04_stop(void)
     }
     hal_tim_adc_trigger_stop();
     s_running = false;
-    /* Let any transfer already kicked from on_trigger() finish before we
-     * park CS — bounded wait, task context only (see header). At 16 MHz a
-     * FRAME_BYTES transfer is a few microseconds; this is generous. */
-    for (uint32_t i = 0; i < 100000U && hal_spi_is_busy(HAL_SPI_ADC); ++i) {
+    /* Let any frame kicked from on_trigger() drain before we park CS —
+     * bounded wait, task context only. A raw frame is ~10 us on the wire. */
+    for (uint32_t i = 0; i < 100000U && s_xfer_active && !hal_spi_adc_stream_done(); ++i) {
         __asm volatile("nop");
+    }
+    if (s_xfer_active) {
+        hal_spi_adc_stream_end();
+        s_xfer_active = false;
     }
     hal_spi_cs_deassert(HAL_SPI_ADC);
 }

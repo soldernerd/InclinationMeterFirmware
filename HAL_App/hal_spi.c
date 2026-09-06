@@ -84,6 +84,79 @@ DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t l
     return DRV_ERR_INVALID;
 }
 
+/* ---- ADS131M04 raw-DMA streaming path (see hal_spi.h) ---- */
+
+#define ADC_TX_DMA   DMA1_Channel2   /* SPI1_TX, per Core/Src/spi.c MspInit */
+#define ADC_RX_DMA   DMA1_Channel3   /* SPI1_RX */
+/* DMA1 ISR/IFCR bit positions: channel n uses bits [4n-4 .. 4n-1]. */
+#define ADC_TX_DMA_GIF   DMA_IFCR_CGIF2
+#define ADC_RX_DMA_GIF   DMA_IFCR_CGIF3
+
+void hal_spi_adc_stream_init(void)
+{
+    /* Channels were configured by HAL_DMA_Init() in MX_SPI1_Init's MspInit
+     * (request routing, byte size, MINC on memory, direction, no circular,
+     * interrupts off). HAL_DMA_Init does NOT set CPAR — do it here, once. */
+    ADC_TX_DMA->CCR &= ~DMA_CCR_EN;
+    ADC_RX_DMA->CCR &= ~DMA_CCR_EN;
+    ADC_TX_DMA->CPAR = (uint32_t)&hspi1.Instance->DR;
+    ADC_RX_DMA->CPAR = (uint32_t)&hspi1.Instance->DR;
+    DMA1->IFCR = ADC_TX_DMA_GIF | ADC_RX_DMA_GIF;
+
+    /* Arm SPI1 for DMA and enable it. From here the peripheral clocks a
+     * frame whenever the TX DMA channel is enabled with a byte count. */
+    SET_BIT(hspi1.Instance->CR2, SPI_CR2_TXDMAEN | SPI_CR2_RXDMAEN);
+    __HAL_SPI_ENABLE(&hspi1);
+    s_busy[HAL_SPI_ADC] = false;
+}
+
+void hal_spi_adc_stream_begin(const uint8_t *tx, uint8_t *rx, uint16_t len)
+{
+    /* RX armed before TX so it catches the very first incoming byte. */
+    ADC_RX_DMA->CCR &= ~DMA_CCR_EN;
+    ADC_TX_DMA->CCR &= ~DMA_CCR_EN;
+    DMA1->IFCR = ADC_TX_DMA_GIF | ADC_RX_DMA_GIF;
+
+    ADC_RX_DMA->CMAR  = (uint32_t)rx;
+    ADC_RX_DMA->CNDTR = len;
+    ADC_TX_DMA->CMAR  = (uint32_t)tx;
+    ADC_TX_DMA->CNDTR = len;
+
+    s_busy[HAL_SPI_ADC] = true;
+    ADC_RX_DMA->CCR |= DMA_CCR_EN;
+    ADC_TX_DMA->CCR |= DMA_CCR_EN;
+}
+
+bool hal_spi_adc_stream_done(void)
+{
+    return ADC_RX_DMA->CNDTR == 0U;
+}
+
+void hal_spi_adc_stream_end(void)
+{
+    ADC_TX_DMA->CCR &= ~DMA_CCR_EN;
+    ADC_RX_DMA->CCR &= ~DMA_CCR_EN;
+    DMA1->IFCR = ADC_TX_DMA_GIF | ADC_RX_DMA_GIF;
+    s_busy[HAL_SPI_ADC] = false;
+}
+
+DrvStatus hal_spi_transmit_receive(HalSpiInstance instance,
+                                   const uint8_t *tx_data, uint8_t *rx_data,
+                                   uint16_t len)
+{
+    if (instance != HAL_SPI_ADC || tx_data == 0 || rx_data == 0 || len == 0) {
+        return DRV_ERR_INVALID;
+    }
+    if (s_busy[HAL_SPI_ADC]) {
+        return DRV_ERR_NOT_READY;
+    }
+    s_busy[HAL_SPI_ADC] = true;
+    HAL_StatusTypeDef rc = HAL_SPI_TransmitReceive(&hspi1, (uint8_t *)tx_data, rx_data,
+                                                   len, HAL_MAX_DELAY);
+    s_busy[HAL_SPI_ADC] = false;
+    return (rc == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
+}
+
 DrvStatus hal_spi_transmit_receive_dma(HalSpiInstance instance,
                                        const uint8_t *tx_data, uint8_t *rx_data,
                                        uint16_t len)

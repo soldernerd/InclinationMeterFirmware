@@ -169,6 +169,15 @@ void hal_tim_adc_trigger_stop(void)
 {
     HAL_TIM_Base_Stop_IT(&htim7);
 }
+/* Lean entry point called straight from TIM7_LPTIM2_IRQHandler's fast
+ * path (Core/Src/stm32g0xx_it.c) — the UIF flag is already cleared by the
+ * caller, this just fans out to the registered ADS DRDY-poll callback. */
+void hal_tim_adc_trigger_isr(void)
+{
+    if (s_adc_trigger_cb) {
+        s_adc_trigger_cb();
+    }
+}
 
 void hal_tim_adc_trigger_register_callback(HalTimCallback cb)
 {

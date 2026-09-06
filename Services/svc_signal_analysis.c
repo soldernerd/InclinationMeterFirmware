@@ -1,5 +1,6 @@
 #include "svc_signal_analysis.h"
 #include "drv_ads131m04.h"
+#include "hal_systick.h"
 #include "config.h"
 #include <stddef.h>
 #include <stdbool.h>
@@ -90,6 +91,15 @@ static int32_t          s_cap_buf[ADC_BULK_SAMPLE_COUNT][NUM_CHANNELS];
 static volatile uint16_t s_cap_idx    = 0;
 static volatile bool     s_cap_active = false;
 static volatile bool     s_cap_done   = false;
+static volatile uint32_t s_cap_t0     = 0;   /* tick at capture_begin() */
+static volatile uint32_t s_cap_t1     = 0;   /* tick when the buffer filled */
+
+/* Stats of the most recently completed capture — held past capture_end()
+ * so a host diagnostic can read them back (effective sample rate =
+ * samples / elapsed_ms). */
+static uint16_t s_last_samples    = 0;
+static uint16_t s_last_drops      = 0;
+static uint32_t s_last_elapsed_ms = 0;
 
 static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
 {
@@ -103,6 +113,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
             s_cap_buf[s_cap_idx][2] = ch2;
             s_cap_buf[s_cap_idx][3] = ch3;
             if (++s_cap_idx >= ADC_BULK_SAMPLE_COUNT) {
+                s_cap_t1   = hal_systick_get_ms();
                 s_cap_done = true;
             }
         }
@@ -204,6 +215,8 @@ DrvStatus svc_signal_analysis_capture_begin(void)
     }
     s_cap_idx    = 0;
     s_cap_done   = false;
+    s_cap_t1     = 0;
+    s_cap_t0     = hal_systick_get_ms();
     s_cap_active = true;   /* on_sample() now stores into s_cap_buf */
     return drv_ads131m04_start();
 }
@@ -215,8 +228,22 @@ bool svc_signal_analysis_capture_done(void)
 
 void svc_signal_analysis_capture_end(void)
 {
+    if (s_cap_active) {
+        uint32_t t1 = s_cap_t1 ? s_cap_t1 : hal_systick_get_ms();
+        s_last_samples    = s_cap_idx;
+        s_last_drops      = drv_ads131m04_get_dropped_count();
+        s_last_elapsed_ms = t1 - s_cap_t0;
+    }
     s_cap_active = false;
     drv_ads131m04_stop();
+}
+
+void svc_signal_analysis_last_capture(uint16_t *samples, uint16_t *drops,
+                                      uint32_t *elapsed_ms)
+{
+    if (samples)    *samples    = s_last_samples;
+    if (drops)      *drops      = s_last_drops;
+    if (elapsed_ms) *elapsed_ms = s_last_elapsed_ms;
 }
 
 const int32_t *svc_signal_analysis_capture_buffer(void)

@@ -46,4 +46,24 @@ void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb);
  * than interrupt-driven). */
 uint16_t drv_ads131m04_get_dropped_count(void);
 
+/* --- register read-back diagnostics ---
+ * Snapshot of the ADS131M04's config registers, read back over SPI at
+ * the end of drv_ads131m04_init() (right after the WREG sequence). Lets
+ * a host confirm the OSR / mode actually took — the sample rate we saw
+ * on the bench was well below fCLKIN/256, which points at a WREG that
+ * isn't landing. `read_ok` is false if any RREG transfer failed.
+ * `clock_expected` is what the driver tried to write to CLOCK. */
+typedef struct {
+    uint16_t id;
+    uint16_t status;
+    uint16_t mode;
+    uint16_t clock;
+    uint16_t gain1;
+    uint16_t cfg;
+    uint16_t clock_expected;
+    bool     read_ok;
+} Ads131m04Regs;
+
+const Ads131m04Regs *drv_ads131m04_get_regs(void);
+
 #endif /* DRV_ADS131M04_H */

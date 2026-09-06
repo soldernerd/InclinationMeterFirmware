@@ -174,10 +174,19 @@
  * OSR = (fCLKIN/2)/(fCLKIN/256) = 128 -> CLOCK.OSR[2:0] field = 000b. */
 #define ADS131M04_OSR_FIELD            0x0U       /* CLOCK.OSR[2:0] = 000b -> OSR = 128 */
 
-/* Trigger timer (TIM7, no GPIO output): interrupts once per ADC sample.
- * 64 MHz / 3072 = 20833.33 Hz exactly (= fCLKIN/256). Prescaler=0,
- * Counter Period=3071. */
-#define ADS131M04_TRIGGER_TIMER_PERIOD 3071U
+/* DRDY poll timer (TIM7, no GPIO output). Originally one tick per ADC
+ * sample (20833.33 Hz), but TIM7 and the ADS's own fDATA are two
+ * independent 20833 Hz clocks with a drifting phase relationship — when a
+ * tick repeatedly lands just before DRDY, two conversions pass between
+ * reads and the capture decimates non-uniformly (bench: effective rate
+ * wandered 8-14 kHz, 2000-6700 "drops"). Fix: oversample. At 2x =
+ * 41666.67 Hz (64 MHz / 1536, Prescaler=0, Period=1535) every DRDY-low is
+ * serviced within ~24 us, inside the 48 us conversion period, so exactly
+ * one read happens per conversion — uniform sampling at the true fDATA.
+ * Ticks that find DRDY already high are benign no-ops now, not missed
+ * samples. The TIM7 ISR uses a lean fast path (Core/Src/stm32g0xx_it.c)
+ * rather than the full HAL_TIM_IRQHandler, which is too heavy at this rate. */
+#define ADS131M04_TRIGGER_TIMER_PERIOD 1535U
 
 /* Services/svc_signal_analysis.c: complete 8-sample sine cycles per
  * amplitude/phase recompute. 64 cycles = 512 samples ~= 24.6 ms at

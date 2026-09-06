@@ -51,6 +51,13 @@ const int32_t *svc_signal_analysis_capture_buffer(void);   /* [count*4] flattene
 uint16_t       svc_signal_analysis_capture_sample_count(void);
 uint16_t       svc_signal_analysis_capture_drops(void);    /* trigger ticks skipped (DRDY not ready) during the fill */
 
+/* Stats of the most recently finished capture, kept past capture_end():
+ * samples actually stored, trigger drops, and wall-clock fill time.
+ * Effective sample rate = samples * 1000 / elapsed_ms. Any arg may be
+ * NULL. All zero until the first capture completes. */
+void svc_signal_analysis_last_capture(uint16_t *samples, uint16_t *drops,
+                                      uint32_t *elapsed_ms);
+
 /* Finalizes the most recently completed accumulation batch, if one is
  * ready (see the .c file for why this is split from the per-sample
  * accumulation instead of doing the float math inline in interrupt

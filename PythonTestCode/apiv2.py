@@ -35,6 +35,12 @@ ADC_BULK_SAMPLE_COUNT     = 4096   # must match Config/config.h
 ADC_BULK_CHUNK_SAMPLES    = 7      # must match Config/config.h
 ADC_RAW_LSB_V             = 2.4 / (1 << 23)   # 1 raw code = 2.4 V / 2^23 (gain 1)
 
+# Raw data (category 0x7) — ADS131M04 register / capture diagnostics
+OP_RAW_ADC_DIAG           = opcode(GET, CAT_RAW, 0x00)
+ADC_FCLKIN_HZ             = 5.3333e6
+_OSR_TABLE                = {0: 128, 1: 256, 2: 512, 3: 1024,
+                            4: 2048, 5: 4096, 6: 8192, 7: 16256}
+
 SYS_IDENTITY, SYS_DEVICE_STATE, SYS_RTC = 0x00, 0x01, 0x02
 MEAS_ONBOARD_TEMP, MEAS_BATTERY_MV, MEAS_BATTERY_SOC = 0x00, 0x01, 0x02
 DBG_LOG_STREAM = 0x00
@@ -139,6 +145,28 @@ def decode_rtc(data: bytes):
     year, month, day, wd, hh, mm, ss, is_set = struct.unpack("<HBBBBBBB", data[:9])
     tag = "" if is_set else "  (NOT SET)"
     return f"{year:04d}-{month:02d}-{day:02d} {_WD.get(wd, wd)} {hh:02d}:{mm:02d}:{ss:02d}{tag}"
+
+
+def decode_adc_diag(data: bytes):
+    """Raw-data 0x7/0x00 GET response-after-status (24 B). Returns a dict."""
+    if len(data) < 24:
+        return None
+    (rid, rst, rmode, rclk, rgain, rcfg, rclk_exp,
+     rd_ok, ads_ok, samp, drops, elapsed) = struct.unpack("<HHHHHHHBBHHI", data[:24])
+    osr_field = (rclk >> 2) & 0x7
+    osr = _OSR_TABLE[osr_field]
+    fdata_nominal = ADC_FCLKIN_HZ / (2 * osr)
+    eff = (samp * 1000.0 / elapsed) if elapsed else 0.0
+    return {
+        "ID": rid, "STATUS": rst, "MODE": rmode,
+        "CLOCK": rclk, "CLOCK_expected": rclk_exp,
+        "GAIN1": rgain, "CFG": rcfg,
+        "regs_read_ok": bool(rd_ok), "ads_ok": bool(ads_ok),
+        "OSR_field": osr_field, "OSR": osr,
+        "fDATA_nominal_Hz": fdata_nominal,
+        "last_capture": {"samples": samp, "drops": drops, "elapsed_ms": elapsed,
+                         "effective_Hz": eff},
+    }
 
 
 def decode_bulk_adc_chunk(data: bytes):
