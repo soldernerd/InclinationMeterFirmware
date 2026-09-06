@@ -558,6 +558,17 @@ static uint16_t read_bme280_ok(uint8_t *buf)
     buf[0] = g_system_state.bme280_ok ? 1U : 0U;
     return 1U;
 }
+static uint16_t read_ext_temp(uint8_t *buf)
+{
+    int16_t v = g_system_state.temp_ext_cdeg;
+    memcpy(buf, &v, sizeof v);
+    return sizeof v;
+}
+static uint16_t read_ext_temp_ok(uint8_t *buf)
+{
+    buf[0] = g_system_state.temp_ext_ok ? 1U : 0U;
+    return 1U;
+}
 
 typedef struct {
     uint8_t           resource;
@@ -572,6 +583,8 @@ static const MeasurementResourceDesc s_meas_resources[] = {
     { API2_RES_MEAS_BME280_PRESS, read_bme280_press },
     { API2_RES_MEAS_BME280_HUMID, read_bme280_humid },
     { API2_RES_MEAS_BME280_OK,    read_bme280_ok },
+    { API2_RES_MEAS_EXT_TEMP,     read_ext_temp },
+    { API2_RES_MEAS_EXT_TEMP_OK,  read_ext_temp_ok },
 };
 #define MEAS_RESOURCE_COUNT (sizeof(s_meas_resources) / sizeof(s_meas_resources[0]))
 
@@ -662,8 +675,8 @@ static uint16_t build_topic_env(uint8_t *buf)
     p.bme280_humidity_cpct = g_system_state.bme280_humidity_centipct;
     p.bme280_ok            = g_system_state.bme280_ok ? 1U : 0U;
     p.onboard_temp_cdeg    = g_system_state.temperature_cdeg;
-    p.external_temp_cdeg   = 0;      /* LM35 driver not ported yet */
-    p.external_temp_ok     = 0U;
+    p.external_temp_cdeg   = g_system_state.temp_ext_cdeg;
+    p.external_temp_ok     = g_system_state.temp_ext_ok ? 1U : 0U;
     memcpy(buf, &p, sizeof p);
     return sizeof p;
 }

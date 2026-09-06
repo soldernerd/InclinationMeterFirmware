@@ -3,6 +3,7 @@
 #include "app_leds.h"
 #include "app_ui.h"
 #include "drv_tmp236.h"
+#include "drv_lm35.h"
 #include "drv_bme280.h"
 #include "drv_sharp_lcd.h"
 #include "drv_buzzer.h"
@@ -50,6 +51,18 @@ static void task_temperature(void)
     if (drv_tmp236_get_result(&data) == DRV_OK) {
         g_system_state.temperature_cdeg = data.temp_cdeg;
     }
+
+    /* LM35 external temp (WP11) — same ADC scan, different channel. ok
+     * stays false while the reading is out of the LM35's datasheet range
+     * (disconnected / shorted). */
+    lm35_data_t lm;
+    if (drv_lm35_get_result(&lm) == DRV_OK) {
+        g_system_state.temp_ext_cdeg = lm.temp_cdeg;
+        g_system_state.temp_ext_ok   = true;
+    } else {
+        g_system_state.temp_ext_ok   = false;
+    }
+
     /* drv_tmp236_start_read just calls hal_adc_start; safe to call even if
      * a scan is already running — hal_adc_start no-ops in that case. */
     (void)drv_tmp236_start_read();

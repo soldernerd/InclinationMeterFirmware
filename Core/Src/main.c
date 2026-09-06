@@ -41,6 +41,7 @@
 #include "hal_rtc.h"
 #include "system_state.h"
 #include "drv_tmp236.h"
+#include "drv_lm35.h"
 #include "drv_bme280.h"
 #include "drv_24lc256.h"
 #include "drv_encoder.h"
@@ -201,6 +202,7 @@ int main(void)
    * ADC .valid and simply report nothing until a later scan succeeds. */
   g_system_state.adc_ok = hal_adc_init();
   drv_tmp236_init();             /* no-op: reads via the same internal ADC, no bus of its own */
+  drv_lm35_init();               /* likewise — external-temp channel of the same ADC scan */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: ADC calibration done */
 
   /* I2C1 / EEPROM — needs the 3.3V rail above up. */

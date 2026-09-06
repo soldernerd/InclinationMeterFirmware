@@ -94,9 +94,18 @@ def run_basic(link):
 
     st, data = request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP))
     if st == 0 and len(data) >= 2:
-        print(f"  TEMP          [OK] {struct.unpack('<h', data[:2])[0] / 100:+.2f} C")
+        print(f"  TEMP          [OK] {struct.unpack('<h', data[:2])[0] / 100:+.2f} C (onboard)")
     else:
         print(f"  TEMP          [{a.STATUS.get(st, st)}] {(data or b'').hex()}")
+
+    ste, de = request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_EXT_TEMP))
+    sto, do = request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_EXT_TEMP_OK))
+    if ste == 0 and sto == 0 and len(de) >= 2 and do:
+        v = struct.unpack('<h', de[:2])[0] / 100
+        print(f"  EXT TEMP      [OK] {v:+.2f} C (LM35)  "
+              f"{'valid' if do[0] else 'out of range / no sensor'}")
+    else:
+        print(f"  EXT TEMP      [{a.STATUS.get(ste, ste)}]")
 
     getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)
     setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)

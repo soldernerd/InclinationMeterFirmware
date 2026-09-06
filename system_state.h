@@ -68,7 +68,15 @@ typedef struct {
     int16_t  scl3300_z_cdeg;
     int32_t  pcap04_1_af;
     int32_t  pcap04_2_af;
-    int16_t  temperature_cdeg;
+    int16_t  temperature_cdeg;      /* TMP236 on-board (drv_tmp236.c) */
+
+    /* LM35 external temperature sensor (WP11, Drivers_App/drv_lm35.c),
+     * TEMP_SENSE_EXT / PB11 / ADC1_IN15. Independent of temperature_cdeg
+     * (TMP236) and the BME280. temp_ext_ok is false until a plausible
+     * reading exists — a disconnected/faulted LM35 reads out of range and
+     * drv_lm35_get_result() rejects it. */
+    int16_t  temp_ext_cdeg;        /* 0.01 degC / LSB */
+    bool     temp_ext_ok;
 
     int32_t  tilt_pcap04_umpm;
     int32_t  tilt_scl3300_x_umpm;

@@ -9,8 +9,8 @@ Commands (test beep / signal-analysis toggle / force-charge), Settings
 (every `DeviceSettings` field), Measurements (onboard temp, battery,
 BME280), Topic groups (environmental + device status), a Debug-messages
 log stream, Raw data (ADS131M04 diagnostics, `0x7/0x00`), and Bulk
-transfers (raw ADC capture, `0x8/0x00`). Calibrations (0x2) and the LM35
-external-temp resource are not present yet. Sections below cover the
+transfers (raw ADC capture, `0x8/0x00`). Calibrations (0x2) are not present yet (they configure the WP10
+displacement path, which isn't on this build). Sections below cover the
 main categories; see `Services/svc_api.h` for the exhaustive resource
 list.
 
@@ -150,6 +150,8 @@ Request payload: none. Response: status only. Beeps the buzzer ~100 ms.
 | 0x04 BME280 pressure | `0x0404` | u32, Pa |
 | 0x05 BME280 humidity | `0x0405` | u16, centi-%RH |
 | 0x06 BME280 fresh | `0x0406` | u8, 0/1 (1 = last reading current) |
+| 0x07 external temp | `0x0407` | i16, centi-°C (LM35) |
+| 0x08 external temp valid | `0x0408` | u8, 0/1 |
 
 - **GET**: request payload none → response `[OK][value]`.
 - **SUBSCRIBE** (`0x34xx`): request payload = `u32 interval_ms` LE, range
@@ -179,8 +181,8 @@ returns `[OK][payload]`. All fields little-endian.
 | 6 | u16 | BME280 humidity, centi-%RH |
 | 8 | u8  | BME280 fresh (0/1) |
 | 9 | i16 | onboard temperature, centi-°C (TMP236) |
-| 11 | i16 | external temperature, centi-°C (LM35 — 0, not wired yet) |
-| 13 | u8 | external temperature valid (0 until the LM35 driver lands) |
+| 11 | i16 | external temperature, centi-°C (LM35, TEMP_SENSE_EXT) |
+| 13 | u8 | external temperature valid (0 if out of range / no sensor) |
 
 ### `0x5/0x01` — Device status  → GET `0x0501`, SUBSCRIBE `0x3501` (18 B payload)
 

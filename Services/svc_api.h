@@ -178,6 +178,9 @@ typedef enum {
 #define API2_RES_MEAS_BME280_PRESS   0x04U   /* uint32 Pa */
 #define API2_RES_MEAS_BME280_HUMID   0x05U   /* uint16 centi-%RH (0.01 %RH/LSB) */
 #define API2_RES_MEAS_BME280_OK      0x06U   /* uint8 0/1 — is the last reading fresh */
+/* LM35 external temperature (WP11), TEMP_SENSE_EXT / PB11. */
+#define API2_RES_MEAS_EXT_TEMP       0x07U   /* int16 centi-degC */
+#define API2_RES_MEAS_EXT_TEMP_OK    0x08U   /* uint8 0/1 — in-range reading present */
 
 #define API2_MEASUREMENT_MIN_INTERVAL_MS 50U
 #define API2_MEASUREMENT_MAX_INTERVAL_MS 3600000U   /* 1 hour */
@@ -196,8 +199,8 @@ typedef enum {
  *   uint16 bme280_humidity_cpct  (0.01 %RH)
  *   uint8  bme280_ok
  *   int16  onboard_temp_cdeg     (TMP236, g_system_state.temperature_cdeg)
- *   int16  external_temp_cdeg    (LM35 — not wired yet, 0)
- *   uint8  external_temp_ok      (0 until the LM35 driver lands)
+ *   int16  external_temp_cdeg    (LM35, TEMP_SENSE_EXT)
+ *   uint8  external_temp_ok      (0 if out of range / no sensor)
  *
  * 0x01 Device status — the "inner workings" (18 B):
  *   uint16 battery_mv

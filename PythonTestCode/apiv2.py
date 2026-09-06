@@ -50,6 +50,8 @@ MEAS_BME280_TEMP  = 0x03   # int16  centi-degC
 MEAS_BME280_PRESS = 0x04   # uint32 Pa
 MEAS_BME280_HUMID = 0x05   # uint16 centi-%RH
 MEAS_BME280_OK    = 0x06   # uint8  0/1  (last reading fresh)
+MEAS_EXT_TEMP     = 0x07   # int16  centi-degC (LM35, TEMP_SENSE_EXT)
+MEAS_EXT_TEMP_OK  = 0x08   # uint8  0/1  (in-range reading present)
 DBG_LOG_STREAM = 0x00
 
 # Topic groups (CAT_TOPICS = 5) — GET or SUBSCRIBE (4-byte LE interval_ms payload)
