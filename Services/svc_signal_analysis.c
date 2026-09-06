@@ -84,10 +84,11 @@ static volatile uint32_t s_pending_n;
 static int32_t s_amplitude_mv[NUM_CHANNELS];
 static int32_t s_phase_mdeg[NUM_CHANNELS];
 
-/* --- Bulk raw-ADC capture buffer --- raw sign-extended 24-bit codes,
- * ch0..ch3 interleaved per sample. Filled from on_sample() (ISR) while
- * s_cap_active; drained by svc_api's bulk pump (task) once s_cap_done. */
-static int32_t          s_cap_buf[ADC_BULK_SAMPLE_COUNT][NUM_CHANNELS];
+/* --- Bulk raw-ADC capture buffer --- packed 24-bit codes, little-endian
+ * signed, ch0..ch3 interleaved: 12 bytes per sample. Filled from
+ * on_sample() (ISR) while s_cap_active; drained by svc_api's bulk pump
+ * (task) once s_cap_done. */
+static uint8_t          s_cap_buf[ADC_BULK_SAMPLE_COUNT * ADC_BULK_BYTES_PER_SAMPLE];
 static volatile uint16_t s_cap_idx    = 0;
 static volatile bool     s_cap_active = false;
 static volatile bool     s_cap_done   = false;
@@ -108,10 +109,13 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
      * capture runs (see svc_signal_analysis.h). */
     if (s_cap_active) {
         if (s_cap_idx < ADC_BULK_SAMPLE_COUNT) {
-            s_cap_buf[s_cap_idx][0] = ch0;
-            s_cap_buf[s_cap_idx][1] = ch1;
-            s_cap_buf[s_cap_idx][2] = ch2;
-            s_cap_buf[s_cap_idx][3] = ch3;
+            uint8_t *p = &s_cap_buf[(size_t)s_cap_idx * ADC_BULK_BYTES_PER_SAMPLE];
+            const int32_t v[NUM_CHANNELS] = { ch0, ch1, ch2, ch3 };
+            for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
+                p[i * 3 + 0] = (uint8_t)(v[i] & 0xFF);
+                p[i * 3 + 1] = (uint8_t)((v[i] >> 8) & 0xFF);
+                p[i * 3 + 2] = (uint8_t)((v[i] >> 16) & 0xFF);
+            }
             if (++s_cap_idx >= ADC_BULK_SAMPLE_COUNT) {
                 s_cap_t1   = hal_systick_get_ms();
                 s_cap_done = true;
@@ -246,9 +250,9 @@ void svc_signal_analysis_last_capture(uint16_t *samples, uint16_t *drops,
     if (elapsed_ms) *elapsed_ms = s_last_elapsed_ms;
 }
 
-const int32_t *svc_signal_analysis_capture_buffer(void)
+const uint8_t *svc_signal_analysis_capture_buffer(void)
 {
-    return &s_cap_buf[0][0];
+    return s_cap_buf;
 }
 
 uint16_t svc_signal_analysis_capture_sample_count(void)

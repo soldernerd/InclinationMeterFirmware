@@ -235,9 +235,9 @@ typedef enum {
  *      is fixed and known from this doc, spec §4.5). Ack is a bare status
  *      byte. Then Config/config.h ADC_BULK_SAMPLE_COUNT samples are
  *      streamed as chunk packets under the same opcode, each:
- *        [status=OK][page:1][sample:16]xN,  N <= ADC_BULK_CHUNK_SAMPLES
- *      one sample = ch0,ch1,ch2,ch3 as int32 LE, raw sign-extended 24-bit
- *      ADC codes (1 LSB = 2.4 V / 2^23, gain 1). `page` is the wrapping
+ *        [status=OK][page:1][sample:12]xN,  N <= ADC_BULK_CHUNK_SAMPLES
+ *      one sample = ch0,ch1,ch2,ch3 each as a 3-byte little-endian signed
+ *      24-bit ADC code (1 LSB = 2.4 V / 2^23, gain 1). `page` is the wrapping
  *      chunk counter (§2.3) for gap detection. The host knows it's done
  *      when it has ADC_BULK_SAMPLE_COUNT samples; on a CRC error or gap it
  *      CANCEL_BULKs and restarts (§4.5, no per-chunk resend).

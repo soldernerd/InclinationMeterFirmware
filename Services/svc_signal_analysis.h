@@ -47,7 +47,7 @@ bool      svc_signal_analysis_is_running(void);
 DrvStatus      svc_signal_analysis_capture_begin(void);
 bool           svc_signal_analysis_capture_done(void);
 void           svc_signal_analysis_capture_end(void);
-const int32_t *svc_signal_analysis_capture_buffer(void);   /* [count*4] flattened, ch0..ch3 interleaved */
+const uint8_t *svc_signal_analysis_capture_buffer(void);   /* count * ADC_BULK_BYTES_PER_SAMPLE bytes: per sample, ch0..ch3 as 3-byte LE signed */
 uint16_t       svc_signal_analysis_capture_sample_count(void);
 uint16_t       svc_signal_analysis_capture_drops(void);    /* trigger ticks skipped (DRDY not ready) during the fill */
 

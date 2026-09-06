@@ -31,8 +31,9 @@ OP_CMD_SIGNAL_ANALYSIS = opcode(EXECUTE, CAT_COMMANDS, 0x01)  # payload: 1 byte,
 BULK_RAW_ADC              = 0x00
 OP_BULK_RAW_ADC_START     = opcode(START_BULK,  CAT_BULK, BULK_RAW_ADC)
 OP_BULK_RAW_ADC_CANCEL    = opcode(CANCEL_BULK, CAT_BULK, BULK_RAW_ADC)
-ADC_BULK_SAMPLE_COUNT     = 4096   # must match Config/config.h
-ADC_BULK_CHUNK_SAMPLES    = 7      # must match Config/config.h
+ADC_BULK_SAMPLE_COUNT     = 6144   # must match Config/config.h
+ADC_BULK_CHUNK_SAMPLES    = 10     # must match Config/config.h
+ADC_BULK_BYTES_PER_SAMPLE = 12     # 4 ch x 3-byte packed signed LE
 ADC_RAW_LSB_V             = 2.4 / (1 << 23)   # 1 raw code = 2.4 V / 2^23 (gain 1)
 
 # Raw data (category 0x7) — ADS131M04 register / capture diagnostics
@@ -169,15 +170,22 @@ def decode_adc_diag(data: bytes):
     }
 
 
+def _s24le(b, o):
+    v = b[o] | (b[o + 1] << 8) | (b[o + 2] << 16)
+    return v - 0x1000000 if (v & 0x800000) else v
+
+
 def decode_bulk_adc_chunk(data: bytes):
-    """A bulk raw-ADC chunk's payload-after-status: [page:1][sample:16]xN.
+    """A bulk raw-ADC chunk's payload-after-status: [page:1][sample:12]xN,
+    each sample = ch0..ch3 as 3-byte little-endian signed 24-bit codes.
     Returns (page, [(ch0,ch1,ch2,ch3), ...]) with channels as signed ints."""
     if not data:
         return (None, [])
     page = data[0]
     body = data[1:]
-    n = len(body) // 16
-    rows = [struct.unpack_from("<iiii", body, 16 * i) for i in range(n)]
+    n = len(body) // ADC_BULK_BYTES_PER_SAMPLE
+    rows = [tuple(_s24le(body, ADC_BULK_BYTES_PER_SAMPLE * i + 3 * c) for c in range(4))
+            for i in range(n)]
     return (page, rows)
 
 

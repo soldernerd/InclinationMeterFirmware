@@ -391,9 +391,10 @@ static void bulk_pump(void)
         svc_logf(API2_LOG_INFO, "bulk: capture full, %u trigger drops", (unsigned)drops);
     }
 
-    const int32_t *buf   = svc_signal_analysis_capture_buffer();   /* [total*4] */
+    const uint8_t *buf   = svc_signal_analysis_capture_buffer();   /* total * BPS bytes */
     const uint16_t total = svc_signal_analysis_capture_sample_count();
     const ApiReadyFn ready = s_t[t].ready_fn;
+    enum { BPS = ADC_BULK_BYTES_PER_SAMPLE };
 
     for (uint8_t c = 0; c < ADC_BULK_CHUNKS_PER_TICK && s_bulk.send_pos < total; ++c) {
         if (ready != 0 && !ready()) break;   /* let the link drain */
@@ -401,13 +402,12 @@ static void bulk_pump(void)
         uint16_t k = (uint16_t)(total - s_bulk.send_pos);
         if (k > ADC_BULK_CHUNK_SAMPLES) k = ADC_BULK_CHUNK_SAMPLES;
 
-        uint8_t payload[1U + ADC_BULK_CHUNK_SAMPLES * 4U * sizeof(int32_t)];
+        uint8_t payload[1U + ADC_BULK_CHUNK_SAMPLES * BPS];
         payload[0] = s_bulk.page++;
-        memcpy(&payload[1], &buf[(size_t)s_bulk.send_pos * 4U],
-               (size_t)k * 4U * sizeof(int32_t));
+        memcpy(&payload[1], &buf[(size_t)s_bulk.send_pos * BPS], (size_t)k * BPS);
 
         send_framed(t, s_bulk.opcode, API2_STATUS_OK, payload,
-                    (uint16_t)(1U + (size_t)k * 4U * sizeof(int32_t)), false);
+                    (uint16_t)(1U + (size_t)k * BPS), false);
         s_bulk.send_pos = (uint16_t)(s_bulk.send_pos + k);
     }
 
