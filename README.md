@@ -4,7 +4,7 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 
 ## Status
 
-**WP1–WP7 complete and on `master`** (REV B hardware), all bench-tested on real silicon
+**WP1–WP8 complete and on `master`** (REV B hardware), all bench-tested on real silicon
 (WP5 skipped):
 
 - **WP1** — Sharp Memory LCD bring-up, VCOM timer, u8g2.
@@ -21,14 +21,24 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
   "Power off" menu action.
 - **WP7** — AD9833 DDS waveform generator (`Drivers_App/drv_ad9833.c`): one-shot init to a
   fixed ~2604 Hz sine on `VOUT`, SPI3 + TIM1 CH4 MCLK; the DDS then free-runs on-chip.
+- **WP8** — ADS131M04 4-channel simultaneous-sampling ADC front end (`Drivers_App/drv_ads131m04.c`,
+  `Services/svc_signal_analysis.c`). SPI1 + TIM2 CH3 MCLK; the 20833 Hz frame read is a
+  **raw-DMA** path (direct DMA1_Ch2/Ch3 + SPI1 registers, no HAL SPI state machine) polled
+  from a lean TIM7 ISR at 2× the data rate. Two consumers: a single-bin DFT
+  (amplitude/phase per channel, off by default — toggle via API `Commands` resource 0x01)
+  and a **bulk raw-ADC capture** (API `Bulk` / `START_BULK` resource 0x00: fills a 6144-sample
+  ×4-channel 24-bit-packed RAM buffer at full rate, then streams it out chunked over any
+  transport — `docs/api-v2-spec.md` §4.5). Register/rate diagnostics under API `Raw data`
+  resource 0x00. See `docs/wp8_ads131m04_adc.md`.
 
-Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 27% / FLASH 25%. Tagged
-`wp1-debugged` … `wp7-debugged`. The `wp2`–`wp7` branch pointers track `master`.
+Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 78% / FLASH 29% (the bulk
+capture buffer is ~50% of SRAM on its own). Tagged `wp1-debugged` … `wp8-debugged`. The
+`wp2`–`wp8` branch pointers track `master`.
 
-The `wp8`–`wp11` branches hold sketched-but-not-bench-tested sensor drivers
-(ADS131M04, BME280, displacement demod). Each is squash-ported onto `master` and
-bench-validated one at a time. `docs/wp2-5_rebase_status.md` is the historical record of
-the August branch-rebase effort (superseded by the September bench work).
+The `wp9`–`wp11` branches hold sketched-but-not-bench-tested sensor drivers
+(BME280, displacement demod, remaining API v2 resources). Each is squash-ported onto
+`master` and bench-validated one at a time. `docs/wp2-5_rebase_status.md` is the historical
+record of the August branch-rebase effort (superseded by the September bench work).
 
 ## Hardware
 

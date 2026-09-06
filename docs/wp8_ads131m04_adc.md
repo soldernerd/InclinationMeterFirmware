@@ -1,5 +1,12 @@
 # WP8 — ADS131M04 ADC (Simultaneous-Sampling Front End) — Status
 
+> **Bench-debugged 2026-09-06 — tag `wp8-debugged`, fw 0.8.10.** The
+> design sections below are the pre-bench plan; several details changed
+> during bring-up (acquisition path, TIM7 rate, ISR, per-sample math) and
+> a bulk-capture feature + diagnostics were added. **See
+> "## Bench debugging outcome" at the end for the current state — it
+> supersedes the acquisition/CubeMX/"Not yet done" notes above it.**
+
 **Goal:** read back, via the ADS131M04, the sine wave WP7's AD9833 DAC now drives onto the
 board — all 4 channels simultaneously, at a fixed multiple of the DAC's own frequency — and
 compute each channel's amplitude and phase (channel 2 fixed at 0° by definition). Branches
@@ -173,13 +180,105 @@ things unrelated to the requested changes** — found and fixed the same session
 (`-Wall`, clean `grep` of a full clean rebuild's output). RAM 34.6 KB (23.4%),
 FLASH 133.6 KB (26.1%).
 
-## Not yet done
+## Bench debugging outcome (2026-09-06 — `wp8-debugged`, fw 0.8.10)
 
-- **Real-hardware verification** — same caveat as WP7: nothing here has touched real silicon.
-  SPI timing margins, the DRDY-poll self-healing path, and the DFT math's actual accuracy
-  are all logic/datasheet-level correctness only until flashed.
-- **Amplitude calibration** — `svc_signal_analysis.c`'s mV conversion uses the ADC's
-  datasheet LSB size (`2.4 V / Gain / 2^24`) directly; no empirical calibration against a
-  known reference signal has been done.
-- **Code review** — not yet run; should mirror WP7's 3-angle pass (register-math
-  re-derivation, SPI/timer/DMA HAL usage + cross-file impact, CLAUDE.md/pin-CSV conventions).
+Flashed and bench-tested on REV B hardware over an ST-Link (see the
+repo-root `flash.ps1`: `STM32_Programmer_CLI` connect-under-reset +
+run-after). Register read-back and every diagnostic below go over the
+wired-UART API transport with `pyserial` — `PythonTestCode/adc_diag.py`,
+`bulk_adc_csv.py`.
+
+### What changed from the plan
+
+**1. The pipeline is OFF at boot.** Nothing consumes the amplitude/phase
+output yet, and running the 20833 Hz frame read unconditionally starved
+the cooperative scheduler's SysTick (erratic status-LED heartbeat, 1–2 s
+stalls — the same symptom seen when WP8 first landed). `drv_ads131m04_init()`
+now only configures the chip + starts MCLK; `drv_ads131m04_start()/stop()`
+arm/disarm the acquisition. Toggle at runtime over the API — **`EXECUTE` /
+`Commands` (0x1) / resource `0x01`**, 1-byte payload `0`=stop `1`=start.
+
+**2. Acquisition is a raw-DMA read, not `HAL_SPI_TransmitReceive_DMA`.**
+The HAL wrapper cost ~25–40 µs CPU per 18-byte frame (FIFO spin in
+`SPI_EndRxTxTransaction`, run from the DMA-complete ISR) — far too much at
+the frame rate, and it made the read latency non-uniform. Replaced with
+`HAL_App/hal_spi.c`'s `hal_spi_adc_stream_init/begin/done/end`: drives
+`DMA1_Channel2` (SPI1_TX) / `DMA1_Channel3` (SPI1_RX) and the SPI1
+registers directly — no HAL SPI state machine, no completion interrupt.
+~10 µs on the wire, negligible CPU. `drv_ads131m04.c`'s `on_trigger` is
+now a 3-state poll (collect finished frame / wait / kick new frame) with
+no HAL SPI calls and no drop counter (there are none).
+
+**3. DRDY poll is 2× oversampled with a lean ISR.** TIM7 and the ADS's
+own fDATA are two free-running 20833 Hz clocks with a drifting phase
+relationship; a 1× polled read skipped whole conversions whenever a tick
+kept landing just before DRDY (effective rate wandered 8–14 kHz, and a
+2604 Hz input aliased to ~3.9 kHz). Fix: TIM7 → **41666.67 Hz**
+(`ADS131M04_TRIGGER_TIMER_PERIOD` 3071 → 1535). DRDY is level-mode
+(`MODE` register `DRDY_FMT = 0`) — it stays low from end-of-conversion
+until the frame is read — so a slower poll can only *delay* a read, never
+miss a conversion. `TIM7_LPTIM2_IRQHandler` uses a fast path (clear `UIF`,
+call `hal_tim_adc_trigger_isr()` straight through) instead of the heavy
+`HAL_TIM_IRQHandler` flag/channel scan.
+
+**4. Per-sample DFT MAC is int32, not int64** (the `SAMPLE_SHIFT`
+pre-shift in `svc_signal_analysis.c`) — an int64×int64 multiply-add ×4
+channels at 20833 Hz was part of the SysTick pressure.
+
+### Bulk raw-ADC capture (new — API `Bulk` category 0x8)
+
+`START_BULK` / `CANCEL_BULK`, resource `0x00`. Decouples high-rate
+sampling from transport speed (`docs/api-v2-spec.md` §4.5): the device
+fills an in-RAM buffer at the full sample rate, then streams it out in
+chunks over whatever transport at whatever pace the link allows.
+
+- Buffer: `ADC_BULK_SAMPLE_COUNT` = **6144** samples × 4 channels ×
+  **3 bytes** (24-bit codes packed little-endian signed,
+  `ADC_BULK_BYTES_PER_SAMPLE` = 12) = **72 KiB** (~50 % of the 144 KB
+  SRAM). One capture spans ~295 ms.
+- While a capture is armed, `on_sample()` only stores into the buffer —
+  the DFT MAC is skipped, so the ISR stays cheap.
+- Chunk packet: `[status=OK][page:1][sample:12]×10` under the `START_BULK`
+  opcode (`ADC_BULK_CHUNK_SAMPLES` = 10). `page` is the wrapping counter
+  (§2.3) for gap detection; the host knows the transfer is done when it
+  has 6144 samples. On a CRC error / gap it `CANCEL_BULK`s and restarts
+  (no per-chunk resend).
+- Paced by a new optional per-transport `ApiReadyFn` (TX-ring headroom) —
+  `svc_uart.c` / `svc_ble.c` register one; the pump yields between bursts
+  so command responses still get through mid-transfer.
+- Exclusive device-wide: NACKs `BUSY_EXCLUSIVE` while the real-time DFT
+  stream is running or another bulk is active, `BUSY_RESOURCE` if the ADS
+  failed to init.
+
+### Diagnostics (new — API `Raw data` category 0x7)
+
+`GET` resource `0x00` → 24-byte struct: ADS `ID` / `STATUS` / `MODE` /
+`CLOCK` / `GAIN1` / `CFG` registers (read back over SPI at the end of
+init via `RREG`), the `CLOCK` value the driver intended, `regs_read_ok`,
+`ads_ok`, and last-capture stats (samples / trigger drops / elapsed ms →
+effective sample rate). This is what confirmed `CLOCK = 0x0F02`
+(OSR = 128, fDATA nominal 20833 Hz) and, with the fixes above, a
+rock-stable **20827–20898 Hz, 0 drops** every run.
+
+### Verified on hardware
+
+- Register read-back: `ID = 0x2405` (ADS131M04, 4-ch), `CLOCK` matches
+  the intended `0x0F02`.
+- Bulk capture: 6144 samples / 295 ms / **0 drops** / ~20.83 kHz, stable
+  across runs. FFT of a capture — the two driven channels peak **exactly
+  at 2604 Hz** (the DAC frequency), **−179.8°** apart; the two unconnected
+  channels sit at the noise floor (~150 code RMS).
+- A 6 s sustained real-time DFT run keeps the scheduler fully responsive
+  (8/8 API round-trips) — the SysTick-starvation regression is gone.
+
+### Still open / deferred
+
+- **Amplitude calibration** — `svc_signal_analysis.c`'s mV conversion
+  still uses the datasheet LSB (`2.4 V / 2^23`, peak) with no empirical
+  reference calibration.
+- **Analog front end** — the ADS input is not ground-referenced (large
+  common `~ -0.17 V` DC offset on every channel, visible in any capture);
+  the user worked around downstream clipping by halving the gain. Not a
+  firmware issue.
+- **Code review** — the WP7-style 3-angle pass hasn't been run on the
+  final state.
