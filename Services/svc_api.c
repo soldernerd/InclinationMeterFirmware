@@ -4,6 +4,7 @@
 #include "svc_signal_analysis.h"
 #include "svc_powertest.h"
 #include "hal_pintest.h"
+#include "hal_dfu.h"
 #include "drv_ads131m04.h"
 #include "svc_log.h"
 #include "hal_rtc.h"
@@ -304,11 +305,25 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
     }
     if (res != API2_RES_CMD_TEST_BEEP && res != API2_RES_CMD_SIGNAL_ANALYSIS &&
         res != API2_RES_CMD_FORCE_CHARGE && res != API2_RES_CMD_POWER_TEST &&
-        res != API2_RES_CMD_PIN_TEST) {
+        res != API2_RES_CMD_PIN_TEST && res != API2_RES_CMD_REBOOT_DFU) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (res == API2_RES_CMD_REBOOT_DFU) {
+        if (paylen != 0U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        svc_log(API2_LOG_WARN, "cmd: reboot to DFU");
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        /* Let the response frame drain out of the transport before the
+         * reset (same approach as PIN_TEST's reboot bit). */
+        for (volatile uint32_t i = 0; i < 400000U; ++i) { }
+        hal_dfu_request_and_reset();
+        return;                     /* unreachable */
+    }
 
     if (res == API2_RES_CMD_PIN_TEST) {
         if (paylen != 1U) {

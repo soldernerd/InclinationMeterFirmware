@@ -5,6 +5,7 @@
 #include "app_scheduler.h"
 #include "system_state.h"
 #include "hal_power.h"
+#include "hal_dfu.h"
 #include "svc_power.h"
 #include "svc_battery.h"
 
@@ -278,8 +279,10 @@ void app_ui_update(void)
              * state) performs the action immediately.
              *   FORCE_CHARGE — svc_battery_force_charge(); returns, drop
              *     back to the row list.
-             *   REBOOT_DFU   — hal_power_reboot_to_dfu() (best-effort jump;
-             *     see its comment — self-resets on fall-through). No return.
+             *   REBOOT_DFU   — hal_dfu_request_and_reset(): set a retained
+             *     flag and reset; the jump into the ROM bootloader happens
+             *     from the top of main(). No return. Device stays in DFU
+             *     until reflashed or power-cycled. See HAL_App/hal_dfu.h.
              *   POWER_OFF    — svc_power_shutdown_now() -> Standby. No return. */
             if (e1_press) {
                 beep_confirm();
@@ -289,7 +292,7 @@ void app_ui_update(void)
                         g_ui_state.settings_editing = false;
                         g_ui_state.redraw_needed    = true;
                         break;
-                    case UI_SETTING_REBOOT_DFU: hal_power_reboot_to_dfu();  break;
+                    case UI_SETTING_REBOOT_DFU: hal_dfu_request_and_reset(); break;
                     case UI_SETTING_POWER_OFF:  svc_power_shutdown_now();   break;
                     default:                                               break;
                 }

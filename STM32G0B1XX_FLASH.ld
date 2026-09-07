@@ -226,6 +226,26 @@ SECTIONS
   PROVIDE( __bss_start = __tbss_start );
   PROVIDE( __bss_size = __bss_end - __bss_start );
 
+  /* Retained-across-warm-reset scratch: NOT zeroed by the startup code
+   * (it only clears _sbss.._ebss and copies _sdata.._edata), so a variable
+   * placed here with __attribute__((section(".noinit"))) keeps its value
+   * through NVIC_SystemReset(). Used by HAL_App/hal_dfu.c to pass a
+   * "reboot into the ROM bootloader" request across the reset. Lost on a
+   * power-on / BOR / Standby exit, which is the desired one-shot behaviour.
+   *
+   * NOTE (CubeMX regen hazard): STM32CubeMX overwrites this linker script
+   * on regeneration and this block is not inside any USER CODE marker —
+   * re-add it after any regen. See memory cubemx-regen-hazards. */
+  .noinit (NOLOAD) :
+  {
+    . = ALIGN(4);
+    PROVIDE( __noinit_start = . );
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+    PROVIDE( __noinit_end = . );
+  } >RAM
+
   /* User_heap_stack section, used to check that there is enough RAM left */
   ._user_heap_stack (NOLOAD) :
   {

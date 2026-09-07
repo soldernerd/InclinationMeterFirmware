@@ -28,6 +28,7 @@ OP_CMD_FORCE_CHARGE    = opcode(EXECUTE, CAT_COMMANDS, 0x02)  # no payload — c
 OP_CMD_POWER_TEST      = opcode(EXECUTE, CAT_COMMANDS, 0x03)  # payload u32 mask LE (svc_powertest.h)
 OP_RAW_PWRTEST         = opcode(GET, CAT_RAW, 0x01)           # -> u32 mask + u8 rail flags
 OP_CMD_PIN_TEST        = opcode(EXECUTE, CAT_COMMANDS, 0x04)  # 1B: [5:0]=SCK,MOSI,CS,DISP_ON,VCOM,BUZZER  bit6=allow DISP_ON  bit7=reboot
+OP_CMD_REBOOT_DFU      = opcode(EXECUTE, CAT_COMMANDS, 0x05)  # no payload — reset into the ROM bootloader (one-shot; see HAL_App/hal_dfu.h)
 
 # svc_powertest.h bit map — set bit = subsystem ON
 PWR_5V_RAIL   = 1 << 0
