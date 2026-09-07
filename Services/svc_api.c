@@ -316,12 +316,12 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
             send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
             return;
         }
-        svc_log(API2_LOG_WARN, "cmd: reboot to DFU");
+        svc_log(API2_LOG_WARN, "cmd: reboot to DFU (nBOOT0=0; reflash with nBOOT0=1 to recover)");
         send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        /* Let the response frame drain out of the transport before the
-         * reset (same approach as PIN_TEST's reboot bit). */
+        /* Let the response frame drain out of the transport before we go
+         * offline (same approach as PIN_TEST's reboot bit). */
         for (volatile uint32_t i = 0; i < 400000U; ++i) { }
-        hal_dfu_request_and_reset();
+        hal_dfu_enter_bootloader();
         return;                     /* unreachable */
     }
 

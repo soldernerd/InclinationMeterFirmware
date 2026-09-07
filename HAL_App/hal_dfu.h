@@ -1,42 +1,42 @@
 #ifndef HAL_DFU_H
 #define HAL_DFU_H
 
-#include <stdbool.h>
-
 /* Reboot into the STM32G0 ROM system bootloader (USB DFU on PA11/PA12,
- * plus USART/I2C/SPI) so the device can be reflashed with no ST-Link.
+ * VID 0x0483 / PID 0xDF11) so the device can be reflashed with no ST-Link.
  *
- * History: five in-application "jump straight to system memory" variants
- * and two "force PROGEMPTY + reset" variants (fw 0.4.20-0.4.36, parked)
- * all failed — every one of them tore down a *running* system (RCC, NVIC,
- * USB, CRS) by hand and jumped from an unclean state. This module takes
- * the other route: set a retained flag, NVIC_SystemReset(), and perform
- * the jump as the very first thing in main() — before HAL_Init(), while
- * the core is still in its reset state (HSISYS clock, every peripheral in
- * reset, no IRQs, SysTick off). That is the environment the ROM
- * bootloader expects, and nothing needs de-initialising.
+ * Why the option byte and not a software jump: every software path into
+ * the bootloader (in-app jump to 0x1FFF0000, or a clean jump from the top
+ * of a fresh reset, or forcing FLASH PROGEMPTY) was tried on this board
+ * (fw 0.4.20-0.4.36 and again on the `dfu` branch). The jump now reliably
+ * REACHES the bootloader, but with a valid application present and no
+ * hardware BOOT0 assertion the bootloader hands control straight back to
+ * the app — even with flash mass-erased, because the "flash is empty"
+ * check that would make it stay is only re-sampled at a power-on reset,
+ * which firmware cannot produce. Bench-verified: nBOOT0 = 0 is the only
+ * entry the bootloader treats as "stay here", and it brings up USB DFU
+ * cleanly on this hardware.
  *
- * The request flag lives in the .noinit RAM section (see the linker
- * script): it survives NVIC_SystemReset() but not a power-cycle / BOR /
- * Standby exit, so the DFU entry is strictly one-shot — if the host never
- * reflashes, the next reset boots the application normally. */
+ * So this sets the nBOOT0 user option byte to 0 and launches an option-
+ * byte reload (a reset that re-reads the boot configuration). The next
+ * boot — and EVERY boot after it — goes to the ROM bootloader until the
+ * option byte is set back to 1.
+ *
+ * RECOVERY IS NOT AUTOMATIC. A plain power-cycle does NOT bring the
+ * application back; the device stays in DFU until a host reflashes it
+ * AND restores nBOOT0 = 1 in the same operation, e.g.
+ *
+ *   STM32_Programmer_CLI -c port=USB1 -w firmware.hex \
+ *       -ob nSWBOOT0=1 nBOOT0=1 -v -rst
+ *
+ * or run PythonTestCode/dfu_flash.ps1. See docs/wp4_reboot_to_dfu.md.
+ */
 
-/* Set the one-shot request flag and immediately NVIC_SystemReset().
- * Does not return. Call from a command/menu handler after the response
- * has been flushed to the transport. */
-void hal_dfu_request_and_reset(void);
-
-/* Call as the first statement of main() (USER CODE BEGIN 1), before
- * HAL_Init(). If a DFU request is pending, clears it and jumps to the
- * ROM bootloader (does not return). Otherwise returns immediately and
- * boot continues as normal. */
-void hal_dfu_check_and_jump(void);
-
-/* One-shot: true exactly once after a boot whose immediately preceding
- * attempt jumped to the ROM bootloader but the bootloader handed control
- * straight back (fall-through past the jump). Clears itself on read.
- * Lets a normal-path log line record that the software DFU jump bounced.
- * Call after svc_log is up. */
-bool hal_dfu_consume_bounce_flag(void);
+/* Set nBOOT0 = 0 and launch the option-byte reload. Does not return on
+ * success (the reload resets the MCU into the ROM bootloader). Returns
+ * only if the option-byte programming failed, having issued a plain
+ * NVIC_SystemReset() as a fallback so the device is never left in a
+ * half-configured state. Call from a command / menu handler after the
+ * response has been flushed to the transport. */
+void hal_dfu_enter_bootloader(void);
 
 #endif /* HAL_DFU_H */

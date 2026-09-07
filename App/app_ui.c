@@ -279,10 +279,11 @@ void app_ui_update(void)
              * state) performs the action immediately.
              *   FORCE_CHARGE — svc_battery_force_charge(); returns, drop
              *     back to the row list.
-             *   REBOOT_DFU   — hal_dfu_request_and_reset(): set a retained
-             *     flag and reset; the jump into the ROM bootloader happens
-             *     from the top of main(). No return. Device stays in DFU
-             *     until reflashed or power-cycled. See HAL_App/hal_dfu.h.
+             *   REBOOT_DFU   — hal_dfu_enter_bootloader(): sets nBOOT0=0 and
+             *     launches an option-byte reload. No return. Device boots to
+             *     the ROM bootloader and STAYS there (a power-cycle will NOT
+             *     bring the app back) until a host reflashes with nBOOT0=1.
+             *     See HAL_App/hal_dfu.h / docs/wp4_reboot_to_dfu.md.
              *   POWER_OFF    — svc_power_shutdown_now() -> Standby. No return. */
             if (e1_press) {
                 beep_confirm();
@@ -292,7 +293,7 @@ void app_ui_update(void)
                         g_ui_state.settings_editing = false;
                         g_ui_state.redraw_needed    = true;
                         break;
-                    case UI_SETTING_REBOOT_DFU: hal_dfu_request_and_reset(); break;
+                    case UI_SETTING_REBOOT_DFU: hal_dfu_enter_bootloader();  break;
                     case UI_SETTING_POWER_OFF:  svc_power_shutdown_now();   break;
                     default:                                               break;
                 }

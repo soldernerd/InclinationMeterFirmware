@@ -1,27 +1,18 @@
 #!/usr/bin/env python3
 """
-Test the "reboot to DFU" path (fw 0.9.8+, EXECUTE Commands/0x05).
+Exercise "Reboot to DFU" (fw 0.9.12+, EXECUTE Commands/0x05).
 
-Sends the command over the wired UART, then measures how long the
-application stays down and reads the debug-log backlog once it (maybe)
-comes back. Three outcomes:
+The command sets the nBOOT0 option byte to 0 and launches an option-byte
+reload, so the device boots into the STM32 ROM bootloader (USB DFU,
+VID 0x0483 / PID 0xDF11) and STAYS there until reflashed with nBOOT0=1.
 
-  * app self-recovers after ~1-2 s AND the log shows
-    "dfu: jump reached the ROM bootloader, which handed control back"
-        -> the ROM bootloader bounced control back to the app.
-  * app stays down until an external reset (never self-recovers here)
-        -> the device is sitting in the ROM bootloader. If the native
-           USB (PA11/PA12) is cabled to this PC, a USB DFU device
-           enumerates and this script reports it.
-  * app self-recovers with no bounce log
-        -> reset happened but the jump never transferred (investigate).
-
-  python dfu_test.py                 # trigger + observe
+  python dfu_test.py            # trigger, then watch for the DFU device
   python dfu_test.py --port COM6
-  python dfu_test.py --watch 30
-  python dfu_test.py --no-trigger    # just observe (e.g. after the menu action)
+  python dfu_test.py --no-trigger   # just watch
 
-Restore the app with:  .\flash.ps1     (ST-Link / SWD)
+If the DFU device does not appear within ~10 s, tap NRST or unplug/replug
+the USB cable once — some hosts don't re-enumerate a bus-powered device
+across the fast option-byte-reload reset. Recover with:  .\dfu_flash.ps1
 Install:  pip install pyserial
 """
 
@@ -40,8 +31,6 @@ import apiv2 as a
 
 BAUD = 115200
 PROG = r"C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe"
-LOG_SUB   = a.opcode(a.SUBSCRIBE,   a.CAT_DEBUG, a.DBG_LOG_STREAM)
-LOG_UNSUB = a.opcode(a.UNSUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)
 
 
 def find_port():
@@ -58,7 +47,7 @@ def identity(ser):
     ser.reset_input_buffer()
     ser.write(a.build(a.OP_SYS_IDENTITY))
     re = a.Reassembler()
-    end = time.time() + 0.15
+    end = time.time() + 0.2
     while time.time() < end:
         for op, st, d in re.feed(ser.read(64)):
             if op == a.OP_SYS_IDENTITY and st == 0:
@@ -66,34 +55,19 @@ def identity(ser):
     return None
 
 
-def read_log_backlog(ser, secs=2.0):
-    ser.reset_input_buffer()
-    ser.write(a.build(LOG_SUB, bytes([0])))          # min severity INFO
-    lines, re = [], a.Reassembler()
-    end = time.time() + secs
-    while time.time() < end:
-        for op, st, d in re.feed(ser.read(128)):
-            if op == LOG_SUB and st == 0 and d and len(d) >= 3:
-                lines.append(f"[{a.SEVERITY.get(d[2], d[2]):5}] {d[3:].decode('ascii', 'replace')}")
-    ser.write(a.build(LOG_UNSUB))
-    return lines
-
-
-def dfu_usb_present():
+def dfu_present():
     try:
         out = subprocess.run([PROG, "-l", "usb"], capture_output=True, text=True,
                              timeout=15).stdout
     except Exception:
         return None
-    if "No STM32 device in DFU mode" in out:
-        return False
-    return ("Device Index" in out) or ("0xDF11" in out.upper())
+    return "Device Index" in out and "No STM32 device in DFU mode" not in out
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port")
-    ap.add_argument("--watch", type=float, default=25.0)
+    ap.add_argument("--watch", type=float, default=15.0)
     ap.add_argument("--no-trigger", action="store_true")
     args = ap.parse_args()
 
@@ -105,55 +79,35 @@ def main():
     if not args.no_trigger:
         ser.reset_input_buffer()
         ser.write(a.build(a.OP_CMD_REBOOT_DFU))
-        t0 = time.time()
-        print("REBOOT_DFU sent")
-    else:
-        t0 = time.time()
+        time.sleep(0.25)
+        ack = [a.STATUS.get(st, st) for op, st, d in
+               a.Reassembler().feed(ser.read(64)) if op == a.OP_CMD_REBOOT_DFU]
+        print(f"REBOOT_DFU ack: {ack or '(reset beat the response out)'}")
 
-    went_down = None
-    came_back = None
-    usb_seen = None
+    t0 = time.time()
+    silent_at = dfu_at = None
     while time.time() - t0 < args.watch:
-        alive = identity(ser) is not None
         el = time.time() - t0
-        if not alive and went_down is None and el > 0.3:
-            went_down = el
-            print(f"  t={el:5.2f}s  app went silent")
-        if alive and went_down is not None and came_back is None:
-            came_back = el
-            print(f"  t={el:5.2f}s  app answering again")
+        if silent_at is None and identity(ser) is None and el > 0.3:
+            silent_at = el
+            print(f"  t={el:4.1f}s  app offline")
+        if dfu_at is None and dfu_present():
+            dfu_at = el
+            print(f"  t={el:4.1f}s  *** STM32 Bootloader (USB DFU) enumerated ***")
             break
-        if usb_seen is None and went_down is not None and dfu_usb_present():
-            usb_seen = el
-            print(f"  t={el:5.2f}s  *** USB DFU device present ***")
-        time.sleep(0.1)
+        time.sleep(0.5)
+    ser.close()
 
     print("\n---- verdict ----")
-    if went_down is None:
-        print("app never went silent — reset/jump did not take. Check the command path.")
-        ser.close()
-        return
-
-    if came_back is not None:
-        print(f"app was down {came_back - went_down:.2f} s, then self-recovered.")
-        print("debug-log backlog after recovery:")
-        for ln in read_log_backlog(ser) or ["  (none)"]:
-            print(f"    {ln}")
-        print("\n-> a bounce log line above == the ROM bootloader handed control "
-              "back to the app (software DFU entry not viable on this path).")
+    if dfu_at is not None:
+        print("PASS: device is in the ROM bootloader and USB DFU is live.")
+        print("  reflash + restore normal boot with:  .\\dfu_flash.ps1")
+    elif silent_at is not None:
+        print("app went offline but no USB DFU device appeared.")
+        print("  -> tap NRST or unplug/replug USB once, then re-check with")
+        print("     STM32_Programmer_CLI -l usb   (or recover: .\\flash.ps1)")
     else:
-        held = time.time() - t0 - went_down
-        print(f"app still silent {held:.1f} s after going down — no self-recovery.")
-        d = usb_seen is not None or dfu_usb_present()
-        if d is True or usb_seen is not None:
-            print("USB DFU device IS enumerating -> device is in the ROM bootloader. "
-                  "Software DFU entry WORKS. Reflash with:")
-            print(f'   & "{PROG}" -c port=USB1 -w build\\Debug\\InclinationMeterFirmware.elf -v -rst')
-        else:
-            print("No USB DFU device seen. Either the device is wedged, or it is in "
-                  "the ROM bootloader but the native USB (PA11/PA12) is not cabled to "
-                  "this PC. Plug it in and re-run, or recover with .\\flash.ps1.")
-    ser.close()
+        print("app never went offline — the command did not take. Check the path.")
 
 
 if __name__ == "__main__":

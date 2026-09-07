@@ -38,7 +38,6 @@
 #include "hal_adc.h"
 #include "hal_uart.h"
 #include "hal_power.h"
-#include "hal_dfu.h"
 #include "hal_rtc.h"
 #include "system_state.h"
 #include "drv_tmp236.h"
@@ -110,10 +109,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  /* If a "reboot to DFU" request is pending, jump to the ROM bootloader
-   * now — before HAL_Init() touches a single clock or peripheral. Returns
-   * immediately when no request is pending. Does not return otherwise. */
-  hal_dfu_check_and_jump();
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -285,9 +280,6 @@ int main(void)
   svc_uart_init();
   svc_battery_init();
   svc_log(API2_LOG_INFO, "boot: comms stack up");
-  if (hal_dfu_consume_bounce_flag()) {
-      svc_log(API2_LOG_WARN, "dfu: jump reached the ROM bootloader, which handed control back");
-  }
   svc_logf(API2_LOG_INFO, "boot fw %s adc%u dac%u ads%u bme%u ee%u",
            FW_VERSION_STRING,
            (unsigned)g_system_state.adc_ok, (unsigned)g_system_state.dac_ok,

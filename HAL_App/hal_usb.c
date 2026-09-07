@@ -109,6 +109,16 @@ bool hal_usb_send(const uint8_t *data, uint16_t len)
     return rc == (uint8_t)USBD_OK;
 }
 
+void hal_usb_detach(void)
+{
+    /* Deassert the D+ pull-up so the host registers a disconnect. Used
+     * right before a reset-to-DFU: without a visible disconnect the host
+     * keeps the stale HID enumeration and never talks to the ROM
+     * bootloader's DFU interface after the jump. */
+    USBD_Stop(&hUsbDeviceFS);
+    s_attached = false;
+}
+
 void hal_usb_update(void)
 {
     /* Attach the USB device only while VBUS is present; detach as soon as

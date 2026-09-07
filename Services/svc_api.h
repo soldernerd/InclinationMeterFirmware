@@ -169,12 +169,13 @@ typedef enum {
  * (panel MUST be unplugged); bit7 = reboot to normal. Arming is
  * irreversible without the reboot. See HAL_App/hal_pintest.h. */
 #define API2_RES_CMD_PIN_TEST         0x04U
-/* 0x05 Reboot to DFU — 0-byte payload. Sets a retained one-shot flag and
- * resets; the jump into the ROM bootloader (USB DFU on PA11/PA12, plus
- * USART/I2C/SPI) happens from the top of main() before HAL_Init(). The
- * app does not come back until the host reflashes OR the device is
- * power-cycled without reflashing (the flag does not survive POR).
- * See HAL_App/hal_dfu.h. */
+/* 0x05 Reboot to DFU — 0-byte payload. Sets the nBOOT0 option byte to 0
+ * and launches an option-byte reload; the device boots into the ROM
+ * bootloader (USB DFU, VID 0x0483 / PID 0xDF11 on PA11/PA12) and STAYS
+ * there on every subsequent boot — a power-cycle does NOT recover the
+ * app. Recover by reflashing with nBOOT0 restored, e.g.
+ *   STM32_Programmer_CLI -c port=USB1 -w fw.hex -ob nSWBOOT0=1 nBOOT0=1 -v -rst
+ * (or PythonTestCode/dfu_flash.ps1). See HAL_App/hal_dfu.h. */
 #define API2_RES_CMD_REBOOT_DFU       0x05U
 
 #define API2_OP_CMD_TEST_BEEP \

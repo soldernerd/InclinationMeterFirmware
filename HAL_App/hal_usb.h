@@ -17,5 +17,6 @@ void hal_usb_register_rx_callback(HalUsbRxCallback cb);
 void hal_usb_on_rx(const uint8_t *data, uint16_t len);
 
 void hal_usb_update(void);                              /* poll connection state */
+void hal_usb_detach(void);                              /* drop D+ pull-up (USBD_Stop) — host sees a disconnect */
 
 #endif /* HAL_USB_H */
