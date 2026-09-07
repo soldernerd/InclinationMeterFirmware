@@ -263,6 +263,10 @@ typedef enum {
  * keep their wire values (its DeviceSettings field sits mid-struct, in
  * the battery page). u16, range 0..65535. */
 #define API2_RES_SET_AUTO_POWEROFF_S         0x1BU
+/* 0x1C: vbat_offset_mv — additive Vbat correction (bench cal), signed
+ * int32 (4-byte payload), range -500..500 mV. Battery page, EEPROM
+ * version 0x0004. */
+#define API2_RES_SET_VBAT_OFFSET_MV          0x1CU
 
 /* ---------------- Debug messages (0x6: SUBSCRIBE, UNSUBSCRIBE only) ----------------
  * A live log stream. SUBSCRIBE payload is one byte: the minimum severity

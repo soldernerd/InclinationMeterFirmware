@@ -870,6 +870,7 @@ static const SettingsFieldDesc s_settings_fields[] = {
     SF(API2_RES_SET_LM35_SCALE_MV_PER_C,     SF_U16, 2, lm35_scale_mv_per_c,       1,    1000),
     SF(API2_RES_SET_ENCODER_COUNTS_PER_DET,  SF_U16, 2, encoder_counts_per_detent, 1,    100),
     SF(API2_RES_SET_AUTO_POWEROFF_S,         SF_U16, 2, auto_poweroff_s,           0,    65535),
+    SF(API2_RES_SET_VBAT_OFFSET_MV,          SF_I32, 4, vbat_offset_mv,            -500, 500),
 };
 #define SETTINGS_FIELD_COUNT (sizeof(s_settings_fields) / sizeof(s_settings_fields[0]))
 

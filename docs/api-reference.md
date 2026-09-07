@@ -233,7 +233,8 @@ returns `[OK][payload]`. All fields little-endian.
 ## Settings (0x3) — GET, SET
 
 Every `DeviceSettings` field, resource index = field order. All are `u16`
-except `settling_threshold` (`i32`) and `settling_timeout_ms` (`u32`).
+except `settling_threshold` / `vbat_offset_mv` (`i32`) and
+`settling_timeout_ms` (`u32`).
 Payload is the raw little-endian field bytes.
 
 | res | field | width | range |
@@ -266,6 +267,7 @@ Payload is the raw little-endian field bytes.
 | 0x19 | lm35_scale_mv_per_c | u16 | 1…1000 |
 | 0x1A | encoder_counts_per_detent | u16 | 1…100 |
 | 0x1B | auto_poweroff_s | u16 | 0…65535 (0 = disabled; idle seconds before Standby power-off) |
+| 0x1C | vbat_offset_mv | i32 | -500…500 (additive Vbat correction, bench-calibrated) |
 
 > `0x1B` is appended out of struct order — its `DeviceSettings` field sits
 > mid-struct in the battery EEPROM page — so `0x00`–`0x1A` keep their wire

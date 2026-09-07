@@ -78,7 +78,10 @@ static uint16_t adc_to_vbat_mv(uint16_t vbat_raw, uint16_t vrefint_raw)
      * reference, so VDDA can't be assumed constant. Both raw values must
      * come from the same hal_adc_get_results() snapshot — see hal_adc.h. */
     uint32_t v_adc_mv = hal_adc_raw_to_mv(vbat_raw, vrefint_raw);
-    return (uint16_t)((v_adc_mv * g_device_settings.vbat_scale_num) / g_device_settings.vbat_scale_den);
+    int32_t  mv = (int32_t)((v_adc_mv * g_device_settings.vbat_scale_num)
+                            / g_device_settings.vbat_scale_den)
+                + g_device_settings.vbat_offset_mv;   /* bench-cal additive term */
+    return (uint16_t)(mv < 0 ? 0 : mv);
 }
 
 static uint8_t vbat_to_soc(uint16_t vbat_mv)

@@ -105,6 +105,7 @@ def decode_topic_status(d: bytes):
 SET_STREAM_INTERVAL_MS = 0x07
 SET_TASK_BLE_MS        = 0x03
 SET_AUTO_POWEROFF_S    = 0x1B
+SET_VBAT_OFFSET_MV     = 0x1C
 
 # ---- status codes ----
 STATUS = {

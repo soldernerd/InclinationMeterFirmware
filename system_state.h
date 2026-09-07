@@ -41,6 +41,17 @@ typedef struct {
                                       * keeps DeviceSettings the same size. Bumped
                                       * EEPROM_BATTERY_SETTINGS_VERSION to 0x0003 so a
                                       * stored v2 battery page reseeds from DEFAULT_*. */
+    int32_t  vbat_offset_mv;         /* int32 (not int16) to keep DeviceSettings a
+                                      * multiple of 4 — see svc_storage.c's section
+                                      * static_asserts. Additive Vbat correction, applied
+                                      * after the
+                                      * vbat_scale_num/den ratio in svc_battery.c's
+                                      * adc_to_vbat_mv(). The battery-sense path was
+                                      * bench-measured (Keysight supply, 3.5-4.3 V) to
+                                      * have a ~constant -80 mV error, not a gain error
+                                      * — this term fixes that. Range +/-500 mV
+                                      * (API Settings 0x1C). Bumped
+                                      * EEPROM_BATTERY_SETTINGS_VERSION to 0x0004. */
 
     /* --- TMP236 (on-board temp sensor) page --- */
     uint16_t tmp236_seg1_voffs_mv;

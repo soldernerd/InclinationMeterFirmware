@@ -53,6 +53,7 @@
  * g_device_settings.*, never these macros directly, past first boot. */
 #define DEFAULT_VBAT_SCALE_NUM          133     /* 100k/33k divider — see pin_config.h */
 #define DEFAULT_VBAT_SCALE_DEN          33
+#define DEFAULT_VBAT_OFFSET_MV         0       /* additive Vbat correction; set by bench cal */
 /* TMP236 piecewise-linear transfer function (TI datasheet SBOS857E,
  * Table 2) — see Drivers_App/drv_tmp236.c for the equation this feeds. */
 #define DEFAULT_TMP236_SEG1_VOFFS_MV    400
@@ -99,13 +100,14 @@
 #define EEPROM_SCHEDULER_SETTINGS_ADDR    0x0000  /* task periods, stream interval, settling, filter */
 #define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0001
 #define EEPROM_BATTERY_SETTINGS_ADDR      0x0100  /* thresholds + ADC divider scale */
-#define EEPROM_BATTERY_SETTINGS_VERSION   0x0003  /* 0x0002: added battery_charge_start_mv
+#define EEPROM_BATTERY_SETTINGS_VERSION   0x0004  /* 0x0002: added battery_charge_start_mv
                                                      and retuned thresholds (WP2 debug).
                                                      0x0003 (WP6): the page's alignment pad
-                                                     became auto_poweroff_s — a stored v2
-                                                     page is discarded and reseeded from
-                                                     DEFAULT_* (which already hold the tuned
-                                                     threshold values). */
+                                                     became auto_poweroff_s.
+                                                     0x0004: added vbat_offset_mv (bench
+                                                     calibration). A stored older page is
+                                                     discarded and reseeded from DEFAULT_*
+                                                     (which hold the tuned thresholds). */
 #define EEPROM_TMP236_SETTINGS_ADDR       0x0200  /* on-board temp sensor piecewise-linear constants */
 #define EEPROM_TMP236_SETTINGS_VERSION    0x0001
 #define EEPROM_LM35_SETTINGS_ADDR         0x0300  /* external temp sensor scale */
