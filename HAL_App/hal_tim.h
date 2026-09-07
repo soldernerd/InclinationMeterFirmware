@@ -31,12 +31,14 @@ void hal_tim_buzzer_stop(void);
  * a continuous MCLK to keep generating its waveform. No stop / no
  * dynamic reconfig, unlike the buzzer. */
 void hal_tim_dac_clock_start(void);
+void hal_tim_dac_clock_stop(void);   /* power-investigation only */
 
 /* ADS131M04 ADC master clock (WP8) — TIM2 CH3 on PB10, same fixed
  * ~5.333 MHz as the DAC clock (Prescaler 1 / Period 5 / Pulse 3). Started
  * once, left running — see Config/config.h's ADS131M04_OSR_FIELD comment
  * for why the DAC and ADC share this clock relationship. */
 void hal_tim_adc_clock_start(void);
+void hal_tim_adc_clock_stop(void);   /* power-investigation only */
 
 typedef void (*HalTimCallback)(void);
 

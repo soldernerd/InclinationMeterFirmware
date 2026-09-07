@@ -25,6 +25,22 @@ OP_SYS_DEVICE_STATE = opcode(GET, CAT_SYSTEM, 0x01)
 OP_CMD_TEST_BEEP       = opcode(EXECUTE, CAT_COMMANDS, 0x00)
 OP_CMD_SIGNAL_ANALYSIS = opcode(EXECUTE, CAT_COMMANDS, 0x01)  # payload: 1 byte, 0=stop 1=start
 OP_CMD_FORCE_CHARGE    = opcode(EXECUTE, CAT_COMMANDS, 0x02)  # no payload — charge regardless of SOC
+OP_CMD_POWER_TEST      = opcode(EXECUTE, CAT_COMMANDS, 0x03)  # payload u32 mask LE (svc_powertest.h)
+OP_RAW_PWRTEST         = opcode(GET, CAT_RAW, 0x01)           # -> u32 mask + u8 rail flags
+
+# svc_powertest.h bit map — set bit = subsystem ON
+PWR_5V_RAIL   = 1 << 0
+PWR_3V3_RAIL  = 1 << 1
+PWR_AD9833    = 1 << 2
+PWR_ADS131M04 = 1 << 3
+PWR_BLE       = 1 << 4
+PWR_DISPLAY   = 1 << 5
+PWR_LEDS      = 1 << 6
+PWR_CPU_SPIN  = 1 << 7
+PWR_ALL       = 0xFF
+PWR_BITS = [("5V rail", PWR_5V_RAIL), ("3V3 rail", PWR_3V3_RAIL), ("AD9833", PWR_AD9833),
+            ("ADS131M04", PWR_ADS131M04), ("BLE (RN4871)", PWR_BLE), ("display", PWR_DISPLAY),
+            ("LEDs", PWR_LEDS), ("CPU spin (no WFI)", PWR_CPU_SPIN)]
 
 # Bulk raw-ADC capture (category 0x8). START_BULK has no request payload;
 # chunks come back under the SAME opcode, each: [status=OK][page:1][sample:16]xN

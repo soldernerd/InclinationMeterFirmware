@@ -137,6 +137,33 @@ power removal (no backup battery), after which `is_set` reads 0.
 ### `EXECUTE 0x1/0x00` — Test beep  → opcode `0x2100`
 Request payload: none. Response: status only. Beeps the buzzer ~100 ms.
 
+### `EXECUTE 0x1/0x01` — Signal analysis  → opcode `0x2101`
+Request payload: 1 byte, `0` = stop the ADS131M04 sample stream + DFT,
+`1` = start it. Off at boot. Response: status only.
+
+### `EXECUTE 0x1/0x02` — Force charge  → opcode `0x2102`
+Request payload: none. Enables the charger regardless of SoC while USB is
+present (one-shot; clears on full or USB unplug). No-op with no USB.
+
+### `EXECUTE 0x1/0x03` — Power test  → opcode `0x2103`
+Request payload: `u32 mask` LE. Diagnostic — each bit keeps one
+subsystem/rail/clock on, cleared bits cut it immediately. Response data:
+the resulting `u32 mask` (also readable via `GET 0x7/0x01`). Bit map:
+
+| bit | on ⇒ |
+|---|---|
+| 0 | 5V rail (display, temp sensors, buzzer buffer, −5V inverter, analog AFE) |
+| 1 | switched 3V3 rail (EEPROM, BME280, battery-sense divider) |
+| 2 | AD9833 DDS (chip awake + MCLK running) |
+| 3 | ADS131M04 (out of reset + MCLK running) |
+| 4 | RN4871 BLE (out of reset) |
+| 5 | display (`DISP_ON` + VCOM toggle) |
+| 6 | LEDs |
+| 7 | CPU busy-spin (clear ⇒ `WFI` idle between ticks) |
+
+Default at boot is `0xFF`. UART/USB stay up on any mask. Restoring bits is
+best-effort (BLE/display want a reboot for a clean state).
+
 ---
 
 ## Measurements (0x4) — GET, SUBSCRIBE, UNSUBSCRIBE

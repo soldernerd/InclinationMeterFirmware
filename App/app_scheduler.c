@@ -9,6 +9,7 @@
 #include "drv_buzzer.h"
 #include "hal_adc.h"
 #include "hal_systick.h"
+#include "hal_power.h"
 #include "svc_api.h"
 #include "svc_battery.h"
 #include "svc_measurement.h"
@@ -20,6 +21,7 @@
 #include "svc_uart.h"
 #include "svc_power.h"
 #include "svc_log.h"
+#include "svc_powertest.h"
 #include "config.h"
 #include "system_state.h"
 #include <stddef.h>
@@ -260,6 +262,13 @@ void app_scheduler_run(void)
                 s_tasks[i].task();
                 s_tasks[i].last_run_ms = now;
             }
+        }
+        /* Normally the loop busy-spins (PWRTEST_CPU_SPIN set). The power
+         * investigation can clear that bit to sleep the core between ISRs
+         * instead — SysTick (1 ms) always wakes it, so at most 1 ms of
+         * scheduling latency is added. */
+        if (!svc_powertest_cpu_spin()) {
+            hal_power_wait_for_interrupt();
         }
     }
 }

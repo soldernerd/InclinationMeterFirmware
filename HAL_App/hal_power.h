@@ -59,4 +59,18 @@ void hal_power_reboot_to_dfu(void);
 bool hal_power_rail_3v3_on(void);
 bool hal_power_rail_5v_on(void);
 
+/* Directly drive the two switched-rail enables (PWR_3V3_EN active-LOW,
+ * PWR_5V_EN active-HIGH). Power-consumption investigation only — normal
+ * operation brings both up once at boot and never touches them again.
+ * The MCU runs off the separate always-on 3V3_STANDBY rail, so cutting
+ * either of these does not kill the CPU or the USART3/USB link. */
+void hal_power_rail_3v3_set(bool on);
+void hal_power_rail_5v_set(bool on);
+
+/* Sleep the core until the next interrupt (plain WFI, no deep sleep —
+ * SysTick keeps running and wakes it within 1 ms). The cooperative
+ * scheduler calls this at the bottom of its loop when the power
+ * investigation has cleared PWRTEST_CPU_SPIN. */
+void hal_power_wait_for_interrupt(void);
+
 #endif /* HAL_POWER_H */

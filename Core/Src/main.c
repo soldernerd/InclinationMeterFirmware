@@ -63,6 +63,7 @@
 #include "svc_api.h"
 #include "svc_log.h"
 #include "svc_measurement.h"
+#include "svc_powertest.h"
 #include "app_version.h"
 #include "stm32g0xx_ll_gpio.h"
 #include "stm32g0xx_ll_bus.h"
@@ -269,6 +270,7 @@ int main(void)
    * RN4871's ~RESET and kicks off its (non-blocking) config state
    * machine, pumped thereafter from task_ble. */
   svc_log_init();             /* log ring up before anything logs into it */
+  svc_powertest_init();       /* power-investigation mask defaults to "all on" */
   svc_api_init();
   svc_measurement_init();
   svc_usb_init();

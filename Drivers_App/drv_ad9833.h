@@ -17,4 +17,11 @@
  * init failure. */
 DrvStatus drv_ad9833_init(void);
 
+/* Put the chip in its lowest-power state — RESET held, internal MCLK
+ * path disabled (SLEEP1), DAC powered down (SLEEP12). One SPI3 frame.
+ * Power-consumption investigation only; drv_ad9833_init() brings it back.
+ * (The external MCLK on PC11 is separate — stop that via
+ * hal_tim_dac_clock_stop().) */
+DrvStatus drv_ad9833_sleep(void);
+
 #endif /* DRV_AD9833_H */

@@ -180,3 +180,20 @@ bool hal_power_rail_5v_on(void)
     /* PWR_5V_EN active-HIGH: pin HIGH == rail ON. */
     return HAL_GPIO_ReadPin(PWR_5V_EN_PORT, PWR_5V_EN_PIN) == GPIO_PIN_SET;
 }
+
+void hal_power_rail_3v3_set(bool on)
+{
+    /* active-LOW: LOW = rail ON. */
+    HAL_GPIO_WritePin(PWR_3V3_EN_PORT, PWR_3V3_EN_PIN, on ? GPIO_PIN_RESET : GPIO_PIN_SET);
+}
+
+void hal_power_rail_5v_set(bool on)
+{
+    /* active-HIGH: HIGH = rail ON. */
+    HAL_GPIO_WritePin(PWR_5V_EN_PORT, PWR_5V_EN_PIN, on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void hal_power_wait_for_interrupt(void)
+{
+    __WFI();
+}

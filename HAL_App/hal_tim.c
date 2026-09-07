@@ -153,12 +153,20 @@ void hal_tim_dac_clock_start(void)
      * forever afterward; see hal_tim.h. */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 }
+void hal_tim_dac_clock_stop(void)
+{
+    HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_4);   /* power-investigation use only */
+}
 
 void hal_tim_adc_clock_start(void)
 {
     /* Same fixed 1/5/3 as the DAC's TIM1 above, on TIM2 CH3 instead
      * (MX_TIM2_Init()). Started once, left running. */
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+}
+void hal_tim_adc_clock_stop(void)
+{
+    HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);   /* power-investigation use only */
 }
 
 void hal_tim_adc_trigger_start(void)

@@ -2,6 +2,7 @@
 #include "svc_battery.h"
 #include "svc_storage.h"
 #include "svc_signal_analysis.h"
+#include "svc_powertest.h"
 #include "drv_ads131m04.h"
 #include "svc_log.h"
 #include "hal_rtc.h"
@@ -301,11 +302,28 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
         return;
     }
     if (res != API2_RES_CMD_TEST_BEEP && res != API2_RES_CMD_SIGNAL_ANALYSIS &&
-        res != API2_RES_CMD_FORCE_CHARGE) {
+        res != API2_RES_CMD_FORCE_CHARGE && res != API2_RES_CMD_POWER_TEST) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (res == API2_RES_CMD_POWER_TEST) {
+        if (paylen != 4U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint32_t mask = (uint32_t)frame[API2_PACKET_HDR_BYTES + 0U]
+                      | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 1U] << 8)
+                      | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 2U] << 16)
+                      | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 3U] << 24);
+        svc_powertest_apply(mask);
+        uint32_t applied = svc_powertest_mask();
+        uint8_t rsp[4] = { (uint8_t)applied, (uint8_t)(applied >> 8),
+                           (uint8_t)(applied >> 16), (uint8_t)(applied >> 24) };
+        send_response(t, opcode, API2_STATUS_OK, rsp, sizeof rsp);
+        return;
+    }
 
     if (res == API2_RES_CMD_FORCE_CHARGE) {
         if (paylen != 0U) {
@@ -473,13 +491,24 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
         return;
     }
-    if (res != API2_RES_RAW_ADC_DIAG) {
+    if (res != API2_RES_RAW_ADC_DIAG && res != API2_RES_RAW_PWRTEST) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
     if (paylen != 0U) {
         send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+
+    if (res == API2_RES_RAW_PWRTEST) {
+        uint32_t mask = svc_powertest_mask();
+        uint8_t p[5] = {
+            (uint8_t)mask, (uint8_t)(mask >> 8), (uint8_t)(mask >> 16), (uint8_t)(mask >> 24),
+            (uint8_t)((hal_power_rail_3v3_on() ? 0x01U : 0U)
+                    | (hal_power_rail_5v_on()  ? 0x02U : 0U)),
+        };
+        send_response(t, opcode, API2_STATUS_OK, p, sizeof p);
         return;
     }
 

@@ -153,10 +153,16 @@ typedef enum {
  *      Services/svc_signal_analysis.h for why.
  * 0x02 Force charge — no payload. Enables the charger regardless of SOC
  *      while USB is present (a one-shot overnight top-off); self-clears on
- *      full or USB removal. No-op with no USB. See svc_battery.h. */
+ *      full or USB removal. No-op with no USB. See svc_battery.h.
+ * 0x03 Power test — 4-byte payload `u32 mask` LE. Diagnostic: each bit
+ *      keeps one subsystem/rail/clock on, cleared bits cut it immediately
+ *      (see Services/svc_powertest.h for the bit map). Applied live; the
+ *      resulting mask is echoed back and also readable via Raw data 0x01.
+ *      Default at boot is all bits set (normal behaviour). */
 #define API2_RES_CMD_TEST_BEEP        0x00U
 #define API2_RES_CMD_SIGNAL_ANALYSIS  0x01U
 #define API2_RES_CMD_FORCE_CHARGE     0x02U
+#define API2_RES_CMD_POWER_TEST       0x03U
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
@@ -164,6 +170,8 @@ typedef enum {
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_SIGNAL_ANALYSIS)
 #define API2_OP_CMD_FORCE_CHARGE \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_FORCE_CHARGE)
+#define API2_OP_CMD_POWER_TEST \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_POWER_TEST)
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
  * Only what REV B actually reads today. All are subscribable. */
@@ -281,9 +289,15 @@ typedef enum {
  * CLOCK.OSR is bits [4:2]: 0=128,1=256,2=512,3=1024,4=2048,5=4096,6=8192,7=16256;
  * fDATA = fCLKIN / (2 * OSR), fCLKIN ~= 5.3333 MHz. */
 #define API2_RES_RAW_ADC_DIAG   0x00U
+/* 0x01 = power-test state. GET, no payload. Response (5 B):
+ *   u32 mask   — current Commands/0x03 bitmask (svc_powertest.h)
+ *   u8  flags  — bit0 3V3 rail on, bit1 5V rail on (read back from the pins) */
+#define API2_RES_RAW_PWRTEST    0x01U
 
 #define API2_OP_RAW_ADC_DIAG \
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_ADC_DIAG)
+#define API2_OP_RAW_PWRTEST \
+    API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_PWRTEST)
 
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ----------------
  * 0x00 Raw ADC capture. START_BULK: no request payload (the transfer size

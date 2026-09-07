@@ -11,6 +11,8 @@
  * required-zero default by the plain |-combinations below. */
 #define CTRL_B28        (1U << 13)   /* D13 — full 28-bit freq write, as two 14-bit halves */
 #define CTRL_RESET      (1U << 8)    /* D8  — 1 = hold at reset (midscale, no accumulation) */
+#define CTRL_SLEEP1     (1U << 7)    /* D7  — 1 = internal MCLK disabled */
+#define CTRL_SLEEP12    (1U << 6)    /* D6  — 1 = DAC powered down */
 
 /* D15:D14 select which register a write targets (datasheet Table IV /
  * "Writing to a Phase Register"). FREQ0/PHASE0 only — FSELECT/PSELECT
@@ -86,4 +88,10 @@ DrvStatus drv_ad9833_init(void)
     DrvStatus rc2 = load_registers();
 
     return (rc2 == DRV_OK) ? DRV_OK : rc1;
+}
+
+DrvStatus drv_ad9833_sleep(void)
+{
+    /* Control-register write (D15:D14 = 00), RESET + SLEEP1 + SLEEP12. */
+    return write_word(CTRL_RESET | CTRL_SLEEP1 | CTRL_SLEEP12);
 }

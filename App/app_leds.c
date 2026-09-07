@@ -3,6 +3,7 @@
 #include "hal_systick.h"
 #include "pin_config.h"
 #include "system_state.h"
+#include "svc_powertest.h"
 #include <stdbool.h>
 
 void app_leds_init(void)
@@ -13,6 +14,10 @@ void app_leds_init(void)
 
 void app_leds_task(void)
 {
+    if (!svc_powertest_leds_on()) {
+        return;   /* power investigation: LEDs cut (svc_powertest drove them low) */
+    }
+
     /* Power LED: solid on after boot (set once in app_leds_init, nothing
      * to do here — re-asserted anyway in case something else drove it). */
     hal_gpio_set(LED_PWR_PORT, LED_PWR_PIN, true);
