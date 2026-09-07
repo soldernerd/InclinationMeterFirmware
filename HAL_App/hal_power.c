@@ -197,3 +197,9 @@ void hal_power_wait_for_interrupt(void)
 {
     __WFI();
 }
+
+void hal_power_reset(void)
+{
+    NVIC_SystemReset();
+    for (;;) { }
+}

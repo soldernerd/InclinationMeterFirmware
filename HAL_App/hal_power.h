@@ -67,6 +67,11 @@ bool hal_power_rail_5v_on(void);
 void hal_power_rail_3v3_set(bool on);
 void hal_power_rail_5v_set(bool on);
 
+/* Plain software reset (NVIC_SystemReset) — used by the pin-test
+ * diagnostic to get back to a clean state, since it tears SPI2 / TIM6 /
+ * TIM3 down irreversibly. Does not return. */
+void hal_power_reset(void);
+
 /* Sleep the core until the next interrupt (plain WFI, no deep sleep —
  * SysTick keeps running and wakes it within 1 ms). The cooperative
  * scheduler calls this at the bottom of its loop when the power

@@ -3,6 +3,7 @@
 #include "svc_storage.h"
 #include "svc_signal_analysis.h"
 #include "svc_powertest.h"
+#include "hal_pintest.h"
 #include "drv_ads131m04.h"
 #include "svc_log.h"
 #include "hal_rtc.h"
@@ -302,11 +303,31 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
         return;
     }
     if (res != API2_RES_CMD_TEST_BEEP && res != API2_RES_CMD_SIGNAL_ANALYSIS &&
-        res != API2_RES_CMD_FORCE_CHARGE && res != API2_RES_CMD_POWER_TEST) {
+        res != API2_RES_CMD_FORCE_CHARGE && res != API2_RES_CMD_POWER_TEST &&
+        res != API2_RES_CMD_PIN_TEST) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (res == API2_RES_CMD_PIN_TEST) {
+        if (paylen != 1U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint8_t p = frame[API2_PACKET_HDR_BYTES];
+        if (p & 0x80U) {
+            svc_log(API2_LOG_WARN, "pintest: reboot");
+            send_response(t, opcode, API2_STATUS_OK, 0, 0);
+            for (volatile uint32_t i = 0; i < 400000U; ++i) { }   /* let the frame drain */
+            hal_power_reset();
+        }
+        hal_pintest_apply(p & 0x3FU, (p & 0x40U) != 0U);
+        svc_logf(API2_LOG_WARN, "pintest: pat 0x%02X%s", p & 0x3FU,
+                 (p & 0x40U) ? " (DISP_ON allowed)" : "");
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        return;
+    }
 
     if (res == API2_RES_CMD_POWER_TEST) {
         if (paylen != 4U) {

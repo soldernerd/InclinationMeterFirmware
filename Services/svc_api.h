@@ -163,6 +163,12 @@ typedef enum {
 #define API2_RES_CMD_SIGNAL_ANALYSIS  0x01U
 #define API2_RES_CMD_FORCE_CHARGE     0x02U
 #define API2_RES_CMD_POWER_TEST       0x03U
+/* 0x04 Pin test — 1-byte payload. bits[5:0] drive the 6 MCU->level-
+ * converter signals (0 SCK / 1 MOSI / 2 CS / 3 DISP_ON / 4 VCOM /
+ * 5 BUZZER) as static push-pull outputs; bit6 = allow DISP_ON high
+ * (panel MUST be unplugged); bit7 = reboot to normal. Arming is
+ * irreversible without the reboot. See HAL_App/hal_pintest.h. */
+#define API2_RES_CMD_PIN_TEST         0x04U
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
