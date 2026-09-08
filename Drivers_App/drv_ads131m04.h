@@ -46,22 +46,43 @@ void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb);
 void drv_ads131m04_drain_tick(void);
 
 /* --- acquisition integrity (docs/adc_acquisition_redesign.md) ---
- * Reset at drv_ads131m04_start(). Phase 1 is mostly observational: the
- * counters are live, word0_sample/crc_rx_last capture on-the-wire
- * behaviour so Phase 2 can turn CRC + conversion-count checks into a
- * latching ERROR gate. */
+ * All counters reset at drv_ads131m04_start(). Any one of four faults
+ * latches acquisition (on_trigger stops arming reads) and sets
+ * fault_code; Services/svc_signal_analysis.c notices it, emits one
+ * API2_LOG_ERROR, and stops the pipeline. */
+typedef enum {
+    ADS_FAULT_NONE     = 0,
+    ADS_FAULT_OVERRUN  = 1,   /* SPI DMA lapped the SysTick drain (ring full) */
+    ADS_FAULT_FRAMING  = 2,   /* a frame's word 0 != ADS131M04_STATUS_WORD */
+    ADS_FAULT_CRC      = 3,   /* a frame's computed CRC != the CRC word the ADS sent */
+} Ads131m04Fault;
+
 typedef struct {
-    uint32_t frames_produced;   /* frames the TIM7 ISR pushed to the ring */
+    uint32_t frames_produced;   /* frames the TIM7 ISR committed to the ring */
     uint32_t frames_drained;    /* frames the SysTick drain consumed */
-    uint32_t ring_overflow;     /* pushes dropped: drain a whole ring behind */
+    uint32_t tim7_fires;        /* trigger-ISR fires this run */
+    uint32_t ring_overflow;     /* pushes dropped: SPI DMA a whole ring ahead of the drain */
     uint32_t drain_clamped;     /* drain calls where head-tail exceeded the ring */
+    uint32_t framing_err;       /* frames with an unexpected word 0 */
+    uint32_t crc_err;           /* frames whose computed CRC != the sent CRC word */
+    uint32_t slip_excursions;   /* times slip left the settled jitter band (lost/dup conversion) */
     uint16_t drain_clamp_max;   /* largest head-tail gap seen */
-    uint16_t word0_sample[8];   /* first frames' response/STATUS word this run */
-    uint8_t  word0_count;
-    uint16_t crc_rx_last;       /* most recent frame's CRC word (top 16 bits) */
+    int16_t  slip_band_lo;      /* jitter band of frames_produced - tim7_fires/OVERSAMPLE, */
+    int16_t  slip_band_hi;      /*   learned over the first ADC_SLIP_SETTLE_FRAMES */
+    int16_t  slip_min;          /* all-time observed slip range (shows total wander) */
+    int16_t  slip_max;
+    uint16_t word0_last;        /* most recent frame's word 0 (STATUS response) */
+    uint16_t crc_rx_last;       /* most recent frame's CRC word (as the ADS sent it) */
+    uint16_t crc_calc_last;     /* CRC computed over that frame's words 0..4 */
+    uint8_t  fault_code;        /* Ads131m04Fault — 0 while healthy; slip does NOT latch */
 } Ads131m04Integrity;
 
 const Ads131m04Integrity *drv_ads131m04_get_integrity(void);
+
+/* True once acquisition has latched on an integrity fault (fault_code
+ * != 0). The pipeline has stopped arming reads; a full stop()/start()
+ * cycle clears it. */
+bool drv_ads131m04_faulted(void);
 
 /* Saturating count of trigger ticks where DRDY was not yet low (sample
  * skipped rather than read) — CLAUDE.md 7.6 escalation for a case that

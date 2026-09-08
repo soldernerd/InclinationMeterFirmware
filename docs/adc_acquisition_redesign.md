@@ -115,10 +115,39 @@ single hog, so it reads as scheduler-jitter / host-serial interaction
 under the added ISR load rather than a hard stall. Left for a separate
 look; not a regression from this work.
 
-**Phase 2 — integrity gate + optional continuous-CS.**
-Turn the recorded observations into the live checks above (dedup
-mechanism, CRC with confirmed range, latch-stop). Optionally switch to
-continuous CS + circular RX DMA and reduce the TIM7 ISR to a bare kick.
+**Phase 2 — integrity gate. DONE (fw 0.9.23, bench-verified).**
+
+| check | mechanism | bench result | action |
+|---|---|---|---|
+| **framing** | every frame's word 0 must equal `ADS131M04_STATUS_WORD` (0x010F) | constant over long runs | **latch + ERROR + stop** |
+| **CRC** | `math_crc16` over frame bytes 0..14 vs the ADS CRC word (bytes 15..16) | `calc == rx` every frame, confirmed | **latch + ERROR + stop** |
+| **ring overflow** | SPI DMA a whole ring ahead of the SysTick drain | never seen | **latch + ERROR + stop** |
+| **conversion slip** | `frames_read - tim7_fires/OVERSAMPLE`; TIM7 is exactly `OVERSAMPLE x` fDATA (locked SYSCLK divisors), so this is the exact lost/duplicated-conversion count. Band learned over `ADC_SLIP_SETTLE_FRAMES`, then any excursion counted. | **drifts ~0.4/sample-per-second even at the healthy 2x rate** — a real, slow read-path loss (see below) | **count + one WARN**, do NOT stop |
+
+`Services/svc_signal_analysis.c`'s `svc_signal_analysis_check_integrity()`
+(pumped from `task_signal_analysis`) does the reporting/stop. Counters +
+learned band + CRC calc/rx in the `Raw data 0x00` diag.
+
+### Open: the ~0.4/s conversion slip at 2x oversample
+
+Bench (fw 0.9.19–0.9.23): with acquisition running, `frames_read` falls
+behind `conversions_completed` by ~1 every ~2–3 s — monotonic, ~25–40 ppm.
+So roughly one conversion in ~50 000 is missed in the read path. TIM7 and
+fDATA are frequency-locked (both exact 64 MHz divisors) so this is not
+clock drift; raising the TIM7 NVIC priority 2→0 barely moved it. It is
+almost certainly **pre-existing** (master's in-ISR read had no way to
+measure it) and, at 25–40 ppm, invisible to anything short of a
+minutes-long capture — the single-bin DFT's running accumulator and the
+0.3 s bulk capture both tolerate it. Left as a known item; the real fix
+is the no-CPU-ISR **timer → DMA** acquisition path.
+
+### Not done: 1x oversampling
+
+Blocked on the slip above — 2x already loses samples; 1x has less margin
+and would lose more. `ADC_TRIGGER_OVERSAMPLE` + `ADS131M04_TRIGGER_TIMER_PERIOD`
+are now wired through so the change is a one-liner once the read path is
+fixed (`hal_tim_adc_trigger_start()` sets the ARR from the macro — the
+CubeMX literal in `tim.c` no longer matters).
 
 **Merge to master when the whole thing is bench-clean.**
 

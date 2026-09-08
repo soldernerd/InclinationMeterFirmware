@@ -5,6 +5,7 @@
 #include "hal_systick.h"
 #include "pin_config.h"
 #include "config.h"
+#include "math_crc.h"
 #include "stm32g0xx_hal.h"   /* __disable_irq / __enable_irq */
 
 /* Register addresses used here (datasheet Table 8-12, "Register Map"). */
@@ -74,6 +75,16 @@ static volatile uint16_t s_ring_head;   /* produced count (free-running) */
 static volatile uint16_t s_ring_tail;   /* drained count  (free-running) */
 
 static Ads131m04Integrity s_integ;
+static bool               s_slip_out;   /* slip currently outside the settled band */
+
+/* Latch an integrity fault (first one wins). Called from on_trigger (TIM7
+ * ISR) and drain_ring (SysTick) — a plain byte store is atomic on M0+. */
+static void integ_fault(Ads131m04Fault code)
+{
+    if (s_integ.fault_code == ADS_FAULT_NONE) {
+        s_integ.fault_code = (uint8_t)code;
+    }
+}
 
 /* Blocking, TX-only, single-register write -- used only during the
  * one-time init sequence below, never during streaming. Ignores
@@ -186,16 +197,28 @@ static void drain_ring(void)
     while (tail != head) {
         const uint8_t *f = s_ring[tail & FRAME_RING_MASK];
 
-        if (s_integ.word0_count < (uint8_t)(sizeof s_integ.word0_sample /
-                                            sizeof s_integ.word0_sample[0])) {
-            s_integ.word0_sample[s_integ.word0_count++] =
-                (uint16_t)((f[0] << 8) | f[1]);
+        /* Framing: word 0 is the ADS131M04 STATUS response for a no-command
+         * frame — a fixed value. Anything else == byte-misalignment or a
+         * device resync/reset. */
+        uint16_t w0 = (uint16_t)((f[0] << 8) | f[1]);
+        s_integ.word0_last = w0;
+        if (w0 != ADS131M04_STATUS_WORD) {
+            s_integ.framing_err++;
+            integ_fault(ADS_FAULT_FRAMING);
         }
-        /* Frame CRC bytes as the ADS sent them (word 5, top 16 bits) —
-         * recorded raw; Phase 2 confirms the polynomial/range before this
-         * becomes a live check. */
-        s_integ.crc_rx_last = (uint16_t)((f[5 * WORD_BYTES] << 8)
-                                       | f[5 * WORD_BYTES + 1]);
+
+        /* CRC: the ADS appends CRC-16/CCITT (poly 0x1021, init 0xFFFF, no
+         * reflect/xor-out) over words 0..4 (bytes 0..14), left-justified in
+         * word 5. Byte range + polynomial bench-confirmed fw 0.9.18 —
+         * crc_calc matched crc_rx every frame over a clean run. */
+        uint16_t crc_rx   = (uint16_t)((f[5 * WORD_BYTES] << 8) | f[5 * WORD_BYTES + 1]);
+        uint16_t crc_calc = math_crc16(f, 5U * WORD_BYTES);
+        s_integ.crc_rx_last   = crc_rx;
+        s_integ.crc_calc_last = crc_calc;
+        if (crc_calc != crc_rx) {
+            s_integ.crc_err++;
+            integ_fault(ADS_FAULT_CRC);
+        }
 
         if (s_on_sample != 0) {
             int32_t ch0 = sign_extend24(f[1 * WORD_BYTES], f[1 * WORD_BYTES + 1], f[1 * WORD_BYTES + 2]);
@@ -226,18 +249,20 @@ void drv_ads131m04_drain_tick(void)
  * stays low from the end of a conversion until the frame is read, so
  * "DRDY low" == "an unread conversion is waiting".
  *
- * State machine, one step per tick:
- *   - a frame in flight and finished  -> collect it, deassert CS
- *   - a frame in flight, not finished -> nothing to do this tick
- *   - idle and DRDY low               -> kick a new frame
- * The read is raw DMA (hal_spi_adc_stream_*), ~10 us wall and almost no
- * CPU, so at 2x oversample the frame always completes within one tick and
- * every conversion is read exactly once -- uniform sampling at fDATA. */
+ * State machine, one step per fire:
+ *   - a frame in flight and finished  -> commit it
+ *   - a frame in flight, not finished -> nothing to do this fire
+ *   - idle and DRDY low               -> arm a new frame (zero-copy DMA
+ *                                        straight into the next ring slot)
+ * Fires ADC_TRIGGER_OVERSAMPLE x per conversion so a poll always lands
+ * inside a conversion period. On an integrity fault the whole thing goes
+ * quiet (no more arms) until stop()/start(). */
 static void on_trigger(void)
 {
     if (!s_running) {
         return;
     }
+    s_integ.tim7_fires++;
 
     if (s_xfer_active) {
         if (!hal_spi_adc_stream_done()) {
@@ -249,25 +274,68 @@ static void on_trigger(void)
 
         /* The DMA has already written this frame into s_ring[head]. Commit
          * it by advancing head — unless the drain is a whole ring behind,
-         * in which case leave head put (drop-newest) and count it. */
+         * in which case leave head put (drop-newest) and fault. */
         uint16_t head = s_ring_head;
         if ((uint16_t)(head - s_ring_tail) >= ADC_FRAME_RING_FRAMES) {
             s_integ.ring_overflow++;
+            integ_fault(ADS_FAULT_OVERRUN);
         } else {
             s_ring_head = head + 1U;
             s_integ.frames_produced++;
+
+            /* Conversion-count integrity. TIM7 is exactly
+             * ADC_TRIGGER_OVERSAMPLE x fDATA (both exact SYSCLK divisors —
+             * frequency-locked, no drift), so tim7_fires / OVERSAMPLE ==
+             * conversions the ADS has finished. slip = frames read minus
+             * that. In steady state slip only jitters within a bounded
+             * band (ISR-servicing timing); a lost or duplicated conversion
+             * shifts it permanently by a whole count. Learn the band over
+             * the first ADC_SLIP_SETTLE_FRAMES, then fault the moment slip
+             * leaves it by >= 1. */
+            int32_t slip = (int32_t)s_integ.frames_produced
+                         - (int32_t)(s_integ.tim7_fires / ADC_TRIGGER_OVERSAMPLE);
+            if (s_integ.frames_produced <= ADC_SLIP_SETTLE_FRAMES) {
+                /* Learn the steady-state jitter band. */
+                if (slip < s_integ.slip_band_lo) s_integ.slip_band_lo = (int16_t)slip;
+                if (slip > s_integ.slip_band_hi) s_integ.slip_band_hi = (int16_t)slip;
+                s_integ.slip_min = s_integ.slip_band_lo;
+                s_integ.slip_max = s_integ.slip_band_hi;
+            } else {
+                /* Post-settle: slip leaving the band by a whole count is a
+                 * lost or duplicated conversion. Bench (fw 0.9.19) shows a
+                 * slow ~0.5/s slip even at the "good" 2x rate — a real but
+                 * tiny read-path loss, not a hard failure — so this is
+                 * counted + surfaced, NOT latched. slip_min/max keep
+                 * tracking how far it has wandered. */
+                if (slip < s_integ.slip_min) s_integ.slip_min = (int16_t)slip;
+                if (slip > s_integ.slip_max) s_integ.slip_max = (int16_t)slip;
+                bool out = (slip < (int32_t)s_integ.slip_band_lo - 1)
+                        || (slip > (int32_t)s_integ.slip_band_hi + 1);
+                if (out && !s_slip_out) {
+                    s_integ.slip_excursions++;
+                }
+                s_slip_out = out;
+            }
         }
+    }
+
+    if (s_integ.fault_code != ADS_FAULT_NONE) {
+        return;                           /* latched — acquisition halted */
     }
 
     if (hal_gpio_get(ADC_READY_PORT, ADC_READY_PIN)) {
         return;                           /* DRDY high -- nothing new */
     }
 
-    /* Arm the next read straight into the next ring slot (zero-copy). */
     hal_spi_cs_assert(HAL_SPI_ADC);
     hal_spi_adc_stream_begin(s_tx_zero, s_ring[s_ring_head & FRAME_RING_MASK],
                              FRAME_BYTES);
     s_xfer_active = true;
+}
+
+bool drv_ads131m04_faulted(void)
+{
+    return s_integ.fault_code != ADS_FAULT_NONE;
 }
 
 DrvStatus drv_ads131m04_init(void)
@@ -309,6 +377,10 @@ DrvStatus drv_ads131m04_init(void)
      * blocking/HAL-SPI calls on this bus after this point). */
     hal_spi_adc_stream_init();
 
+    /* Build the CRC-16 table now (task context) so the first per-frame
+     * CRC in the SysTick drain doesn't pay for it. */
+    (void)math_crc16(0, 0);
+
     /* The frame drain runs from SysTick (Core/Src/stm32g0xx_it.c) — a
      * periodic 1 kHz tick that always preempts thread mode but, being
      * periodic rather than a self-re-pending soft IRQ, cannot starve it.
@@ -324,8 +396,9 @@ DrvStatus drv_ads131m04_init(void)
 
 static void ring_reset(void)
 {
-    s_ring_head = 0U;
-    s_ring_tail = 0U;
+    s_ring_head  = 0U;
+    s_ring_tail  = 0U;
+    s_slip_out   = false;
     for (uint32_t i = 0; i < sizeof s_integ; ++i) {
         ((uint8_t *)&s_integ)[i] = 0U;
     }

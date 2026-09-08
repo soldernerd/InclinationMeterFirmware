@@ -227,15 +227,22 @@ def decode_adc_diag(data: bytes):
         "last_capture": {"samples": samp, "drops": drops, "elapsed_ms": elapsed,
                          "effective_Hz": eff},
     }
-    if len(data) >= 48:
-        (produced, drained, overflow, clamped, clamp_max,
-         w0_first, w0_last, crc_last) = struct.unpack("<IIIIHHHH", data[24:48])
+    if len(data) >= 24 + 49:
+        (produced, drained, fires, overflow, clamped, framing_err, crc_err,
+         slip_exc, clamp_max, band_lo, band_hi, slip_min, slip_max,
+         w0_last, crc_rx, crc_calc, fault) = struct.unpack("<IIIIIIIIHhhhhHHHB", data[24:24 + 49])
+        faults = {0: "none", 1: "overrun", 2: "framing", 3: "crc"}
         out["integrity"] = {
             "frames_produced": produced, "frames_drained": drained,
-            "ring_overflow": overflow, "backlog": produced - drained,
-            "drain_clamped": clamped, "drain_clamp_max": clamp_max,
-            "word0_first": w0_first, "word0_last": w0_last,
-            "crc_rx_last": crc_last,
+            "tim7_fires": fires, "backlog": produced - drained,
+            "ring_overflow": overflow, "drain_clamped": clamped,
+            "drain_clamp_max": clamp_max,
+            "framing_err": framing_err, "crc_err": crc_err,
+            "slip_excursions": slip_exc,
+            "slip_band": [band_lo, band_hi], "slip_min": slip_min, "slip_max": slip_max,
+            "word0_last": w0_last, "crc_rx_last": crc_rx, "crc_calc_last": crc_calc,
+            "crc_match": crc_rx == crc_calc,
+            "fault_code": fault, "fault": faults.get(fault, f"?{fault}"),
         }
     return out
 

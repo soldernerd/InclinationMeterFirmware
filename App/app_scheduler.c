@@ -155,7 +155,8 @@ static void task_api(void)
     svc_api_topic_subscriptions_update();
 }
 static void task_measurement(void)     { svc_measurement_update();     }
-static void task_signal_analysis(void) { svc_signal_analysis_update(); }
+static void task_signal_analysis(void) { svc_signal_analysis_update();
+                                         svc_signal_analysis_check_integrity(); }
 static void task_power(void)           { svc_power_task();             }
 
 /* ---- task table ----

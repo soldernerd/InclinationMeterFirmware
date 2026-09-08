@@ -565,12 +565,21 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         /* acquisition integrity (docs/adc_acquisition_redesign.md) */
         uint32_t frames_produced;
         uint32_t frames_drained;
+        uint32_t tim7_fires;
         uint32_t ring_overflow;
         uint32_t drain_clamped;
+        uint32_t framing_err;
+        uint32_t crc_err;
+        uint32_t slip_excursions;
         uint16_t drain_clamp_max;
-        uint16_t word0_first;
+        int16_t  slip_band_lo;
+        int16_t  slip_band_hi;
+        int16_t  slip_min;
+        int16_t  slip_max;
         uint16_t word0_last;
         uint16_t crc_rx_last;
+        uint16_t crc_calc_last;
+        uint8_t  fault_code;
     } p;
     p.id              = r->id;
     p.status          = r->status;
@@ -586,12 +595,21 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
     p.last_elapsed_ms = elapsed;
     p.frames_produced = ig->frames_produced;
     p.frames_drained  = ig->frames_drained;
+    p.tim7_fires      = ig->tim7_fires;
     p.ring_overflow   = ig->ring_overflow;
     p.drain_clamped   = ig->drain_clamped;
+    p.framing_err     = ig->framing_err;
+    p.crc_err         = ig->crc_err;
+    p.slip_excursions = ig->slip_excursions;
     p.drain_clamp_max = ig->drain_clamp_max;
-    p.word0_first     = ig->word0_count ? ig->word0_sample[0] : 0U;
-    p.word0_last      = ig->word0_count ? ig->word0_sample[ig->word0_count - 1U] : 0U;
+    p.slip_band_lo    = ig->slip_band_lo;
+    p.slip_band_hi    = ig->slip_band_hi;
+    p.slip_min        = ig->slip_min;
+    p.slip_max        = ig->slip_max;
+    p.word0_last      = ig->word0_last;
     p.crc_rx_last     = ig->crc_rx_last;
+    p.crc_calc_last   = ig->crc_calc_last;
+    p.fault_code      = ig->fault_code;
 
     send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
 }

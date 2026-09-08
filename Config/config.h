@@ -176,19 +176,43 @@
  * OSR = (fCLKIN/2)/(fCLKIN/256) = 128 -> CLOCK.OSR[2:0] field = 000b. */
 #define ADS131M04_OSR_FIELD            0x0U       /* CLOCK.OSR[2:0] = 000b -> OSR = 128 */
 
-/* DRDY poll timer (TIM7, no GPIO output). Originally one tick per ADC
- * sample (20833.33 Hz), but TIM7 and the ADS's own fDATA are two
- * independent 20833 Hz clocks with a drifting phase relationship — when a
- * tick repeatedly lands just before DRDY, two conversions pass between
- * reads and the capture decimates non-uniformly (bench: effective rate
- * wandered 8-14 kHz, 2000-6700 "drops"). Fix: oversample. At 2x =
- * 41666.67 Hz (64 MHz / 1536, Prescaler=0, Period=1535) every DRDY-low is
- * serviced within ~24 us, inside the 48 us conversion period, so exactly
- * one read happens per conversion — uniform sampling at the true fDATA.
- * Ticks that find DRDY already high are benign no-ops now, not missed
- * samples. The TIM7 ISR uses a lean fast path (Core/Src/stm32g0xx_it.c)
- * rather than the full HAL_TIM_IRQHandler, which is too heavy at this rate. */
-#define ADS131M04_TRIGGER_TIMER_PERIOD 1535U
+/* DRDY poll timer (TIM7, no GPIO output). fDATA = SYSCLK / 3072 exactly
+ * (64 MHz / 12 / 256 — the MCLK divisor x OSR), so one fDATA period is
+ * 3072 TIM7 ticks. TIM7 and fDATA are therefore frequency-LOCKED, not
+ * two free-running clocks — the phase relationship is fixed.
+ *
+ * ADC_TRIGGER_OVERSAMPLE = how many TIM7 fires per conversion. History:
+ * 1x aliased (a fixed poll phase sitting on the DRDY edge decimated the
+ * capture — bench: effective rate wandered 8-14 kHz); 2x was the fix, at
+ * the cost of doubling the ISR fire count. Now that the heavy per-sample
+ * work is off the ISR (docs/adc_acquisition_redesign.md) and the
+ * integrity check below catches any missed conversion, 1x is worth
+ * retrying — set to 1 and watch Ads131m04Integrity.slip_max/min.
+ *
+ * The TIM7 ISR uses a lean fast path (Core/Src/stm32g0xx_it.c) rather
+ * than the full HAL_TIM_IRQHandler. */
+#define ADS131M04_FDATA_TIMER_TICKS   3072U
+#define ADC_TRIGGER_OVERSAMPLE        2U
+#define ADS131M04_TRIGGER_TIMER_PERIOD \
+    ((ADS131M04_FDATA_TIMER_TICKS / ADC_TRIGGER_OVERSAMPLE) - 1U)
+
+/* Expected value of every streaming frame's word 0 (the ADS131M04 STATUS
+ * response when no command was issued): WLENGTH=24-bit, all DRDY set, no
+ * RESET / F_RESYNC / CRC_ERR. Any other value == the frame stream lost
+ * byte alignment, or the device resynced/reset. Confirmed on the bench
+ * (fw 0.9.17): constant 0x010F. */
+#define ADS131M04_STATUS_WORD         0x010FU
+
+/* Conversion-count integrity: slip = (frames read) - (TIM7 fires /
+ * ADC_TRIGGER_OVERSAMPLE). Frequency-locked clocks mean slip sits in a
+ * bounded band in steady state (only ISR-servicing jitter moves it); a
+ * lost or duplicated conversion shifts it permanently by a whole count.
+ * The band is *learned* over the first ADC_SLIP_SETTLE_FRAMES; after that,
+ * slip leaving [learned_min - 1, learned_max + 1] latches ADS_FAULT_SLIP.
+ * No magic width to tune — the settle window just has to be long enough
+ * to see the true jitter band (and short enough that a fault is unlikely
+ * to hide inside it). */
+#define ADC_SLIP_SETTLE_FRAMES       40000U   /* ~2 s at fDATA */
 
 /* Services/svc_signal_analysis.c: complete 8-sample sine cycles per
  * amplitude/phase recompute. 64 cycles = 512 samples ~= 24.6 ms at

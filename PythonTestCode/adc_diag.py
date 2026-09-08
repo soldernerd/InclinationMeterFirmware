@@ -113,11 +113,17 @@ def main():
           f"{lc['elapsed_ms']} ms  -> effective {lc['effective_Hz']:.0f} Hz")
     ig = d.get("integrity")
     if ig:
-        print(f"  integrity: produced {ig['frames_produced']}  drained {ig['frames_drained']}"
-              f"  backlog {ig['backlog']}  ring_overflow {ig['ring_overflow']}"
-              f"  drain_clamped {ig['drain_clamped']} (max gap {ig['drain_clamp_max']})")
-        print(f"             word0 first=0x{ig['word0_first']:04X} last=0x{ig['word0_last']:04X}"
-              f"  crc_rx_last=0x{ig['crc_rx_last']:04X}")
+        print(f"  integrity: FAULT={ig['fault'].upper()}" if ig['fault_code']
+              else "  integrity: no hard fault")
+        print(f"     frames  produced {ig['frames_produced']}  drained {ig['frames_drained']}"
+              f"  backlog {ig['backlog']}   tim7_fires {ig['tim7_fires']}")
+        print(f"     conv-slip: band {ig['slip_band']}  wandered to [{ig['slip_min']},{ig['slip_max']}]"
+              f"   excursions {ig['slip_excursions']}")
+        print(f"     ring_overflow {ig['ring_overflow']}  drain_clamped {ig['drain_clamped']}"
+              f"  framing_err {ig['framing_err']}  crc_err {ig['crc_err']}")
+        print(f"     word0=0x{ig['word0_last']:04X}"
+              f"   crc rx=0x{ig['crc_rx_last']:04X} calc=0x{ig['crc_calc_last']:04X}"
+              f" {'MATCH' if ig['crc_match'] else 'MISMATCH'}")
 
 
 if __name__ == "__main__":

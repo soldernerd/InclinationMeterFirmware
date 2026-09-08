@@ -67,6 +67,12 @@ void svc_signal_analysis_last_capture(uint16_t *samples, uint16_t *drops,
  * call. */
 void svc_signal_analysis_update(void);
 
+/* Call alongside svc_signal_analysis_update() from the scheduler. If the
+ * acquisition driver has latched an integrity fault (lost/duplicated
+ * conversion, ring overrun, or lost framing), emits one ERROR to the
+ * debug-log stream and stops the pipeline. One-shot per start(). */
+void svc_signal_analysis_check_integrity(void);
+
 /* Per-channel amplitude (millivolts, peak -- not RMS) and phase
  * (millidegrees, relative to channel 2). Updated once per batch of
  * Config/config.h's SIGNAL_ANALYSIS_BATCH_CYCLES complete sine cycles.

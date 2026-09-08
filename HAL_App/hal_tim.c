@@ -1,6 +1,7 @@
 #include "hal_tim.h"
 #include "stm32g0xx_hal.h"
 #include "pin_config.h"
+#include "config.h"
 
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
@@ -171,6 +172,21 @@ void hal_tim_adc_clock_stop(void)
 
 void hal_tim_adc_trigger_start(void)
 {
+    /* CubeMX gives TIM7 NVIC priority 2 (below USART / display-DMA / EXTI
+     * at 0). At the 41.7 kHz trigger rate a burst of higher-priority IRQs
+     * (every debug/BLE UART byte, VCOM toggle, encoder edges) can push a
+     * fire late enough to miss a conversion — the acquisition-integrity
+     * check catches it as a slow slip. Promote TIM7 to 0 so it at least
+     * tail-chains with the others instead of queueing behind them; the
+     * handler is lean (~1-2 us). Overridden here, in code we own, rather
+     * than editing the CubeMX MspInit. */
+    HAL_NVIC_SetPriority(TIM7_LPTIM2_IRQn, 0, 0);
+    /* config.h's ADS131M04_TRIGGER_TIMER_PERIOD (derived from
+     * ADC_TRIGGER_OVERSAMPLE) is authoritative — Core/Src/tim.c still
+     * carries the CubeMX literal. Set the ARR here so changing the
+     * oversample factor actually changes the trigger rate. */
+    __HAL_TIM_SET_AUTORELOAD(&htim7, ADS131M04_TRIGGER_TIMER_PERIOD);
+    __HAL_TIM_SET_COUNTER(&htim7, 0U);
     HAL_TIM_Base_Start_IT(&htim7);
 }
 void hal_tim_adc_trigger_stop(void)
