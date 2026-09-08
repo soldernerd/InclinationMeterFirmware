@@ -78,7 +78,7 @@ typedef struct {
     uint8_t  fault_code;        /* Ads131m04Fault — 0 while healthy */
 } Ads131m04Integrity;
 
-const Ads131m04Integrity *drv_ads131m04_get_integrity(void);
+const volatile Ads131m04Integrity *drv_ads131m04_get_integrity(void);
 
 /* True once acquisition has latched on an integrity fault (fault_code
  * != 0). The pipeline has stopped arming reads; a full stop()/start()

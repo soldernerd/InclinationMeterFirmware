@@ -97,7 +97,7 @@ Output: `build/InclinationMeterFirmware.elf`.
 ├── App/                  — Scheduler, UI, display, u8g2 callback, version
 ├── Middleware/u8g2/      — u8g2 graphics library (cloned from olikraus/u8g2)
 ├── system_state.{h,c}    — Global SystemState + DeviceSettings
-└── InclinationMeterFirmware.ioc — CubeMX project
+└── WylerLeveltronic.ioc — CubeMX project (REV B)
 ```
 
 CubeMX-generated code lives in `Core/` and `Drivers/`. Application code never goes inside generated files except through the `/* USER CODE BEGIN/END */` markers in [Core/Src/main.c](Core/Src/main.c).

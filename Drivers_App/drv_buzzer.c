@@ -14,16 +14,6 @@ void drv_buzzer_init(void)
     hal_tim_buzzer_stop();
 }
 
-void drv_buzzer_on(BuzzerTone tone)
-{
-    hal_tim_buzzer_start((uint16_t)tone);
-}
-
-void drv_buzzer_off(void)
-{
-    hal_tim_buzzer_stop();
-}
-
 void drv_buzzer_beep(BuzzerTone tone, uint16_t duration_ms)
 {
     /* Fire-and-forget. A second call while a beep is still sounding only

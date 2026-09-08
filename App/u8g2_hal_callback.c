@@ -2,6 +2,14 @@
 #include "drv_sharp_lcd.h"
 #include "stm32g0xx_hal.h"
 
+/* Display render path: CMakeLists.txt pins this file to -O2 in every
+ * config. At -O0 a full banded render is tens of ms and the per-tick
+ * cost bound (docs/display_page_render.md) no longer holds. Fail the
+ * build if the pin is lost. */
+#if !defined(__OPTIMIZE__)
+#error "display-path file built without optimisation -- restore the -O2 pin in CMakeLists.txt"
+#endif
+
 /* u8g2's u8x8_d_ls027b7dh01_400x240 driver emits, per DRAW_TILE call:
  *   [cmd=0x80] [line+50B+0x00] x 8 [final 0x00]
  * That's 1 + 8*52 + 1 = 418 bytes per transfer, one transfer per 8-line

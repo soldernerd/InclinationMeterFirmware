@@ -550,7 +550,7 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
     }
 
     const Ads131m04Regs *r = drv_ads131m04_get_regs();
-    const Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
+    const volatile Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
     uint16_t samples = 0, drops = 0;
     uint32_t elapsed = 0;
     svc_signal_analysis_last_capture(&samples, &drops, &elapsed);
@@ -895,19 +895,23 @@ static void dispatch_topic_groups(ApiTransport t, uint16_t opcode, uint8_t verb,
 
 /* ---------------- Settings (0x3: GET, SET) ---------------- */
 
-typedef enum { SF_U16, SF_U32, SF_I32 } SettingsFieldType;
+typedef enum { SF_UNSIGNED, SF_SIGNED } SettingsFieldType;   /* signedness only — width comes from sizeof(field) */
 
 typedef struct {
     uint8_t           resource;
     SettingsFieldType type;
-    uint8_t           size;    /* 2 or 4, == sizeof(field) */
+    uint8_t           size;    /* == sizeof(field), derived by SF() below */
     size_t            offset;  /* offsetof(DeviceSettings, field) */
     int64_t           min;
     int64_t           max;
 } SettingsFieldDesc;
 
-#define SF(res, type, size, field, lo, hi) \
-    { (res), (type), (size), offsetof(DeviceSettings, field), (lo), (hi) }
+/* size is sizeof(field), never a hand-typed literal — a wrong width is
+ * then impossible by construction (was a real footgun: a copy-pasted
+ * size-2 row for a 4-byte field silently truncated GET/SET). */
+#define SF(res, type, field, lo, hi) \
+    { (res), (type), (uint8_t)sizeof(((DeviceSettings *)0)->field), \
+      offsetof(DeviceSettings, field), (lo), (hi) }
 
 /* Bounds: *_ms 1..60000 (1 ms scheduler tick .. effectively-disabled);
  * battery_*_mv 2500..4200 (single-cell Li-ion real range); tmp236 voffs /
@@ -919,29 +923,29 @@ typedef struct {
  * stream_interval / settling / complementary-filter fields) — the gaps
  * are left so the surviving IDs keep their numbers. */
 static const SettingsFieldDesc s_settings_fields[] = {
-    SF(API2_RES_SET_TASK_SENSORS_MS,         SF_U16, 2, task_sensors_ms,           1,    60000),
-    SF(API2_RES_SET_TASK_DISPLAY_MS,         SF_U16, 2, task_display_ms,           1,    60000),
-    SF(API2_RES_SET_TASK_BLE_MS,             SF_U16, 2, task_ble_ms,               1,    60000),
-    SF(API2_RES_SET_TASK_USB_MS,             SF_U16, 2, task_usb_ms,               1,    60000),
-    SF(API2_RES_SET_TASK_BATTERY_MS,         SF_U16, 2, task_battery_ms,           1,    60000),
-    SF(API2_RES_SET_TASK_TEMPERATURE_MS,     SF_U16, 2, task_temperature_ms,       1,    60000),
-    SF(API2_RES_SET_BATTERY_CRITICAL_MV,     SF_U16, 2, battery_critical_mv,       2500, 4200),
-    SF(API2_RES_SET_BATTERY_LOW_MV,          SF_U16, 2, battery_low_mv,            2500, 4200),
-    SF(API2_RES_SET_BATTERY_CHARGE_START_MV, SF_U16, 2, battery_charge_start_mv,   2500, 4200),
-    SF(API2_RES_SET_VBAT_SCALE_NUM,          SF_U16, 2, vbat_scale_num,            1,    10000),
-    SF(API2_RES_SET_VBAT_SCALE_DEN,          SF_U16, 2, vbat_scale_den,            1,    10000),
-    SF(API2_RES_SET_TMP236_SEG1_VOFFS_MV,    SF_U16, 2, tmp236_seg1_voffs_mv,      0,    3300),
-    SF(API2_RES_SET_TMP236_SEG1_NUM,         SF_U16, 2, tmp236_seg1_num,           1,    10000),
-    SF(API2_RES_SET_TMP236_SEG1_DEN,         SF_U16, 2, tmp236_seg1_den,           1,    10000),
-    SF(API2_RES_SET_TMP236_SEG_BOUNDARY_MV,  SF_U16, 2, tmp236_seg_boundary_mv,    0,    3300),
-    SF(API2_RES_SET_TMP236_SEG2_VOFFS_MV,    SF_U16, 2, tmp236_seg2_voffs_mv,      0,    3300),
-    SF(API2_RES_SET_TMP236_SEG2_NUM,         SF_U16, 2, tmp236_seg2_num,           1,    10000),
-    SF(API2_RES_SET_TMP236_SEG2_DEN,         SF_U16, 2, tmp236_seg2_den,           1,    10000),
-    SF(API2_RES_SET_TMP236_SEG2_TINFL_CDEG,  SF_U16, 2, tmp236_seg2_tinfl_cdeg,    0,    20000),
-    SF(API2_RES_SET_LM35_SCALE_MV_PER_C,     SF_U16, 2, lm35_scale_mv_per_c,       1,    1000),
-    SF(API2_RES_SET_ENCODER_COUNTS_PER_DET,  SF_U16, 2, encoder_counts_per_detent, 1,    100),
-    SF(API2_RES_SET_AUTO_POWEROFF_S,         SF_U16, 2, auto_poweroff_s,           0,    65535),
-    SF(API2_RES_SET_VBAT_OFFSET_MV,          SF_I32, 4, vbat_offset_mv,            -500, 500),
+    SF(API2_RES_SET_TASK_SENSORS_MS,         SF_UNSIGNED,  task_sensors_ms,              1, 60000),
+    SF(API2_RES_SET_TASK_DISPLAY_MS,         SF_UNSIGNED,  task_display_ms,              1, 60000),
+    SF(API2_RES_SET_TASK_BLE_MS,             SF_UNSIGNED,  task_ble_ms,                  1, 60000),
+    SF(API2_RES_SET_TASK_USB_MS,             SF_UNSIGNED,  task_usb_ms,                  1, 60000),
+    SF(API2_RES_SET_TASK_BATTERY_MS,         SF_UNSIGNED,  task_battery_ms,              1, 60000),
+    SF(API2_RES_SET_TASK_TEMPERATURE_MS,     SF_UNSIGNED,  task_temperature_ms,          1, 60000),
+    SF(API2_RES_SET_BATTERY_CRITICAL_MV,     SF_UNSIGNED,  battery_critical_mv,       2500, 4200),
+    SF(API2_RES_SET_BATTERY_LOW_MV,          SF_UNSIGNED,  battery_low_mv,            2500, 4200),
+    SF(API2_RES_SET_BATTERY_CHARGE_START_MV, SF_UNSIGNED,  battery_charge_start_mv,   2500, 4200),
+    SF(API2_RES_SET_VBAT_SCALE_NUM,          SF_UNSIGNED,  vbat_scale_num,               1, 10000),
+    SF(API2_RES_SET_VBAT_SCALE_DEN,          SF_UNSIGNED,  vbat_scale_den,               1, 10000),
+    SF(API2_RES_SET_TMP236_SEG1_VOFFS_MV,    SF_UNSIGNED,  tmp236_seg1_voffs_mv,         0, 3300),
+    SF(API2_RES_SET_TMP236_SEG1_NUM,         SF_UNSIGNED,  tmp236_seg1_num,              1, 10000),
+    SF(API2_RES_SET_TMP236_SEG1_DEN,         SF_UNSIGNED,  tmp236_seg1_den,              1, 10000),
+    SF(API2_RES_SET_TMP236_SEG_BOUNDARY_MV,  SF_UNSIGNED,  tmp236_seg_boundary_mv,       0, 3300),
+    SF(API2_RES_SET_TMP236_SEG2_VOFFS_MV,    SF_UNSIGNED,  tmp236_seg2_voffs_mv,         0, 3300),
+    SF(API2_RES_SET_TMP236_SEG2_NUM,         SF_UNSIGNED,  tmp236_seg2_num,              1, 10000),
+    SF(API2_RES_SET_TMP236_SEG2_DEN,         SF_UNSIGNED,  tmp236_seg2_den,              1, 10000),
+    SF(API2_RES_SET_TMP236_SEG2_TINFL_CDEG,  SF_UNSIGNED,  tmp236_seg2_tinfl_cdeg,       0, 20000),
+    SF(API2_RES_SET_LM35_SCALE_MV_PER_C,     SF_UNSIGNED,  lm35_scale_mv_per_c,          1, 1000),
+    SF(API2_RES_SET_ENCODER_COUNTS_PER_DET,  SF_UNSIGNED,  encoder_counts_per_detent,    1, 100),
+    SF(API2_RES_SET_AUTO_POWEROFF_S,         SF_UNSIGNED,  auto_poweroff_s,              0, 65535),
+    SF(API2_RES_SET_VBAT_OFFSET_MV,          SF_SIGNED,    vbat_offset_mv,            -500, 500),
 };
 #define SETTINGS_FIELD_COUNT (sizeof(s_settings_fields) / sizeof(s_settings_fields[0]))
 
@@ -961,8 +965,8 @@ static int64_t parse_settings_value(const SettingsFieldDesc *d, const uint8_t *p
     for (uint8_t i = 0; i < d->size; ++i) {
         u |= (uint32_t)p[i] << (8U * i);
     }
-    if (d->type == SF_I32) {
-        return (int64_t)(int32_t)u;
+    if (d->type == SF_SIGNED) {
+        return (d->size == 4U) ? (int64_t)(int32_t)u : (int64_t)(int16_t)u;
     }
     return (int64_t)u;
 }

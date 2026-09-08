@@ -16,7 +16,6 @@ typedef struct {
 } lm35_data_t;
 
 void      drv_lm35_init(void);
-DrvStatus drv_lm35_start_read(void);                /* triggers ADC scan via hal_adc */
 DrvStatus drv_lm35_get_result(lm35_data_t *out);    /* DRV_ERR_NOT_READY until the
                                                        * ADC has produced valid data */
 

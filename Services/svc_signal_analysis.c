@@ -7,6 +7,14 @@
 #include <stdbool.h>
 #include <math.h>
 
+/* Hot path: MUST be built optimised. CMakeLists.txt pins this file to -O2
+ * in every config; at -O0 the ADS131M04 trigger ISR + SysTick drain
+ * overrun their timing budget and starve the cooperative scheduler
+ * (docs/adc_acquisition_redesign.md). Fail the build if the pin is lost. */
+#if !defined(__OPTIMIZE__)
+#error "hot-path file built without optimisation -- restore the -O2 pin in CMakeLists.txt"
+#endif
+
 /* Single-bin (8-point) DFT at exactly the DAC's own frequency, exploiting
  * WP8's fixed 8-samples-per-cycle relationship (config.h's
  * ADS131M04_OSR_FIELD comment) -- for a pure sine at that exact bin, this
@@ -228,7 +236,7 @@ void svc_signal_analysis_check_integrity(void)
     }
     s_fault_reported = true;
 
-    const Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
+    const volatile Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
     static const char *const names[] = { "none", "overrun", "framing", "crc", "slip" };
     uint8_t fc = ig->fault_code;
     svc_logf(API2_LOG_ERROR,

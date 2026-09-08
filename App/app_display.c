@@ -13,6 +13,14 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Display render path: CMakeLists.txt pins this file to -O2 in every
+ * config. At -O0 a full banded render is tens of ms and the per-tick
+ * cost bound (docs/display_page_render.md) no longer holds. Fail the
+ * build if the pin is lost. */
+#if !defined(__OPTIMIZE__)
+#error "display-path file built without optimisation -- restore the -O2 pin in CMakeLists.txt"
+#endif
+
 static u8g2_t s_u8g2;
 
 /* Track the slow-changing fields we display so we can skip flushes when

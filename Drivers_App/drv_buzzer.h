@@ -13,9 +13,8 @@ typedef enum {
 } BuzzerTone;
 
 void drv_buzzer_init(void);
-void drv_buzzer_on(BuzzerTone tone);
-void drv_buzzer_off(void);
 void drv_buzzer_beep(BuzzerTone tone, uint16_t duration_ms);
-void drv_buzzer_update(void);   /* call from scheduler every tick */
+void drv_buzzer_update(void);   /* no-op: beep termination is in the TIM3 ISR.
+                                  kept so the scheduler task table needn't change */
 
 #endif /* DRV_BUZZER_H */

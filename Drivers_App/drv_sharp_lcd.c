@@ -7,6 +7,14 @@
 #include "system_state.h"
 #include <string.h>
 
+/* Display render path: CMakeLists.txt pins this file to -O2 in every
+ * config. At -O0 a full banded render is tens of ms and the per-tick
+ * cost bound (docs/display_page_render.md) no longer holds. Fail the
+ * build if the pin is lost. */
+#if !defined(__OPTIMIZE__)
+#error "display-path file built without optimisation -- restore the -O2 pin in CMakeLists.txt"
+#endif
+
 #define CMD_WRITE_LINE   0x80U
 #define TRAILER          0x00U
 /* line addr (1) + 50 data + per-line trailing dummy byte (1) = 52.
@@ -56,6 +64,13 @@ static uint32_t      s_settle_deadline_ms   = 0;
 static inline uint8_t *row_pixels(uint16_t row)
 {
     return &s_tx_buf[1U + row * ROW_PACKET_SIZE + 1U];
+}
+
+static void clear_buffer(void)
+{
+    for (uint16_t r = 0; r < LCD_HEIGHT; ++r) {
+        memset(row_pixels(r), 0x00, LCD_STRIDE);
+    }
 }
 
 /* Sharp LS027B7DH01 expects LSB-first on the wire for command and address
@@ -139,7 +154,7 @@ static void prime_tx_buffer(void)
         s_tx_buf[1U + r * ROW_PACKET_SIZE + 1U + LCD_STRIDE] = TRAILER;
     }
     memset(&s_tx_buf[1U + LCD_HEIGHT * ROW_PACKET_SIZE], TRAILER, TRAILER_BYTES);
-    drv_sharp_lcd_clear_buffer();
+    clear_buffer();
 }
 
 void drv_sharp_lcd_init(void)
@@ -169,52 +184,10 @@ void drv_sharp_lcd_init(void)
     s_pending_power_settle = true;
 }
 
-void drv_sharp_lcd_clear_buffer(void)
-{
-    for (uint16_t r = 0; r < LCD_HEIGHT; ++r) {
-        memset(row_pixels(r), 0x00, LCD_STRIDE);
-    }
-}
-
-void drv_sharp_lcd_selftest_fill(void)
-{
-    for (uint16_t r = 0; r < LCD_HEIGHT; ++r) {
-        uint8_t  fill = (r < 8U) ? 0xFFU
-                                 : (((r >> 4) & 1U) ? 0xFFU : 0x00U);
-        uint8_t *px = row_pixels(r);
-        memset(px, fill, LCD_STRIDE);
-        px[0] = 0xFFU;   /* left-edge vertical bar */
-    }
-}
-
-void drv_sharp_lcd_clear_display(void)
-{
-    drv_sharp_lcd_clear_buffer();
-    (void)drv_sharp_lcd_flush_full();
-}
-
-void drv_sharp_lcd_set_pixel(uint16_t x, uint16_t y, bool on)
-{
-    if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
-    uint8_t *row = row_pixels(y);
-    uint16_t byte_idx = x >> 3;
-    uint8_t  mask     = (uint8_t)(0x80U >> (x & 7U));   /* MSB-first within byte */
-    if (on) row[byte_idx] |= mask;
-    else    row[byte_idx] &= (uint8_t)~mask;
-}
-
 void drv_sharp_lcd_write_row(uint16_t row, const uint8_t *src)
 {
     if (row >= LCD_HEIGHT || src == 0) return;
     memcpy(row_pixels(row), src, LCD_STRIDE);
-}
-
-void drv_sharp_lcd_mark_dirty(uint16_t row)  { (void)row; /* WP1: full-flush only */ }
-void drv_sharp_lcd_mark_all_dirty(void)       { /* WP1: full-flush only */ }
-
-DrvStatus drv_sharp_lcd_flush(void)
-{
-    return drv_sharp_lcd_flush_full();
 }
 
 DrvStatus drv_sharp_lcd_flush_full(void)

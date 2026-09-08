@@ -2,6 +2,14 @@
 #include "stm32g0xx_ll_gpio.h"
 #include "pin_config.h"
 
+/* Hot path: MUST be built optimised. CMakeLists.txt pins this file to -O2
+ * in every config; at -O0 the ADS131M04 trigger ISR + SysTick drain
+ * overrun their timing budget and starve the cooperative scheduler
+ * (docs/adc_acquisition_redesign.md). Fail the build if the pin is lost. */
+#if !defined(__OPTIMIZE__)
+#error "hot-path file built without optimisation -- restore the -O2 pin in CMakeLists.txt"
+#endif
+
 static HalGpioExtiCallback s_exti_callbacks[16] = {0};
 
 /* Pin mode/pull/speed are configured by MX_GPIO_Init() (CubeMX generated).

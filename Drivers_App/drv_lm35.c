@@ -18,13 +18,8 @@
 
 void drv_lm35_init(void)
 {
-    /* hal_adc owns the underlying ADC. Nothing to do here. */
-}
-
-DrvStatus drv_lm35_start_read(void)
-{
-    hal_adc_start();
-    return DRV_OK;
+    /* hal_adc owns the underlying ADC. Nothing to do here. The scan is
+     * triggered by drv_tmp236_start_read() (same shared ADC scan). */
 }
 
 DrvStatus drv_lm35_get_result(lm35_data_t *out)

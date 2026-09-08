@@ -116,7 +116,12 @@ void svc_usb_update(void)
     }
     s_was_connected = now_connected;
 
-    g_system_state.usb_connected = now_connected;
+    /* NOTE: g_system_state.usb_connected is deliberately NOT written here.
+     * It means "USB power present (VBUS)" and is owned solely by
+     * svc_battery.c. This module's enumeration state (now_connected) is a
+     * different thing — a host attached and enumerated — and stays local;
+     * anything needing it calls hal_usb_is_connected(). Previously both
+     * wrote the same field on different tick periods, so it flapped. */
 
     if (s_rx_pending) {
         uint16_t len = s_rx_len;

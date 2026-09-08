@@ -8,6 +8,14 @@
 #include "math_crc.h"
 #include "stm32g0xx_hal.h"   /* __disable_irq / __enable_irq */
 
+/* Hot path: MUST be built optimised. CMakeLists.txt pins this file to -O2
+ * in every config; at -O0 the ADS131M04 trigger ISR + SysTick drain
+ * overrun their timing budget and starve the cooperative scheduler
+ * (docs/adc_acquisition_redesign.md). Fail the build if the pin is lost. */
+#if !defined(__OPTIMIZE__)
+#error "hot-path file built without optimisation -- restore the -O2 pin in CMakeLists.txt"
+#endif
+
 /* Register addresses used here (datasheet Table 8-12, "Register Map"). */
 #define REG_ID      0x00U
 #define REG_STATUS  0x01U
@@ -78,7 +86,18 @@ static uint8_t           s_ring[ADC_FRAME_RING_FRAMES][FRAME_BYTES];
 static volatile uint16_t s_ring_head;   /* produced count (free-running) */
 static volatile uint16_t s_ring_tail;   /* drained count  (free-running) */
 
-static Ads131m04Integrity s_integ;
+/* volatile: written by on_trigger() (TIM7 ISR, pri 0), drain_ring() /
+ * drv_ads131m04_drain_tick() (SysTick, lowest), and read cross-context by
+ * drv_ads131m04_faulted() / _get_integrity() from thread mode. The hot
+ * files are -O2 (CMakeLists.txt) so the unqualified loads would otherwise
+ * be free to hoist/cache — which could let the fault latch, or the
+ * SysTick-clock deficit maths, run against a stale frames_produced /
+ * fault_code and silently disable the "latch + stop on lost sample"
+ * safety. No barrier is added: every field here is a single ≤32-bit
+ * aligned counter written by exactly one context (fault_code's
+ * check-then-set race across the two ISRs is benign and documented at
+ * integ_fault()), so per-access volatile is sufficient on this core. */
+static volatile Ads131m04Integrity s_integ;
 static uint32_t           s_start_ms;      /* hal_systick_get_ms() at start() */
 static uint32_t           s_settle_ms;     /* run_ms when the deficit reference was taken */
 static uint32_t           s_settle_frames; /* frames_produced at that point */
@@ -437,7 +456,7 @@ static void ring_reset(void)
     s_deficit_hold  = 0U;
     s_settled       = false;
     for (uint32_t i = 0; i < sizeof s_integ; ++i) {
-        ((uint8_t *)&s_integ)[i] = 0U;
+        ((volatile uint8_t *)&s_integ)[i] = 0U;
     }
 }
 
@@ -489,7 +508,7 @@ void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb)
     s_on_sample = cb;
 }
 
-const Ads131m04Integrity *drv_ads131m04_get_integrity(void)
+const volatile Ads131m04Integrity *drv_ads131m04_get_integrity(void)
 {
     return &s_integ;
 }

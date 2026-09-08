@@ -85,7 +85,10 @@ typedef struct {
     bool     battery_critical;
 
     bool     ble_connected;
-    bool     usb_connected;
+    bool     usb_connected;       /* "USB power present" (VBUS_SENSE high) — NOT
+                                    * "enumerated to a host". Sole writer:
+                                    * Services/svc_battery.c. For host/enumeration
+                                    * state, call hal_usb_is_connected(). */
     bool     woke_from_standby;   /* true if this boot resumed from Standby
                                     * mode rather than a power-on/other reset —
                                     * see HAL_App/hal_power.h */

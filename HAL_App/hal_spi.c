@@ -4,6 +4,14 @@
 #include "pin_config.h"
 #include "spi.h"
 
+/* Hot path: MUST be built optimised. CMakeLists.txt pins this file to -O2
+ * in every config; at -O0 the ADS131M04 trigger ISR + SysTick drain
+ * overrun their timing budget and starve the cooperative scheduler
+ * (docs/adc_acquisition_redesign.md). Fail the build if the pin is lost. */
+#if !defined(__OPTIMIZE__)
+#error "hot-path file built without optimisation -- restore the -O2 pin in CMakeLists.txt"
+#endif
+
 extern SPI_HandleTypeDef hspi1;
 extern SPI_HandleTypeDef hspi2;
 extern SPI_HandleTypeDef hspi3;
@@ -92,6 +100,13 @@ DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t l
 #define ADC_TX_DMA_GIF   DMA_IFCR_CGIF2
 #define ADC_RX_DMA_GIF   DMA_IFCR_CGIF3
 
+/* ONE-SHOT: called once from drv_ads131m04_init(). After this, SPI1 belongs
+ * to this raw-DMA path permanently — CR2 TXDMAEN/RXDMAEN and SPE stay set for
+ * the life of the program (there is no _deinit), and no blocking HAL SPI1
+ * call (hal_spi_write / hal_spi_transmit_receive) is valid afterward. Safe
+ * because REV B dedicates SPI1 to the ADS131M04 and drv_ads131m04_init()
+ * does all its blocking register I/O before calling this. If a runtime
+ * re-init is ever needed, add a matching _deinit that clears CR2 + SPE. */
 void hal_spi_adc_stream_init(void)
 {
     /* Channels were configured by HAL_DMA_Init() in MX_SPI1_Init's MspInit
@@ -132,6 +147,9 @@ bool hal_spi_adc_stream_done(void)
     return ADC_RX_DMA->CNDTR == 0U;
 }
 
+/* Per-frame teardown (called after every frame from on_trigger()), NOT a
+ * peripheral shutdown: only the DMA channel enables + flags are touched.
+ * CR2 DMAEN and SPE stay set — see hal_spi_adc_stream_init()'s one-shot note. */
 void hal_spi_adc_stream_end(void)
 {
     ADC_TX_DMA->CCR &= ~DMA_CCR_EN;
