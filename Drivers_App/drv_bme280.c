@@ -221,8 +221,20 @@ DrvStatus drv_bme280_init(void)
     return try_init();
 }
 
+/* Hard wall-time ceiling for one drv_bme280_update() call (config.h).
+ * Checked at every phase boundary. A single in-flight blocking I2C op
+ * can't be interrupted, so the true worst case is this budget plus one
+ * hal_i2c I2C_TIMEOUT_MS — still bounded, unlike the old unbounded stack
+ * of per-op timeouts on a clock-stretching sensor. */
+static bool over_budget(uint32_t t0)
+{
+    return hal_systick_elapsed_ms(t0) >= BME280_UPDATE_BUDGET_MS;
+}
+
 DrvStatus drv_bme280_update(void)
 {
+    const uint32_t t0 = hal_systick_get_ms();
+
     if (!s_initialized) {
         /* Never initialised (module absent/unresponsive at boot -- see
          * main.c, which calls drv_bme280_init() but doesn't halt if it
@@ -239,6 +251,11 @@ DrvStatus drv_bme280_update(void)
         }
         if (try_init() != DRV_OK) {
             note_error();
+            return DRV_ERR_NOT_READY;
+        }
+        if (over_budget(t0)) {
+            /* try_init() succeeded but ate the budget — take the reading
+             * next tick rather than pushing this call past the ceiling. */
             return DRV_ERR_NOT_READY;
         }
         /* Fall through to attempt a real reading in this same cycle --
@@ -270,6 +287,10 @@ DrvStatus drv_bme280_update(void)
         note_comm_failure();
         return DRV_ERR_COMM;
     }
+    if (over_budget(t0)) {
+        note_comm_failure();
+        return DRV_ERR_TIMEOUT;
+    }
 
     /* Small fixed delay before the first status check: the "measuring"
      * bit isn't guaranteed set the instant the ctrl_meas write above
@@ -282,8 +303,7 @@ DrvStatus drv_bme280_update(void)
      * fresh. */
     hal_systick_delay_ms(2);
 
-    uint32_t start = hal_systick_get_ms();
-    uint8_t  status;
+    uint8_t status;
     for (;;) {
         if (read_regs(REG_STATUS, &status, 1U) != DRV_OK) {
             note_comm_failure();
@@ -292,19 +312,14 @@ DrvStatus drv_bme280_update(void)
         if ((status & STATUS_MEASURING_BIT) == 0U) {
             break;
         }
-        if (hal_systick_elapsed_ms(start) >= STATUS_POLL_TIMEOUT_MS) {
-            /* Should not happen given ~9.3 ms max conversion time at
-             * this driver's oversampling settings (a device that's
-             * actually present and working) -- give up and force a
-             * fresh re-init before trusting this module again, same
-             * reasoning as note_comm_failure()'s other callers.
-             * Deliberately blocking rather than an async multi-tick
-             * state machine (unlike drv_24lc256.c's EEPROM write-cycle
-             * poll, which really is non-blocking) -- justified on its
-             * own here by the short, now-tightly-bounded worst case
-             * (this poll, plus hal_i2c.c's per-call I2C_TIMEOUT_MS on
-             * every blocking call in this function) rather than by
-             * that precedent. */
+        if (over_budget(t0)) {
+            /* Conversion not done within the per-call budget (should be
+             * ~9.3 ms on a healthy part) -- give up and force a fresh
+             * re-init before trusting this module again, same reasoning
+             * as note_comm_failure()'s other callers. Deliberately a
+             * blocking poll rather than a multi-tick state machine
+             * (unlike drv_24lc256.c's EEPROM write-cycle poll) --
+             * justified by the hard BME280_UPDATE_BUDGET_MS ceiling. */
             note_comm_failure();
             return DRV_ERR_TIMEOUT;
         }

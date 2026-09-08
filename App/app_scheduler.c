@@ -28,9 +28,15 @@
 typedef void (*TaskFn)(void);
 
 typedef struct {
-    TaskFn   task;
-    uint32_t period_ms;
-    uint32_t last_run_ms;
+    TaskFn          task;
+    const uint16_t *period_src;   /* NULL: period_ms is a fixed literal.
+                                    non-NULL: app_scheduler_reload_periods()
+                                    copies *period_src (an EEPROM-backed
+                                    g_device_settings field) into period_ms,
+                                    at boot and on every runtime settings
+                                    change. */
+    uint32_t        period_ms;
+    uint32_t        last_run_ms;
 } SchedulerEntry;
 
 /* ---- task wrappers ---- */
@@ -161,25 +167,33 @@ static void task_power(void)           { svc_power_task();             }
  * Order matters when multiple tasks share a tick: task_ui before
  * task_display so display sees a fresh redraw_needed the same tick;
  * task_usb/task_ble/task_uart before task_api so a command received this
- * tick can get its response sent the same tick. */
+ * tick can get its response sent the same tick.
+ *
+ * period_src is the single source of truth for each task's period — a
+ * pointer to its g_device_settings field, or NULL for a fixed literal.
+ * app_scheduler_reload_periods() is one loop over this table, so
+ * inserting / removing / reordering a row can no longer silently
+ * mis-assign every period after it (which it used to, when reload keyed
+ * off hard-coded indices). */
+#define EVERY_TICK  SYSTICK_PERIOD_MS
 
 static SchedulerEntry s_tasks[] = {
-    { task_adc,         0,                   0 },
-    { task_temperature, 0,                   0 },
-    { task_battery,     0,                   0 },
-    { task_storage,     0,                   0 },
-    { task_input,       0,                   0 },
-    { task_power,       0,                   0 },
-    { task_buzzer,      0,                   0 },
-    { task_usb,         0,                   0 },
-    { task_ble,         0,                   0 },
-    { task_uart,        0,                   0 },
-    { task_api,             0,                   0 },
-    { task_signal_analysis, 0,                   0 },
-    { task_ui,              0,                   0 },
-    { task_display,         0,                   0 },
-    { task_leds,            DEFAULT_TASK_LED_MS,    0 },
-    { task_bme280,          DEFAULT_TASK_BME280_MS, 0 },
+    { task_adc,             &g_device_settings.task_sensors_ms,     0,                      0 },
+    { task_temperature,     &g_device_settings.task_temperature_ms, 0,                      0 },
+    { task_battery,         &g_device_settings.task_battery_ms,     0,                      0 },
+    { task_storage,         NULL,                                  EVERY_TICK,             0 },
+    { task_input,           NULL,                                  EVERY_TICK,             0 },
+    { task_power,           NULL,                                  EVERY_TICK,             0 },  /* idle-timer accuracy */
+    { task_buzzer,          NULL,                                  EVERY_TICK,             0 },
+    { task_usb,             &g_device_settings.task_usb_ms,         0,                      0 },
+    { task_ble,             &g_device_settings.task_ble_ms,         0,                      0 },
+    { task_uart,            NULL,                                  EVERY_TICK,             0 },  /* RX latency + TX drain; no EEPROM setting */
+    { task_api,             NULL,                                  EVERY_TICK,             0 },  /* subscription timing accuracy */
+    { task_signal_analysis, &g_device_settings.task_sensors_ms,     0,                      0 },  /* finalizes at most this often; batches complete faster (svc_signal_analysis.c) */
+    { task_ui,              &g_device_settings.task_display_ms,     0,                      0 },
+    { task_display,         NULL,                                  EVERY_TICK,             0 },  /* renders DISPLAY_PAGES_PER_TICK bands/call (app_display.c); pump every tick to finish a redraw promptly */
+    { task_leds,            NULL,                                  DEFAULT_TASK_LED_MS,    0 },  /* not user/BLE-configurable */
+    { task_bme280,          NULL,                                  DEFAULT_TASK_BME280_MS, 0 },  /* not user/BLE-configurable */
 };
 #define TASK_COUNT  (sizeof(s_tasks) / sizeof(s_tasks[0]))
 
@@ -187,41 +201,18 @@ static bool s_booted = false;
 
 void app_scheduler_reload_periods(void)
 {
-    /* Periods are loaded from g_device_settings, which svc_storage_init
-     * has already populated (or seeded with defaults from config.h).
-     * Deliberately does NOT touch last_run_ms — safe to call re-entrantly
-     * (e.g. from App/app_ui.c's commit_edit(), itself running from inside
-     * task_ui, mid-iteration of app_scheduler_run()'s own for-loop). This
-     * is the preferred entry point for a runtime settings change; only
-     * app_scheduler_init() also resets last_run_ms, and only once. */
-    s_tasks[0].period_ms  = g_device_settings.task_sensors_ms;
-    s_tasks[1].period_ms  = g_device_settings.task_temperature_ms;
-    s_tasks[2].period_ms  = g_device_settings.task_battery_ms;
-    s_tasks[3].period_ms  = SYSTICK_PERIOD_MS;     /* storage — every tick */
-    s_tasks[4].period_ms  = SYSTICK_PERIOD_MS;     /* input — every tick */
-    s_tasks[5].period_ms  = SYSTICK_PERIOD_MS;     /* power — every tick (idle-timer accuracy) */
-    s_tasks[6].period_ms  = SYSTICK_PERIOD_MS;     /* buzzer — every tick */
-    s_tasks[7].period_ms  = g_device_settings.task_usb_ms;
-    s_tasks[8].period_ms  = g_device_settings.task_ble_ms;
-    s_tasks[9].period_ms  = SYSTICK_PERIOD_MS;   /* uart — every tick (no EEPROM setting; RX latency + TX drain) */
-    s_tasks[10].period_ms = SYSTICK_PERIOD_MS;   /* api — every tick (subscription timing accuracy) */
-    s_tasks[11].period_ms = g_device_settings.task_sensors_ms;   /* signal analysis —
-                                                                 * finalizes at most this
-                                                                 * often; batches complete
-                                                                 * faster (see
-                                                                 * svc_signal_analysis.c) */
-    s_tasks[12].period_ms = g_device_settings.task_display_ms;   /* ui */
-    s_tasks[13].period_ms = SYSTICK_PERIOD_MS;   /* display — every tick.
-                                                 * app_display_update() renders
-                                                 * the frame in DISPLAY_PAGES_PER_TICK
-                                                 * bands per call (see config.h /
-                                                 * app_display.c); it needs to be
-                                                 * pumped every tick to finish a
-                                                 * redraw promptly. Idle passes are
-                                                 * a cheap change-detect early-out. */
-    /* s_tasks[14] (LEDs) and s_tasks[15] (BME280) periods are the fixed
-     * literals set in the table above — not user/BLE-configurable like the
-     * others (see config.h's DEFAULT_TASK_LED_MS / DEFAULT_TASK_BME280_MS). */
+    /* g_device_settings has already been populated by svc_storage_init
+     * (or seeded with config.h defaults). Deliberately does NOT touch
+     * last_run_ms — safe to call re-entrantly (e.g. from App/app_ui.c's
+     * commit_edit(), itself running inside task_ui, mid-iteration of
+     * app_scheduler_run()'s own for-loop). Preferred entry point for a
+     * runtime settings change; only app_scheduler_init() also resets
+     * last_run_ms, and only once. */
+    for (size_t i = 0; i < TASK_COUNT; ++i) {
+        if (s_tasks[i].period_src != NULL) {
+            s_tasks[i].period_ms = *s_tasks[i].period_src;
+        }
+    }
 }
 
 void app_scheduler_init(void)

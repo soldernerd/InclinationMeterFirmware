@@ -85,6 +85,11 @@ void svc_ble_init(void)
     svc_api_register_transport(API_TRANSPORT_BLE, send_via_ble);
     svc_api_register_transport_ready(API_TRANSPORT_BLE, ble_tx_ready);
     drv_rn4871_register_rx_callback(rx_handler);
+    /* Return dropped deliberately: drv_rn4871_init() only pulses reset and
+     * kicks the (non-blocking) config state machine — the real success
+     * signal is drv_rn4871_is_connected() going true later, surfaced on
+     * the STATUS screen and DEVICE_STATE. A failed pulse just means BLE
+     * never advertises; not boot-fatal (svc_ble_init() returns void). */
     (void)drv_rn4871_init();
 }
 

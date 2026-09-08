@@ -171,6 +171,25 @@ int main(void)
   app_leds_init();
   hal_gpio_init();              /* remaining pin defaults — no rails, no LEDs (see hal_gpio.c) */
   hal_systick_init();
+
+  /* Re-prioritise IRQs for the ADS131M04 frame-ring drain (runs in
+   * SysTick_Handler). CubeMX leaves SysTick at the lowest priority (3),
+   * behind a wall of priority-0 handlers, so under an IRQ burst the drain
+   * can be pushed close to the ~2 ms ring-overflow margin
+   * (docs/adc_acquisition_redesign.md; 3-angle review, 2026-09-08). Done
+   * here in owned code, not the CubeMX MspInit files, so a regen can't
+   * revert it — same reasoning as hal_tim.c's TIM7 override.
+   *   SysTick                     3 -> 1 : drain now preempts the below.
+   *   DMA1_Ch1  (display blit done, 2 flag stores)
+   *   DMA1_Ch4_7 (I2C1 / ADC1 DMA-complete callbacks)
+   *   TIM6      (5 Hz VCOM toggle, latency-insensitive)   0 -> 2
+   * Unchanged and still above the drain: TIM7 (ADC trigger, 0), ADC1_COMP
+   * (0), the encoder EXTI lines (0 — must not miss an edge), UART (0). */
+  HAL_NVIC_SetPriority(SysTick_IRQn, 1, 0);
+  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 2, 0);
+  HAL_NVIC_SetPriority(DMA1_Ch4_7_DMA2_Ch1_5_DMAMUX1_OVR_IRQn, 2, 0);
+  HAL_NVIC_SetPriority(TIM6_DAC_LPTIM1_IRQn, 2, 0);
+
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: GPIO/LEDs up */
 
   hal_tim_init();

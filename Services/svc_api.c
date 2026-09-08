@@ -384,6 +384,12 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
             return;
         }
         if (on) {
+            /* Return dropped deliberately: svc_signal_analysis_start() is
+             * idempotent (no-op if already running) and its only failure
+             * mode is the ADS131M04 not having init'd at boot, which is
+             * already reported via g_system_state.ads_ok. The OK response
+             * below acknowledges the command was accepted, not that
+             * acquisition is healthy — the host polls Raw data 0x00 for that. */
             (void)svc_signal_analysis_start();
         } else {
             svc_signal_analysis_stop();

@@ -290,7 +290,16 @@
  * own, justified by the short, tightly-bounded worst case once
  * hal_i2c.c's per-call I2C_TIMEOUT_MS was tightened alongside this
  * driver (a code-review finding — a stuck/disconnected sensor could
- * otherwise stall the whole cooperative scheduler for hundreds of ms). */
+ * otherwise stall the whole cooperative scheduler for hundreds of ms).
+ *
+ * BME280_UPDATE_BUDGET_MS is a hard ceiling on the wall time one
+ * drv_bme280_update() call may spend, checked at every phase boundary so
+ * the stall is provably bounded regardless of the failure mode (clean
+ * NAK, clock-stretch, or a wedged bus that only hal_i2c's own timeout
+ * would otherwise unstick). 15 ms leaves margin over the ~9.3 ms healthy
+ * conversion plus a few short I2C transactions. */
+#define BME280_UPDATE_BUDGET_MS  15U
+
 #define BME280_CTRL_HUM_VALUE   0x01U   /* osrs_h[2:0] = 001b -> x1 */
 #define BME280_CTRL_MEAS_VALUE  0x25U   /* osrs_t=001b, osrs_p=001b, mode=01b (forced) */
 #define BME280_CONFIG_VALUE     0x00U   /* t_sb (unused, forced mode), filter off, spi3w_en=0 */

@@ -340,7 +340,8 @@ static bool selftest_write_and_verify(const uint8_t *pat, uint8_t code_dma_nak,
     }
     if (!drv_24lc256_write_complete()) {
         g_system_state.eeprom_selftest =
-            (drv_24lc256_last_write_fail() == 2U) ? code_poll_to : code_dma_nak;
+            (drv_24lc256_last_write_fail() == LC256_WRITE_POLL_TO) ? code_poll_to
+                                                                  : code_dma_nak;
         return false;
     }
 

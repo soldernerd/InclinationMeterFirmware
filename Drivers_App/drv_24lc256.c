@@ -30,7 +30,7 @@ static volatile bool        s_dma_done        = false;
 static volatile bool        s_dma_success     = false;
 static volatile bool        s_read_complete   = false;
 static volatile bool        s_write_success   = false;
-static volatile uint8_t     s_last_write_fail = 0U;   /* see drv_24lc256_last_write_fail() */
+static volatile Lc256WriteFail s_last_write_fail = LC256_WRITE_OK;
 static uint8_t              *s_read_buf       = 0;
 static uint16_t              s_read_len       = 0;
 static uint32_t              s_wr_cycle_start_ms = 0;
@@ -99,7 +99,7 @@ DrvStatus drv_24lc256_start_write_page(uint16_t addr,
     s_dma_done       = false;
     s_dma_success    = false;
     s_write_success  = false;
-    s_last_write_fail = 0U;
+    s_last_write_fail = LC256_WRITE_OK;
     s_op             = OP_DMA_WRITE;
     hal_i2c_write_dma(HAL_I2C_MAIN, EEPROM_I2C_ADDR, s_tx_buf, (uint16_t)(2U + len));
     return DRV_OK;
@@ -112,7 +112,7 @@ bool drv_24lc256_write_complete(void)
     return s_write_success;
 }
 
-uint8_t drv_24lc256_last_write_fail(void)
+Lc256WriteFail drv_24lc256_last_write_fail(void)
 {
     return s_last_write_fail;
 }
@@ -173,7 +173,7 @@ void drv_24lc256_update(void)
                     s_wr_cycle_start_ms = hal_systick_get_ms();
                 } else {
                     s_write_success   = false;
-                    s_last_write_fail = 1U;   /* DMA transfer NAK'd */
+                    s_last_write_fail = LC256_WRITE_DMA_NAK;
                     s_op              = OP_IDLE;
                 }
             }
