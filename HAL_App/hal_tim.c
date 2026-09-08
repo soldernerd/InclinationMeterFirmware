@@ -178,8 +178,8 @@ void hal_tim_adc_trigger_start(void)
      * fire late enough to miss a conversion — the acquisition-integrity
      * check catches it as a slow slip. Promote TIM7 to 0 so it at least
      * tail-chains with the others instead of queueing behind them; the
-     * handler is lean (~1-2 us). Overridden here, in code we own, rather
-     * than editing the CubeMX MspInit. */
+     * handler is lean (~5-6 us at -O2, bench fw 0.9.38). Overridden here,
+     * in code we own, rather than editing the CubeMX MspInit. */
     HAL_NVIC_SetPriority(TIM7_LPTIM2_IRQn, 0, 0);
     /* config.h's ADS131M04_TRIGGER_TIMER_PERIOD (derived from
      * ADC_TRIGGER_OVERSAMPLE) is authoritative — Core/Src/tim.c still
@@ -213,6 +213,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM6) {
         HAL_GPIO_TogglePin(DISP_VCOM_PORT, DISP_VCOM_PIN);
     } else if (htim->Instance == TIM7) {
+        /* Fallback path only: TIM7_LPTIM2_IRQHandler's lean UIF check
+         * (Core/Src/stm32g0xx_it.c) normally handles the trigger and
+         * returns before HAL_TIM_IRQHandler runs, so this branch fires
+         * only if that check ever misses. Keep it identical to the fast
+         * path — hal_tim_adc_trigger_isr() — so the two can't disagree. */
         if (s_adc_trigger_cb) {
             s_adc_trigger_cb();
         }

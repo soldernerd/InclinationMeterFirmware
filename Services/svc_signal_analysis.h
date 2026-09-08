@@ -49,10 +49,10 @@ bool           svc_signal_analysis_capture_done(void);
 void           svc_signal_analysis_capture_end(void);
 const uint8_t *svc_signal_analysis_capture_buffer(void);   /* count * ADC_BULK_BYTES_PER_SAMPLE bytes: per sample, ch0..ch3 as 3-byte LE signed */
 uint16_t       svc_signal_analysis_capture_sample_count(void);
-uint16_t       svc_signal_analysis_capture_drops(void);    /* trigger ticks skipped (DRDY not ready) during the fill */
+uint16_t       svc_signal_analysis_capture_drops(void);    /* acquisition ring overflows during the fill (drain fell a ring behind) */
 
 /* Stats of the most recently finished capture, kept past capture_end():
- * samples actually stored, trigger drops, and wall-clock fill time.
+ * samples actually stored, ring-overflow drops, and wall-clock fill time.
  * Effective sample rate = samples * 1000 / elapsed_ms. Any arg may be
  * NULL. All zero until the first capture completes. */
 void svc_signal_analysis_last_capture(uint16_t *samples, uint16_t *drops,

@@ -488,7 +488,7 @@ static void bulk_pump(void)
         s_bulk.phase    = BULK_SENDING;
         s_bulk.send_pos = 0;
         s_bulk.page     = 0;
-        svc_logf(API2_LOG_INFO, "bulk: capture full, %u trigger drops", (unsigned)drops);
+        svc_logf(API2_LOG_INFO, "bulk: capture full, %u ring overflows", (unsigned)drops);
     }
 
     const uint8_t *buf   = svc_signal_analysis_capture_buffer();   /* total * BPS bytes */

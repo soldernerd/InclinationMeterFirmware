@@ -224,6 +224,7 @@ def decode_adc_diag(data: bytes):
         "regs_read_ok": bool(rd_ok), "ads_ok": bool(ads_ok),
         "OSR_field": osr_field, "OSR": osr,
         "fDATA_nominal_Hz": fdata_nominal,
+        # "drops" == acquisition ring overflows during the capture fill
         "last_capture": {"samples": samp, "drops": drops, "elapsed_ms": elapsed,
                          "effective_Hz": eff},
     }

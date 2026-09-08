@@ -74,8 +74,9 @@ DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t l
     }
     if (instance == HAL_SPI_ADC) {
         /* Blocking TX — only drv_ads131m04.c's one-time register writes
-         * at init. Streaming reads use hal_spi_transmit_receive_dma().
-         * MISO is still clocked; the caller just doesn't capture it. */
+         * at init. Streaming reads use the raw hal_spi_adc_stream_*
+         * DMA path below. MISO is still clocked; the caller just doesn't
+         * capture it. */
         s_busy[HAL_SPI_ADC] = true;
         HAL_StatusTypeDef rc = HAL_SPI_Transmit(&hspi1, (uint8_t *)data, len, HAL_MAX_DELAY);
         s_busy[HAL_SPI_ADC] = false;
@@ -157,24 +158,6 @@ DrvStatus hal_spi_transmit_receive(HalSpiInstance instance,
     return (rc == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
 }
 
-DrvStatus hal_spi_transmit_receive_dma(HalSpiInstance instance,
-                                       const uint8_t *tx_data, uint8_t *rx_data,
-                                       uint16_t len)
-{
-    if (instance != HAL_SPI_ADC || tx_data == 0 || rx_data == 0 || len == 0) {
-        return DRV_ERR_INVALID;
-    }
-    if (s_busy[HAL_SPI_ADC]) {
-        return DRV_ERR_NOT_READY;
-    }
-    s_busy[HAL_SPI_ADC] = true;
-    if (HAL_SPI_TransmitReceive_DMA(&hspi1, (uint8_t *)tx_data, rx_data, len) != HAL_OK) {
-        s_busy[HAL_SPI_ADC] = false;
-        return DRV_ERR_COMM;
-    }
-    return DRV_OK;
-}
-
 void hal_spi_write_dma(HalSpiInstance instance, const uint8_t *data, uint16_t len)
 {
     if (instance != HAL_SPI_DISPLAY || data == 0 || len == 0) {
@@ -250,29 +233,15 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi)
     }
 }
 
-/* HAL weak override — fires when a full-duplex DMA transfer completes
- * (HAL_SPI_TransmitReceive_DMA — ADC only, a distinct weak function). */
-void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
-{
-    if (hspi->Instance == SPI1) {
-        s_busy[HAL_SPI_ADC] = false;
-        if (s_cb[HAL_SPI_ADC]) {
-            s_cb[HAL_SPI_ADC](HAL_SPI_ADC, true);
-        }
-    }
-}
-
+/* HAL weak override — SPI2/display only. SPI1/ADC runs the raw
+ * hal_spi_adc_stream_* DMA path (interrupts off, polled via
+ * hal_spi_adc_stream_done()), so no HAL SPI1 completion callback fires. */
 void HAL_SPI_ErrorCallback(SPI_HandleTypeDef *hspi)
 {
     if (hspi->Instance == SPI2) {
         s_busy[HAL_SPI_DISPLAY] = false;
         if (s_cb[HAL_SPI_DISPLAY]) {
             s_cb[HAL_SPI_DISPLAY](HAL_SPI_DISPLAY, false);
-        }
-    } else if (hspi->Instance == SPI1) {
-        s_busy[HAL_SPI_ADC] = false;
-        if (s_cb[HAL_SPI_ADC]) {
-            s_cb[HAL_SPI_ADC](HAL_SPI_ADC, false);
         }
     }
 }

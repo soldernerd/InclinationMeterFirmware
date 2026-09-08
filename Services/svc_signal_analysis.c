@@ -20,10 +20,10 @@
  *
  * Split into two phases, same "no heavy work in interrupt context" reasoning
  * Services/svc_usb.c's rx_handler() follows:
- *   - on_sample(), called directly from drv_ads131m04's DMA-completion
- *     interrupt context once per ADC sample (20833.33 Hz) -- pure integer
- *     multiply-accumulate against a fixed Q14 cos/sin table, cheap enough to
- *     run at that rate in an ISR.
+ *   - on_sample(), called from drv_ads131m04's SysTick frame-ring drain
+ *     (docs/adc_acquisition_redesign.md) once per ADC sample (20833.33 Hz
+ *     aggregate, batched ~1 kHz) -- pure integer multiply-accumulate
+ *     against a fixed Q14 cos/sin table, cheap enough to run there.
  *   - svc_signal_analysis_update(), called from App/app_scheduler.c in
  *     normal task context -- does the float sqrt/atan2 finalization once
  *     per completed batch (~40 Hz), never in interrupt context.
@@ -98,7 +98,9 @@ static volatile uint32_t s_cap_t1     = 0;   /* tick when the buffer filled */
 
 /* Stats of the most recently completed capture — held past capture_end()
  * so a host diagnostic can read them back (effective sample rate =
- * samples / elapsed_ms). */
+ * samples / elapsed_ms). s_last_drops is the acquisition ring-overflow
+ * count (drain fell a whole ring behind) accumulated during the fill —
+ * the only lost-sample mechanism a full-rate capture has. */
 static uint16_t s_last_samples    = 0;
 static uint16_t s_last_drops      = 0;
 static uint32_t s_last_elapsed_ms = 0;
@@ -125,8 +127,8 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
         return;
     }
 
-    /* Runs in the PendSV drain (lowest NVIC priority), batched ~1.3 kHz,
-     * ~20833 Hz aggregate — no longer the TIM7 ISR itself (see
+    /* Runs in the SysTick frame-ring drain (lowest NVIC priority),
+     * batched ~1 kHz, ~20833 Hz aggregate — not the TIM7 ISR itself (see
      * docs/adc_acquisition_redesign.md). Still keep it cheap. Pre-shifted
      * samples keep the products in int32 so this is a 32x32->32 multiply
      * plus a 64-bit add, not a 32x32->64 multiply. */
@@ -269,7 +271,7 @@ void svc_signal_analysis_capture_end(void)
     if (s_cap_active) {
         uint32_t t1 = s_cap_t1 ? s_cap_t1 : hal_systick_get_ms();
         s_last_samples    = s_cap_idx;
-        s_last_drops      = drv_ads131m04_get_dropped_count();
+        s_last_drops      = (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
         s_last_elapsed_ms = t1 - s_cap_t0;
     }
     s_cap_active = false;
@@ -296,7 +298,7 @@ uint16_t svc_signal_analysis_capture_sample_count(void)
 
 uint16_t svc_signal_analysis_capture_drops(void)
 {
-    return drv_ads131m04_get_dropped_count();
+    return (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
 }
 
 void svc_signal_analysis_update(void)

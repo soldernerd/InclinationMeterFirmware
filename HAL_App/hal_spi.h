@@ -31,20 +31,11 @@ DrvStatus hal_spi_write(HalSpiInstance instance, const uint8_t *data, uint16_t l
 void hal_spi_write_dma(HalSpiInstance instance, const uint8_t *data, uint16_t len);
 
 /* Blocking full-duplex transfer — HAL_SPI_ADC only, init/diagnostic use
- * (register read-back). Same data as hal_spi_transmit_receive_dma() but
- * synchronous; do not call once the streaming trigger is armed. */
+ * (register read-back). Synchronous; do not call once the streaming
+ * trigger is armed (the raw hal_spi_adc_stream_* path owns SPI1 then). */
 DrvStatus hal_spi_transmit_receive(HalSpiInstance instance,
                                    const uint8_t *tx_data, uint8_t *rx_data,
                                    uint16_t len);
-
-/* Full-duplex DMA transfer — HAL_SPI_ADC only. tx_data/rx_data must each
- * be >= len bytes and stay valid until the registered HalSpiDmaCallback
- * fires. Unlike hal_spi_write_dma() (transmit-only), this both sends and
- * captures the response — the ADS131M04 always shifts the previous
- * frame's response out on DOUT while a new frame is clocked in on DIN. */
-DrvStatus hal_spi_transmit_receive_dma(HalSpiInstance instance,
-                                       const uint8_t *tx_data, uint8_t *rx_data,
-                                       uint16_t len);
 
 void hal_spi_register_dma_callback(HalSpiInstance instance, HalSpiDmaCallback cb);
 void hal_spi_cs_assert(HalSpiInstance instance);

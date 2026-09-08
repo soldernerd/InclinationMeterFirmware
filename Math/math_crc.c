@@ -1,7 +1,14 @@
 #include "math_crc.h"
 
 /* CRC16-CCITT (polynomial 0x1021, initial value 0xFFFF, no reflection,
- * no final XOR). Table-driven for speed; table built once at first use. */
+ * no final XOR). Table-driven for speed; table built once at first use.
+ *
+ * The lazy first-use build is NOT interrupt-safe: if the first call ever
+ * came from an ISR, a concurrent task-context call could race the
+ * half-built table. Any caller that runs from an ISR (e.g. the
+ * ADS131M04 SysTick frame drain) MUST force the build from task context
+ * first — drv_ads131m04_init() does `(void)math_crc16(0, 0)` for exactly
+ * this. Keep that guarantee if a new ISR-side CRC user is added. */
 
 #define CRC_POLY     0x1021U
 #define CRC_INIT     0xFFFFU

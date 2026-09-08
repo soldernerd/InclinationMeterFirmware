@@ -55,9 +55,13 @@
 #define WORD_BYTES   3U
 
 static Ads131m04SampleCb s_on_sample = 0;
-static uint16_t          s_dropped_count = 0;
-static bool              s_running = false;
-static bool              s_xfer_active = false;
+/* s_running: written in task context (start/stop/init), read in the TIM7
+ * ISR and the SysTick drain. s_xfer_active: written in the TIM7 ISR, also
+ * read by drv_ads131m04_stop()'s bounded spin-wait in task context. Both
+ * volatile so the compiler can't hoist those cross-context reads (this
+ * file is built -O2 in every config — CMakeLists.txt). */
+static volatile bool     s_running = false;
+static volatile bool     s_xfer_active = false;
 static Ads131m04Regs     s_regs;
 
 static const uint8_t s_tx_zero[FRAME_BYTES] = { 0 };   /* NULL command, no CRC */
@@ -82,7 +86,14 @@ static bool               s_settled;
 static uint16_t           s_deficit_hold;  /* ms the frame deficit has been past the limit */
 
 /* Latch an integrity fault (first one wins). Called from on_trigger (TIM7
- * ISR) and drain_ring (SysTick) — a plain byte store is atomic on M0+. */
+ * ISR, priority 0) and drain_ring (SysTick, lowest) — a plain byte store
+ * is atomic on M0+, so fault_code never tears. The check-then-set is a
+ * cross-ISR read-modify-write, though: TIM7 can preempt drain_ring
+ * between its check and its store, so in the rare window where both
+ * contexts fault in the same instant the *cause* reported may be the
+ * second one, not the first. Acceptable — any fault stops acquisition
+ * and gets logged; which of two simultaneous causes wins doesn't change
+ * the response. */
 static void integ_fault(Ads131m04Fault code)
 {
     if (s_integ.fault_code == ADS_FAULT_NONE) {
@@ -259,6 +270,14 @@ void drv_ads131m04_drain_tick(void)
      * or duplicated conversion is a permanent +/-1 step; measured noise is
      * a few frames. Latch if it sits past the limit for
      * ADC_FRAME_DEFICIT_HOLD_MS (a transient SysTick stall recovers). */
+    /* Once a fault has latched the producer is stopped; keeping the
+     * deficit maths running just inflates frame_deficit into a large
+     * meaningless number in the diagnostic (integ_fault() below is
+     * already a no-op). Freeze the readout where the fault left it. */
+    if (s_integ.fault_code != ADS_FAULT_NONE) {
+        return;
+    }
+
     uint32_t run_ms = hal_systick_get_ms() - s_start_ms;
     s_integ.run_ms = run_ms;
     if (run_ms < ADC_SLIP_SETTLE_MS) {
@@ -359,7 +378,6 @@ bool drv_ads131m04_faulted(void)
 DrvStatus drv_ads131m04_init(void)
 {
     s_on_sample     = 0;
-    s_dropped_count = 0;
     s_running       = false;
     s_xfer_active   = false;
 
@@ -428,7 +446,6 @@ DrvStatus drv_ads131m04_start(void)
     if (s_running) {
         return DRV_OK;
     }
-    s_dropped_count = 0;
     s_xfer_active   = false;
     ring_reset();
     s_start_ms = hal_systick_get_ms();
@@ -470,11 +487,6 @@ bool drv_ads131m04_is_running(void)
 void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb)
 {
     s_on_sample = cb;
-}
-
-uint16_t drv_ads131m04_get_dropped_count(void)
-{
-    return s_dropped_count;
 }
 
 const Ads131m04Integrity *drv_ads131m04_get_integrity(void)

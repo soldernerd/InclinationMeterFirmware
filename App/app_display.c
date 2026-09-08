@@ -408,6 +408,7 @@ void app_display_init(void)
     u8g2_SetPowerSave(&s_u8g2, 0);
     g_ui_state.redraw_needed = true;
     s_have_last = false;
+    s_phase     = DISP_IDLE;
 }
 
 /* Full-screen compositor. In page mode this runs once per band (15x per
@@ -465,7 +466,13 @@ void app_display_update(void)
         draw_active_screen();
         if (u8g2_NextPage(&s_u8g2) == 0) {
             /* Final band written into drv_sharp_lcd's framebuffer — one
-             * DMA blit pushes the whole image to the panel atomically. */
+             * DMA blit pushes the whole image to the panel atomically.
+             * Return ignored deliberately: the only failure is
+             * DRV_ERR_NOT_READY (a blit already in flight), and the
+             * drv_sharp_lcd_is_busy() guard at the top of this function —
+             * plus the fact that nothing else issues a flush — means that
+             * can't happen here. A dropped frame would self-heal on the
+             * next snapshot_changed() pass regardless. */
             (void)drv_sharp_lcd_flush_full();
             s_phase = DISP_IDLE;
             return;

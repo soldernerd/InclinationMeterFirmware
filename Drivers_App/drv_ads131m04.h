@@ -67,7 +67,8 @@ typedef struct {
     uint32_t framing_err;       /* frames with an unexpected word 0 */
     uint32_t crc_err;           /* frames whose computed CRC != the sent CRC word */
     uint32_t run_ms;            /* elapsed ms since start() (SysTick) */
-    int32_t  frame_deficit;     /* expected_frames(now) - frames_produced */
+    int32_t  frame_deficit;     /* (expected - actual) frames since the post-settle
+                                 * reference point — see drv_ads131m04_drain_tick() */
     int32_t  frame_deficit_min; /* observed range of frame_deficit */
     int32_t  frame_deficit_max;
     uint16_t drain_clamp_max;   /* largest head-tail gap seen */
@@ -83,14 +84,6 @@ const Ads131m04Integrity *drv_ads131m04_get_integrity(void);
  * != 0). The pipeline has stopped arming reads; a full stop()/start()
  * cycle clears it. */
 bool drv_ads131m04_faulted(void);
-
-/* Saturating count of trigger ticks where DRDY was not yet low (sample
- * skipped rather than read) — CLAUDE.md 7.6 escalation for a case that
- * should not occur in practice given the deterministic clock
- * relationship, but is not otherwise flagged anywhere (see
- * pin_config.h's ADC_READY_PIN comment for why this is polled rather
- * than interrupt-driven). */
-uint16_t drv_ads131m04_get_dropped_count(void);
 
 /* --- register read-back diagnostics ---
  * Snapshot of the ADS131M04's config registers, read back over SPI at
