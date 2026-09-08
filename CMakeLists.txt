@@ -98,17 +98,41 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 set_source_files_properties(${APP_SOURCES} "${CMAKE_SOURCE_DIR}/system_state.c"
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")
 
-# ADS131M04 acquisition hot path: the per-sample sign-extend + single-bin
-# DFT MAC runs ~20833x/s from the SysTick drain. At the Debug default -O0
-# the int64 MAC is heavy enough to starve the cooperative scheduler
-# (~600 ms thread-mode stalls, see docs/adc_acquisition_redesign.md).
-# Force -O2 on just these two files in every config; the rest of the
-# firmware stays at the build type's optimisation for debuggability.
-# (Overrides the COMPILE_OPTIONS set just above for these files, so the
-# warning flags are repeated here.)
+# ADS131M04 acquisition hot path. The TIM7 trigger ISR (on_trigger) runs
+# ~41667x/s and the SysTick drain (sign-extend + CRC + single-bin DFT MAC)
+# ~1000x/s over ~21 frames. At the Debug default -O0 this pair is heavy
+# enough to starve the cooperative scheduler (a display render balloons
+# ~7x; see docs/adc_acquisition_redesign.md). Force -O2 on the whole hot
+# path — the acquisition driver, the DFT, the per-frame CRC, and the
+# low-level SPI-DMA / GPIO register pokes it calls — in every config;
+# the rest of the firmware stays at the build type's -O for debuggability.
+# (Overrides the COMPILE_OPTIONS set just above, so the warning flags are
+# repeated here. Math/HAL_App files aren't in ${APP_SOURCES}'s warning set
+# but -Werror-clean anyway.)
 set_source_files_properties(
     "${CMAKE_SOURCE_DIR}/Services/svc_signal_analysis.c"
     "${CMAKE_SOURCE_DIR}/Drivers_App/drv_ads131m04.c"
+    "${CMAKE_SOURCE_DIR}/Math/math_crc.c"
+    "${CMAKE_SOURCE_DIR}/HAL_App/hal_spi.c"
+    "${CMAKE_SOURCE_DIR}/HAL_App/hal_gpio.c"
+    PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-O2")
+
+# Display render path. task_display does a full 400x240 u8g2 render + frame
+# parse in one blocking call; at -O0 that's ~120 ms, and it fires ~1/s
+# (a 1 Hz value on screen changes), stalling the cooperative scheduler /
+# API for that long. -O2 the graphics path (u8g2, the byte sink, the
+# panel driver, the compositor) so the render is ~25 ms instead.
+set_source_files_properties(
+    ${U8G2_SOURCES}
+    "${CMAKE_SOURCE_DIR}/App/app_display.c"
+    "${CMAKE_SOURCE_DIR}/App/u8g2_hal_callback.c"
+    "${CMAKE_SOURCE_DIR}/Drivers_App/drv_sharp_lcd.c"
+    PROPERTIES COMPILE_OPTIONS "-O2")
+# keep the project warning flags on our own files in that set
+set_source_files_properties(
+    "${CMAKE_SOURCE_DIR}/App/app_display.c"
+    "${CMAKE_SOURCE_DIR}/App/u8g2_hal_callback.c"
+    "${CMAKE_SOURCE_DIR}/Drivers_App/drv_sharp_lcd.c"
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-O2")
 
 # Remove wrong libob.a library dependency when using cpp files

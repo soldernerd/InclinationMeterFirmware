@@ -107,13 +107,34 @@ capture 6144 samples, 0 gaps; tone 2604.1 Hz, 77–78 dB SNR on ch1/ch2;
 ch0/ch3 at the noise floor. Observed: `word0` (STATUS response word) is a
 constant `0x010F` every frame — its DRDY bits do **not** toggle
 fresh/stale, so Phase 2's conversion-count check can't lean on them; the
-CRC word does vary per frame (candidate for the CRC check). API
-round-trip latency while running has an occasional ~245 ms bump (~1/s);
-this is **pre-existing** — master shows the same at ~450 ms — and PC
-sampling during it shows the cooperative loop spinning normally, no
-single hog, so it reads as scheduler-jitter / host-serial interaction
-under the added ISR load rather than a hard stall. Left for a separate
-look; not a regression from this work.
+CRC word does vary per frame (candidate for the CRC check).
+
+### API-stall root cause — RESOLVED (fw 0.9.38)
+
+The API "stall" seen while acquisition runs was `task_display`: the
+cooperative scheduler is single-threaded, and one `task_display` call
+does a full 400x240 u8g2 render + frame-buffer parse. At the Debug `-O0`
+default that render is ~120 ms; the acquisition ISR load (`on_trigger` +
+the SysTick drain, themselves partly `-O0`) inflated it **~7x to ~875 ms**,
+and it fires ~1/s (a 1 Hz value on screen changes) — so `task_api` was
+blocked ~875 ms every second. `usb_irq` counting during the stall showed
+only the normal ~1000/s SOF rate: not a USB storm (the `usb: host
+disconnected` that sometimes followed was a *symptom* — 875 ms of missed
+USB servicing).
+
+Fix: `-O2` on the acquisition hot path (`hal_spi.c`, `hal_gpio.c`,
+`math_crc.c` added to `drv_ads131m04.c` / `svc_signal_analysis.c`) **and**
+the display render path (the `u8g2` sources, `app_display.c`,
+`u8g2_hal_callback.c`, `drv_sharp_lcd.c`) — all in `CMakeLists.txt`, every
+config. Results: `on_trigger` 10.8 -> 5.6 us; worst SysTick drain
+998 -> 415 us (0 drains >= 1 ms); `task_display` 875 -> 108 ms and it now
+fires only on a real content change, not every second. **API round-trip
+latency during signal analysis: median 58 ms (= idle), p99 122 ms,
+max 123 ms** over 615 round-trips. Flash *shrank* 8 KB (u8g2 at `-O2`).
+
+Residual: an occasional ~950 ms latency spike appears at **idle too**
+(in fact worse than during acquisition), ~0.1/s — host-side (the poisoned
+dev-PC USB stack, see memory `wp4-usb-working`), not firmware.
 
 **Phase 2 — integrity gate. DONE (fw 0.9.23, bench-verified).**
 
