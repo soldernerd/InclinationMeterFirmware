@@ -52,3 +52,9 @@ WP*_prompt.md
 
 # bulk-capture output
 PythonTestCode/*.csv
+
+# host unit-test binaries (tests/Makefile builds these; sources are tracked)
+tests/test_math_crc
+tests/test_txframe
+tests/test_transfer
+tests/*.exe

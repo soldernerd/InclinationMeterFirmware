@@ -36,7 +36,7 @@ DrvStatus drv_lm35_get_result(lm35_data_t *out)
     }
 
     uint32_t v_mv = hal_adc_raw_to_mv(r.temp_ext_raw, r.vrefint_raw);
-    int32_t  temp_cdeg = (int32_t)v_mv * 100 / (int32_t)g_device_settings.lm35_scale_mv_per_c;
+    int32_t  temp_cdeg = drv_lm35_mv_to_cdeg(v_mv, g_device_settings.lm35_scale_mv_per_c);
 
     /* LM35 datasheet range: -55°C to +150°C (-5500 to 15000 centidegrees)
      * -- reject anything outside a margin of that as a fault (disconnected

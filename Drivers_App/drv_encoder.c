@@ -22,18 +22,8 @@ typedef struct {
 
 static EncoderCtx s_enc[2];
 
-/* Indexed by (old_state << 2) | new_state, each 2-bit state = (A<<1)|B.
- * +1 / -1 on the 8 valid single-step Gray-code transitions, 0 on a
- * repeated or torn (invalid double-step) transition. Sign convention
- * (CW = +1) is a naming choice, not yet confirmed against real hardware
- * rotation direction — swap the table's signs if bring-up shows it spins
- * backwards. */
-static const int8_t QDEC_TABLE[16] = {
-     0, -1,  1,  0,
-     1,  0,  0, -1,
-    -1,  0,  0,  1,
-     0,  1, -1,  0,
-};
+/* The Gray-code transition table is drv_encoder_quad_step() in the header
+ * (pure — see tests/test_transfer.c). */
 
 static uint8_t read_ab_state(const EncoderCtx *e)
 {
@@ -46,8 +36,7 @@ static void encoder_update(EncoderInstance instance)
 {
     EncoderCtx *e = &s_enc[instance];
     uint8_t new_state = read_ab_state(e);
-    uint8_t idx = (uint8_t)((e->ab_state << 2) | new_state);
-    e->count += QDEC_TABLE[idx];
+    e->count += drv_encoder_quad_step(e->ab_state, new_state);
     e->ab_state = new_state;
 }
 

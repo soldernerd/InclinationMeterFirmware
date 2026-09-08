@@ -15,6 +15,15 @@ typedef struct {
     DrvStatus status;
 } lm35_data_t;
 
+/* Transfer function (pure, testable — tests/test_transfer.c). LM35:
+ * 10 mV/°C, 0 mV at 0 °C. scale_mv_per_c is EEPROM-backed (nominal 10,
+ * g_device_settings.lm35_scale_mv_per_c, config.h DEFAULT_LM35_SCALE_MV_PER_C,
+ * zero-guarded in svc_storage.c). */
+static inline int32_t drv_lm35_mv_to_cdeg(uint32_t v_mv, uint16_t scale_mv_per_c)
+{
+    return (int32_t)v_mv * 100 / (int32_t)scale_mv_per_c;
+}
+
 void      drv_lm35_init(void);
 DrvStatus drv_lm35_get_result(lm35_data_t *out);    /* DRV_ERR_NOT_READY until the
                                                        * ADC has produced valid data */
