@@ -4,7 +4,6 @@
 #include "hal_tim.h"
 #include "hal_systick.h"
 #include "pin_config.h"
-#include "system_state.h"
 #include <string.h>
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
@@ -46,6 +45,13 @@
 static uint8_t s_tx_buf[TX_BUFFER_SIZE];
 
 static volatile bool s_busy = false;
+
+/* Panel health, private to this driver (thread context only — no ISR
+ * touches it, unlike s_busy). false once a flush drained-timeout forced a
+ * peripheral re-init; self-heals on the next clean flush. The App layer
+ * mirrors this into g_system_state.display_ok via drv_sharp_lcd_ok() —
+ * the driver does not reach up into system state itself. */
+static bool s_ok = true;
 
 /* True once the DMA has fed the whole frame into the SPI FIFO and we're
  * waiting for the shift register to actually drain + a CS hold margin
@@ -131,9 +137,9 @@ void drv_sharp_lcd_update(void)
          * flush has a real chance of working, and surface the fault
          * rather than silently going dark forever. */
         hal_spi_reinit(HAL_SPI_DISPLAY);
-        g_system_state.display_ok = false;
+        s_ok = false;
     } else {
-        g_system_state.display_ok = true;   /* self-heals once a flush drains cleanly */
+        s_ok = true;   /* self-heals once a flush drains cleanly */
     }
     /* Either genuinely drained, or we gave up rather than wedge the
      * display forever (same policy as drv_24lc256.c's write-cycle poll).
@@ -165,7 +171,7 @@ void drv_sharp_lcd_init(void)
 
     hal_spi_init(HAL_SPI_DISPLAY);
     hal_spi_register_dma_callback(HAL_SPI_DISPLAY, on_dma_complete);
-    g_system_state.display_ok = true;
+    s_ok = true;
 
     /* PD3 VCOM square wave (5 Hz, within the datasheet's 1-10 Hz window) —
      * no hardware PWM channel on REV B, toggled manually in the TIM6
@@ -204,4 +210,9 @@ DrvStatus drv_sharp_lcd_flush_full(void)
 bool drv_sharp_lcd_is_busy(void)
 {
     return s_busy;
+}
+
+bool drv_sharp_lcd_ok(void)
+{
+    return s_ok;
 }

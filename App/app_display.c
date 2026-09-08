@@ -364,6 +364,7 @@ static void snapshot_capture(void)
 void app_display_init(void)
 {
     drv_sharp_lcd_init();
+    g_system_state.display_ok = drv_sharp_lcd_ok();   /* App owns the flag; kept live in task_display */
     u8g2_hal_init(&s_u8g2);
     u8g2_InitDisplay(&s_u8g2);
     u8g2_SetPowerSave(&s_u8g2, 0);

@@ -138,6 +138,9 @@ static void task_display(void)
     /* Finish releasing CS on any flush whose DMA phase already completed,
      * before deciding whether to kick off a new one this tick. */
     drv_sharp_lcd_update();
+    /* App layer owns the system-state health flag; the driver only tracks
+     * its own s_ok (see drv_sharp_lcd_ok()). */
+    g_system_state.display_ok = drv_sharp_lcd_ok();
     app_display_update();
 }
 

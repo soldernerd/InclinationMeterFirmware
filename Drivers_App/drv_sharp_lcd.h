@@ -14,6 +14,11 @@ void      drv_sharp_lcd_write_row(uint16_t row, const uint8_t *src);
 DrvStatus drv_sharp_lcd_flush_full(void);
 bool      drv_sharp_lcd_is_busy(void);
 
+/* Panel health: false after a flush drain-timeout forced an SPI2 re-init;
+ * self-heals on the next clean flush. The App layer mirrors this into
+ * g_system_state.display_ok — the driver does not touch system state. */
+bool      drv_sharp_lcd_ok(void);
+
 /* Pumps the post-DMA CS-release state machine — must be called regularly
  * from normal (non-ISR) context, e.g. once per scheduler tick. Finishing
  * a flush (draining the SPI shift register, holding CS, deasserting it)
