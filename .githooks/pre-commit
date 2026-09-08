@@ -1,0 +1,27 @@
+#!/bin/sh
+# Regen-diff guard (CLAUDE.md §9.2 / memory cubemx-regen-hazards).
+#
+# Warns — loudly, not blocking — when a commit touches CubeMX-generated
+# files. Normal commits should never touch these; a regen commit should,
+# and this is the reminder to actually review the diff (past regens have
+# silently reverted hand-tuned boot sequence, GPIO defaults, the HID
+# descriptor, and CMake include dirs).
+#
+# One-time enable:  git config core.hooksPath .githooks
+
+gen=$(git diff --cached --name-only --diff-filter=ACMR -- \
+        'Core/' \
+        'Drivers/STM32G0xx_HAL_Driver/' \
+        'Drivers/CMSIS/' \
+        'USB_Device/' \
+        'Middlewares/')
+
+if [ -n "$gen" ]; then
+    printf '\n\033[33m=== CubeMX-generated files in this commit ===\033[0m\n'
+    printf '%s\n' "$gen" | sed 's/^/  /'
+    printf '\033[33mIf this is NOT a deliberate regen: your USER CODE edits may be about to be\n'
+    printf 'lost, or generated code is being hand-edited. Review the diff before pushing.\n'
+    printf 'If it IS a regen: confirm every USER CODE block survived (CLAUDE.md §9.2).\033[0m\n\n'
+fi
+
+exit 0

@@ -9,7 +9,6 @@
 #include "svc_log.h"
 #include "hal_rtc.h"
 #include "hal_power.h"
-#include "app_scheduler.h"
 #include "drv_buzzer.h"
 #include "math_crc.h"
 #include "hal_systick.h"
@@ -111,6 +110,11 @@ typedef struct {
 } ApiTransportState;
 
 static ApiTransportState s_t[API_TRANSPORT_COUNT];
+
+/* Set by svc_api_register_settings_changed(); called after a persisted
+ * Settings SET so the App layer can re-apply derived state. NULL until
+ * registered — a SET still succeeds, just nothing downstream re-applies. */
+static ApiSettingsChangedFn s_settings_changed_fn = 0;
 
 /* ---------------- bulk transfer state (docs/api-v2-spec.md §4.5) ----------------
  * One at a time, device-wide. CAPTURING while the RAM buffer fills at the
@@ -295,7 +299,117 @@ static void dispatch_system_status(ApiTransport t, uint16_t opcode, uint8_t verb
     }
 }
 
-/* ---------------- Commands (0x1, EXECUTE only) ---------------- */
+/* ---------------- Commands (0x1, EXECUTE only) ----------------
+ * Table-driven: one row per command, dispatch_commands() does the verb /
+ * unknown-resource / CRC / payload-length checks once, then calls the
+ * handler with the payload slice. Adding a command is a row + a handler,
+ * no if-ladder to extend and no "res != X && res != Y && ..." guard to
+ * remember. (This is the shape the not-yet-built Calibrations category
+ * 0x2 should copy — see dispatch()'s default case.) */
+
+#define CMD_LEN_ANY  0xFFFFU   /* handler validates its own payload length */
+
+typedef void (*CommandHandler)(ApiTransport t, uint16_t opcode,
+                               const uint8_t *pl, uint16_t paylen);
+
+typedef struct {
+    uint8_t        resource;
+    uint16_t       exact_len;   /* required payload length, or CMD_LEN_ANY */
+    CommandHandler handler;
+} CommandDesc;
+
+static void cmd_test_beep(ApiTransport t, uint16_t opcode,
+                          const uint8_t *pl, uint16_t paylen)
+{
+    (void)pl; (void)paylen;
+    drv_buzzer_beep(BUZZER_TONE_CLICK, 100U);
+    svc_log(API2_LOG_INFO, "cmd: test beep");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+static void cmd_signal_analysis(ApiTransport t, uint16_t opcode,
+                                const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    uint8_t on = pl[0];
+    if (on > 1U) {
+        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+        return;
+    }
+    if (on) {
+        /* Return dropped deliberately: svc_signal_analysis_start() is
+         * idempotent (no-op if already running) and its only failure mode
+         * is the ADS131M04 not having init'd at boot, already reported via
+         * g_system_state.ads_ok. The OK below acks the command, not that
+         * acquisition is healthy — the host polls Raw data 0x00 for that. */
+        (void)svc_signal_analysis_start();
+    } else {
+        svc_signal_analysis_stop();
+    }
+    svc_logf(API2_LOG_INFO, "cmd: signal analysis %s", on ? "start" : "stop");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+static void cmd_force_charge(ApiTransport t, uint16_t opcode,
+                             const uint8_t *pl, uint16_t paylen)
+{
+    (void)pl; (void)paylen;
+    svc_battery_force_charge();
+    svc_log(API2_LOG_INFO, "cmd: force charge");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+static void cmd_power_test(ApiTransport t, uint16_t opcode,
+                           const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    uint32_t mask = (uint32_t)pl[0] | ((uint32_t)pl[1] << 8)
+                  | ((uint32_t)pl[2] << 16) | ((uint32_t)pl[3] << 24);
+    svc_powertest_apply(mask);
+    uint32_t applied = svc_powertest_mask();
+    uint8_t rsp[4] = { (uint8_t)applied, (uint8_t)(applied >> 8),
+                       (uint8_t)(applied >> 16), (uint8_t)(applied >> 24) };
+    send_response(t, opcode, API2_STATUS_OK, rsp, sizeof rsp);
+}
+
+static void cmd_pin_test(ApiTransport t, uint16_t opcode,
+                         const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    uint8_t p = pl[0];
+    if (p & 0x80U) {
+        svc_log(API2_LOG_WARN, "pintest: reboot");
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        for (volatile uint32_t i = 0; i < 400000U; ++i) { }   /* let the frame drain */
+        hal_power_reset();
+    }
+    hal_pintest_apply(p & 0x3FU, (p & 0x40U) != 0U);
+    svc_logf(API2_LOG_WARN, "pintest: pat 0x%02X%s", p & 0x3FU,
+             (p & 0x40U) ? " (DISP_ON allowed)" : "");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+static void cmd_reboot_dfu(ApiTransport t, uint16_t opcode,
+                           const uint8_t *pl, uint16_t paylen)
+{
+    (void)pl; (void)paylen;
+    svc_log(API2_LOG_WARN, "cmd: reboot to DFU (nBOOT0=0; reflash with nBOOT0=1 to recover)");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+    /* Let the response frame drain out of the transport before we go
+     * offline (same approach as PIN_TEST's reboot bit). */
+    for (volatile uint32_t i = 0; i < 400000U; ++i) { }
+    hal_dfu_enter_bootloader();
+}
+
+static const CommandDesc s_commands[] = {
+    { API2_RES_CMD_TEST_BEEP,       0U, cmd_test_beep       },
+    { API2_RES_CMD_SIGNAL_ANALYSIS, 1U, cmd_signal_analysis },
+    { API2_RES_CMD_FORCE_CHARGE,    0U, cmd_force_charge    },
+    { API2_RES_CMD_POWER_TEST,      4U, cmd_power_test      },
+    { API2_RES_CMD_PIN_TEST,        1U, cmd_pin_test        },
+    { API2_RES_CMD_REBOOT_DFU,      0U, cmd_reboot_dfu      },
+};
+#define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
 
 static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
                               uint8_t res, const uint8_t *frame, uint16_t paylen)
@@ -304,109 +418,20 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
         return;
     }
-    if (res != API2_RES_CMD_TEST_BEEP && res != API2_RES_CMD_SIGNAL_ANALYSIS &&
-        res != API2_RES_CMD_FORCE_CHARGE && res != API2_RES_CMD_POWER_TEST &&
-        res != API2_RES_CMD_PIN_TEST && res != API2_RES_CMD_REBOOT_DFU) {
+    const CommandDesc *cmd = 0;
+    for (size_t i = 0; i < COMMAND_COUNT; ++i) {
+        if (s_commands[i].resource == res) { cmd = &s_commands[i]; break; }
+    }
+    if (cmd == 0) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
-
-    if (res == API2_RES_CMD_REBOOT_DFU) {
-        if (paylen != 0U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        svc_log(API2_LOG_WARN, "cmd: reboot to DFU (nBOOT0=0; reflash with nBOOT0=1 to recover)");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        /* Let the response frame drain out of the transport before we go
-         * offline (same approach as PIN_TEST's reboot bit). */
-        for (volatile uint32_t i = 0; i < 400000U; ++i) { }
-        hal_dfu_enter_bootloader();
-        return;                     /* unreachable */
-    }
-
-    if (res == API2_RES_CMD_PIN_TEST) {
-        if (paylen != 1U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint8_t p = frame[API2_PACKET_HDR_BYTES];
-        if (p & 0x80U) {
-            svc_log(API2_LOG_WARN, "pintest: reboot");
-            send_response(t, opcode, API2_STATUS_OK, 0, 0);
-            for (volatile uint32_t i = 0; i < 400000U; ++i) { }   /* let the frame drain */
-            hal_power_reset();
-        }
-        hal_pintest_apply(p & 0x3FU, (p & 0x40U) != 0U);
-        svc_logf(API2_LOG_WARN, "pintest: pat 0x%02X%s", p & 0x3FU,
-                 (p & 0x40U) ? " (DISP_ON allowed)" : "");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    if (res == API2_RES_CMD_POWER_TEST) {
-        if (paylen != 4U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint32_t mask = (uint32_t)frame[API2_PACKET_HDR_BYTES + 0U]
-                      | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 1U] << 8)
-                      | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 2U] << 16)
-                      | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 3U] << 24);
-        svc_powertest_apply(mask);
-        uint32_t applied = svc_powertest_mask();
-        uint8_t rsp[4] = { (uint8_t)applied, (uint8_t)(applied >> 8),
-                           (uint8_t)(applied >> 16), (uint8_t)(applied >> 24) };
-        send_response(t, opcode, API2_STATUS_OK, rsp, sizeof rsp);
-        return;
-    }
-
-    if (res == API2_RES_CMD_FORCE_CHARGE) {
-        if (paylen != 0U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        svc_battery_force_charge();
-        svc_log(API2_LOG_INFO, "cmd: force charge");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    if (res == API2_RES_CMD_SIGNAL_ANALYSIS) {
-        if (paylen != 1U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint8_t on = frame[API2_PACKET_HDR_BYTES];
-        if (on > 1U) {
-            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-            return;
-        }
-        if (on) {
-            /* Return dropped deliberately: svc_signal_analysis_start() is
-             * idempotent (no-op if already running) and its only failure
-             * mode is the ADS131M04 not having init'd at boot, which is
-             * already reported via g_system_state.ads_ok. The OK response
-             * below acknowledges the command was accepted, not that
-             * acquisition is healthy — the host polls Raw data 0x00 for that. */
-            (void)svc_signal_analysis_start();
-        } else {
-            svc_signal_analysis_stop();
-        }
-        svc_logf(API2_LOG_INFO, "cmd: signal analysis %s", on ? "start" : "stop");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    /* API2_RES_CMD_TEST_BEEP */
-    if (paylen != 0U) {
+    if (cmd->exact_len != CMD_LEN_ANY && paylen != cmd->exact_len) {
         send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
         return;
     }
-    drv_buzzer_beep(BUZZER_TONE_CLICK, 100U);
-    svc_log(API2_LOG_INFO, "cmd: test beep");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+    cmd->handler(t, opcode, &frame[API2_PACKET_HDR_BYTES], paylen);
 }
 
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ---------------- */
@@ -1033,7 +1058,9 @@ static void dispatch_settings(ApiTransport t, uint16_t opcode, uint8_t verb,
     svc_storage_validate_settings(&g_device_settings);
     DrvStatus rc = svc_storage_save_settings(&g_device_settings);
     if (rc == DRV_OK) {
-        app_scheduler_reload_periods();
+        if (s_settings_changed_fn) {
+            s_settings_changed_fn();   /* App re-applies (scheduler periods, ...) */
+        }
         svc_logf(API2_LOG_INFO, "set: res 0x%02X saved", res);
         send_response(t, opcode, API2_STATUS_OK, 0, 0);
     } else {
@@ -1129,7 +1156,15 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
         default:
             /* Calibrations (0x2) and 0x6-0xF beyond Debug/Raw/Bulk: not
              * built yet. Spec §7 -- "not implemented yet" and "not a real
-             * category" are the same answer on the wire. */
+             * category" are the same answer on the wire.
+             *
+             * WP11 note: Calibrations 0x2 is a GET/SET-of-stored-constants
+             * category, structurally identical to Settings (0x3). Implement
+             * it by copying the s_settings_fields[] / SF() machinery as
+             * s_calibration_fields[] over its own EEPROM page (add
+             * EEPROM_CALIBRATION_* in config.h and a SettingsSection row in
+             * svc_storage.c) plus a dispatch_calibrations() that mirrors
+             * dispatch_settings(). Do NOT hand-roll an if-ladder. */
             send_response(t, opcode, API2_STATUS_UNKNOWN_CATEGORY, 0, 0);
             return;
     }
@@ -1161,6 +1196,11 @@ void svc_api_register_transport_ready(ApiTransport t, ApiReadyFn ready_fn)
 {
     if (t >= API_TRANSPORT_COUNT) return;
     s_t[t].ready_fn = ready_fn;
+}
+
+void svc_api_register_settings_changed(ApiSettingsChangedFn fn)
+{
+    s_settings_changed_fn = fn;
 }
 
 void svc_api_connected(ApiTransport t)

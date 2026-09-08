@@ -44,6 +44,13 @@ void svc_api_update(void);   /* scheduler hook — drains the debug-log push and
 
 void svc_api_register_transport(ApiTransport t, ApiSendFn send_fn);
 void svc_api_register_transport_ready(ApiTransport t, ApiReadyFn ready_fn);
+
+/* Called once after a host SET of a Settings resource has been persisted,
+ * so an upper layer can re-apply anything derived from DeviceSettings
+ * (App wires app_scheduler_reload_periods here). Keeps svc_api from having
+ * to #include an App-layer header (CLAUDE.md §8.1 — deps flow downward). */
+typedef void (*ApiSettingsChangedFn)(void);
+void svc_api_register_settings_changed(ApiSettingsChangedFn fn);
 void svc_api_connected(ApiTransport t);
 void svc_api_disconnected(ApiTransport t);
 

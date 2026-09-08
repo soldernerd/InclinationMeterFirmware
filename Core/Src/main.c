@@ -289,6 +289,9 @@ int main(void)
   svc_log_init();             /* log ring up before anything logs into it */
   svc_powertest_init();       /* power-investigation mask defaults to "all on" */
   svc_api_init();
+  /* App owns "re-apply DeviceSettings after a host SET" — svc_api calls
+   * this hook instead of #including app_scheduler.h (deps flow downward). */
+  svc_api_register_settings_changed(app_scheduler_reload_periods);
   svc_usb_init();
   hal_uart_init(HAL_UART_BLE);    /* USART6 RX DMA up before the RN4871 talks */
   svc_ble_init();
