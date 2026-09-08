@@ -114,11 +114,11 @@ def main():
     ig = d.get("integrity")
     if ig:
         print(f"  integrity: FAULT={ig['fault'].upper()}" if ig['fault_code']
-              else "  integrity: no hard fault")
+              else "  integrity: healthy")
         print(f"     frames  produced {ig['frames_produced']}  drained {ig['frames_drained']}"
               f"  backlog {ig['backlog']}   tim7_fires {ig['tim7_fires']}")
-        print(f"     conv-slip: band {ig['slip_band']}  wandered to [{ig['slip_min']},{ig['slip_max']}]"
-              f"   excursions {ig['slip_excursions']}")
+        print(f"     run {ig['run_ms']} ms  expected {ig['expected_frames']} frames"
+              f"   deficit {ig['frame_deficit']:+d}  range [{ig['frame_deficit_min']:+d},{ig['frame_deficit_max']:+d}]")
         print(f"     ring_overflow {ig['ring_overflow']}  drain_clamped {ig['drain_clamped']}"
               f"  framing_err {ig['framing_err']}  crc_err {ig['crc_err']}")
         print(f"     word0=0x{ig['word0_last']:04X}"

@@ -122,32 +122,34 @@ look; not a regression from this work.
 | **framing** | every frame's word 0 must equal `ADS131M04_STATUS_WORD` (0x010F) | constant over long runs | **latch + ERROR + stop** |
 | **CRC** | `math_crc16` over frame bytes 0..14 vs the ADS CRC word (bytes 15..16) | `calc == rx` every frame, confirmed | **latch + ERROR + stop** |
 | **ring overflow** | SPI DMA a whole ring ahead of the SysTick drain | never seen | **latch + ERROR + stop** |
-| **conversion slip** | `frames_read - tim7_fires/OVERSAMPLE`; TIM7 is exactly `OVERSAMPLE x` fDATA (locked SYSCLK divisors), so this is the exact lost/duplicated-conversion count. Band learned over `ADC_SLIP_SETTLE_FRAMES`, then any excursion counted. | **drifts ~0.4/sample-per-second even at the healthy 2x rate** — a real, slow read-path loss (see below) | **count + one WARN**, do NOT stop |
+| **conversion count** | `frames_produced` vs the SysTick ms clock. fDATA = SYSCLK / `ADS131M04_FDATA_TIMER_TICKS` and SysTick shares the SYSCLK root, so `expected = elapsed_ms x ADC_FDATA_KHZ_NUM / ADC_FDATA_KHZ_DEN` exactly. Reference point taken once after `ADC_SLIP_SETTLE_MS` so pipeline startup is excluded. `deficit = expected - actual`. | **stays within +/-3 frames over 4 minutes** (~0.8 ppm) — no loss | `deficit` past `ADC_FRAME_DEFICIT_LIMIT` (8) for `ADC_FRAME_DEFICIT_HOLD_MS` (200) -> **latch + ERROR + stop** |
 
 `Services/svc_signal_analysis.c`'s `svc_signal_analysis_check_integrity()`
-(pumped from `task_signal_analysis`) does the reporting/stop. Counters +
-learned band + CRC calc/rx in the `Raw data 0x00` diag.
+(pumped from `task_signal_analysis`) does the reporting/stop. Counters,
+`run_ms`, `frame_deficit` + range, and CRC calc/rx in the `Raw data 0x00`
+diag.
 
-### Open: the ~0.4/s conversion slip at 2x oversample
+### Resolved: the "~40 ppm sample loss" was a measurement bug
 
-Bench (fw 0.9.19–0.9.23): with acquisition running, `frames_read` falls
-behind `conversions_completed` by ~1 every ~2–3 s — monotonic, ~25–40 ppm.
-So roughly one conversion in ~50 000 is missed in the read path. TIM7 and
-fDATA are frequency-locked (both exact 64 MHz divisors) so this is not
-clock drift; raising the TIM7 NVIC priority 2→0 barely moved it. It is
-almost certainly **pre-existing** (master's in-ISR read had no way to
-measure it) and, at 25–40 ppm, invisible to anything short of a
-minutes-long capture — the single-bin DFT's running accumulator and the
-0.3 s bulk capture both tolerate it. Left as a known item; the real fix
-is the no-CPU-ISR **timer → DMA** acquisition path.
+Earlier (fw 0.9.18–0.9.24) the conversion-count check used
+`tim7_fires / OVERSAMPLE` as the reference — `tim7_fires` being a software
+counter bumped once per TIM7 ISR. Bench measurement against the SysTick
+clock (fw 0.9.24): the **frame rate is +0.9 ppm** (crystal-exact), while
+the **fire rate is −21 ppm** — the lean TIM7 ISR occasionally gets pushed
+past a full 24 µs period and only one `UIF` latch is seen for two elapsed
+periods, so `tim7_fires` undercounts. The DRDY-level state machine catches
+up on the next fire (DRDY still asserted), so no conversion is skipped.
+The reference is now the SysTick clock; `tim7_fires` is kept only as an
+informational ISR-miss indicator. No sample is being lost.
 
 ### Not done: 1x oversampling
 
-Blocked on the slip above — 2x already loses samples; 1x has less margin
-and would lose more. `ADC_TRIGGER_OVERSAMPLE` + `ADS131M04_TRIGGER_TIMER_PERIOD`
-are now wired through so the change is a one-liner once the read path is
-fixed (`hal_tim_adc_trigger_start()` sets the ARR from the macro — the
-CubeMX literal in `tim.c` no longer matters).
+Deliberately left for a follow-up — it needs its own careful bench pass
+(the 1x history was a hard aliasing failure). The plumbing is ready:
+`ADC_TRIGGER_OVERSAMPLE` drives `ADS131M04_TRIGGER_TIMER_PERIOD`, and
+`hal_tim_adc_trigger_start()` sets TIM7's ARR from it (the CubeMX literal
+in `tim.c` no longer decides the rate), so the change is one line plus a
+validation run.
 
 **Merge to master when the whole thing is bench-clean.**
 

@@ -184,10 +184,7 @@
  * ADC_TRIGGER_OVERSAMPLE = how many TIM7 fires per conversion. History:
  * 1x aliased (a fixed poll phase sitting on the DRDY edge decimated the
  * capture — bench: effective rate wandered 8-14 kHz); 2x was the fix, at
- * the cost of doubling the ISR fire count. Now that the heavy per-sample
- * work is off the ISR (docs/adc_acquisition_redesign.md) and the
- * integrity check below catches any missed conversion, 1x is worth
- * retrying — set to 1 and watch Ads131m04Integrity.slip_max/min.
+ * the cost of doubling the ISR fire count.
  *
  * The TIM7 ISR uses a lean fast path (Core/Src/stm32g0xx_it.c) rather
  * than the full HAL_TIM_IRQHandler. */
@@ -203,16 +200,23 @@
  * (fw 0.9.17): constant 0x010F. */
 #define ADS131M04_STATUS_WORD         0x010FU
 
-/* Conversion-count integrity: slip = (frames read) - (TIM7 fires /
- * ADC_TRIGGER_OVERSAMPLE). Frequency-locked clocks mean slip sits in a
- * bounded band in steady state (only ISR-servicing jitter moves it); a
- * lost or duplicated conversion shifts it permanently by a whole count.
- * The band is *learned* over the first ADC_SLIP_SETTLE_FRAMES; after that,
- * slip leaving [learned_min - 1, learned_max + 1] latches ADS_FAULT_SLIP.
- * No magic width to tune — the settle window just has to be long enough
- * to see the true jitter band (and short enough that a fault is unlikely
- * to hide inside it). */
-#define ADC_SLIP_SETTLE_FRAMES       40000U   /* ~2 s at fDATA */
+/* Conversion-count integrity. frames_produced must track elapsed time x
+ * fDATA. fDATA = SYSCLK / ADS131M04_FDATA_TIMER_TICKS exactly, and SysTick
+ * shares the SYSCLK root, so per elapsed millisecond the expected frame
+ * count is ADC_FDATA_KHZ_NUM / ADC_FDATA_KHZ_DEN with no drift. (tim7_fires
+ * is NOT the reference — the trigger ISR can miss a fire under load,
+ * ~20 ppm, without any sample being lost: bench fw 0.9.24, frame rate came
+ * out +0.9 ppm while fire rate was -21 ppm.)
+ *   deficit = expected_frames(now) - frames_produced
+ * A real lost or duplicated conversion is a permanent +/-1 step; the
+ * measured noise of this estimate is +/-2 over 90 s. deficit past
+ * ADC_FRAME_DEFICIT_LIMIT and staying there ADC_FRAME_DEFICIT_HOLD_MS
+ * latches ADS_FAULT_SLIP. */
+#define ADC_FDATA_KHZ_NUM            64000U    /* 64 MHz / 3072 -> frames per ms */
+#define ADC_FDATA_KHZ_DEN           ADS131M04_FDATA_TIMER_TICKS
+#define ADC_SLIP_SETTLE_MS          2000U
+#define ADC_FRAME_DEFICIT_LIMIT     8         /* frames off the SysTick estimate */
+#define ADC_FRAME_DEFICIT_HOLD_MS   200U      /* sustained before it latches */
 
 /* Services/svc_signal_analysis.c: complete 8-sample sine cycles per
  * amplitude/phase recompute. 64 cycles = 512 samples ~= 24.6 ms at

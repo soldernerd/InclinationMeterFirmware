@@ -570,16 +570,17 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         uint32_t drain_clamped;
         uint32_t framing_err;
         uint32_t crc_err;
-        uint32_t slip_excursions;
+        uint32_t run_ms;
+        int32_t  frame_deficit;
+        int32_t  frame_deficit_min;
+        int32_t  frame_deficit_max;
         uint16_t drain_clamp_max;
-        int16_t  slip_band_lo;
-        int16_t  slip_band_hi;
-        int16_t  slip_min;
-        int16_t  slip_max;
         uint16_t word0_last;
         uint16_t crc_rx_last;
         uint16_t crc_calc_last;
         uint8_t  fault_code;
+        uint32_t now_ms;            /* device SysTick ms — a clock-independent
+                                       time base for rate checks */
     } p;
     p.id              = r->id;
     p.status          = r->status;
@@ -598,18 +599,18 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
     p.tim7_fires      = ig->tim7_fires;
     p.ring_overflow   = ig->ring_overflow;
     p.drain_clamped   = ig->drain_clamped;
-    p.framing_err     = ig->framing_err;
-    p.crc_err         = ig->crc_err;
-    p.slip_excursions = ig->slip_excursions;
-    p.drain_clamp_max = ig->drain_clamp_max;
-    p.slip_band_lo    = ig->slip_band_lo;
-    p.slip_band_hi    = ig->slip_band_hi;
-    p.slip_min        = ig->slip_min;
-    p.slip_max        = ig->slip_max;
-    p.word0_last      = ig->word0_last;
+    p.framing_err       = ig->framing_err;
+    p.crc_err           = ig->crc_err;
+    p.run_ms            = ig->run_ms;
+    p.frame_deficit     = ig->frame_deficit;
+    p.frame_deficit_min = ig->frame_deficit_min;
+    p.frame_deficit_max = ig->frame_deficit_max;
+    p.drain_clamp_max   = ig->drain_clamp_max;
+    p.word0_last        = ig->word0_last;
     p.crc_rx_last     = ig->crc_rx_last;
     p.crc_calc_last   = ig->crc_calc_last;
     p.fault_code      = ig->fault_code;
+    p.now_ms          = hal_systick_get_ms();
 
     send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
 }

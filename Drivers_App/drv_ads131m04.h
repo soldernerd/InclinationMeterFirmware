@@ -55,26 +55,26 @@ typedef enum {
     ADS_FAULT_OVERRUN  = 1,   /* SPI DMA lapped the SysTick drain (ring full) */
     ADS_FAULT_FRAMING  = 2,   /* a frame's word 0 != ADS131M04_STATUS_WORD */
     ADS_FAULT_CRC      = 3,   /* a frame's computed CRC != the CRC word the ADS sent */
+    ADS_FAULT_SLIP     = 4,   /* frames_produced drifted off the SysTick-clock estimate */
 } Ads131m04Fault;
 
 typedef struct {
     uint32_t frames_produced;   /* frames the TIM7 ISR committed to the ring */
     uint32_t frames_drained;    /* frames the SysTick drain consumed */
-    uint32_t tim7_fires;        /* trigger-ISR fires this run */
+    uint32_t tim7_fires;        /* trigger-ISR fires this run (info: ISR-miss rate) */
     uint32_t ring_overflow;     /* pushes dropped: SPI DMA a whole ring ahead of the drain */
     uint32_t drain_clamped;     /* drain calls where head-tail exceeded the ring */
     uint32_t framing_err;       /* frames with an unexpected word 0 */
     uint32_t crc_err;           /* frames whose computed CRC != the sent CRC word */
-    uint32_t slip_excursions;   /* times slip left the settled jitter band (lost/dup conversion) */
+    uint32_t run_ms;            /* elapsed ms since start() (SysTick) */
+    int32_t  frame_deficit;     /* expected_frames(now) - frames_produced */
+    int32_t  frame_deficit_min; /* observed range of frame_deficit */
+    int32_t  frame_deficit_max;
     uint16_t drain_clamp_max;   /* largest head-tail gap seen */
-    int16_t  slip_band_lo;      /* jitter band of frames_produced - tim7_fires/OVERSAMPLE, */
-    int16_t  slip_band_hi;      /*   learned over the first ADC_SLIP_SETTLE_FRAMES */
-    int16_t  slip_min;          /* all-time observed slip range (shows total wander) */
-    int16_t  slip_max;
     uint16_t word0_last;        /* most recent frame's word 0 (STATUS response) */
     uint16_t crc_rx_last;       /* most recent frame's CRC word (as the ADS sent it) */
     uint16_t crc_calc_last;     /* CRC computed over that frame's words 0..4 */
-    uint8_t  fault_code;        /* Ads131m04Fault — 0 while healthy; slip does NOT latch */
+    uint8_t  fault_code;        /* Ads131m04Fault — 0 while healthy */
 } Ads131m04Integrity;
 
 const Ads131m04Integrity *drv_ads131m04_get_integrity(void);

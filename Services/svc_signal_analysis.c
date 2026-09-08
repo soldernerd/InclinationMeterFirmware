@@ -200,13 +200,11 @@ DrvStatus svc_signal_analysis_init(void)
 }
 
 static bool s_fault_reported = false;
-static bool s_slip_reported  = false;
 
 DrvStatus svc_signal_analysis_start(void)
 {
     reset_accumulators();
     s_fault_reported = false;
-    s_slip_reported  = false;
     return drv_ads131m04_start();
 }
 
@@ -216,39 +214,31 @@ void svc_signal_analysis_stop(void)
 }
 
 /* Pumped from task_signal_analysis alongside svc_signal_analysis_update().
- *  - A latched fault (ring overrun, lost framing, or a bad CRC) is a hard
- *    failure: one ERROR to the debug-log stream, and stop the pipeline.
- *  - A conversion slip (frames-read drifting from conversions-done) is a
- *    real but slow read-path loss even at the healthy 2x rate — surface
- *    it once as a WARN with the count, don't stop. */
+ * If the acquisition driver has latched an integrity fault — ring
+ * overrun, lost framing, a bad CRC, or frames_produced drifting off the
+ * SysTick-clock estimate — emit one ERROR to the debug-log stream and
+ * stop the pipeline. A sample stream that has lost integrity must not
+ * keep feeding the DFT / bulk capture. */
 void svc_signal_analysis_check_integrity(void)
 {
-    const Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
-
-    if (drv_ads131m04_faulted() && !s_fault_reported) {
-        s_fault_reported = true;
-        static const char *const names[] = { "none", "overrun", "framing", "crc" };
-        uint8_t fc = ig->fault_code;
-        svc_logf(API2_LOG_ERROR,
-                 "ADC integrity fault: %s (frames %lu/%lu ovf %lu "
-                 "framing %lu crc %lu) — acquisition stopped",
-                 (fc < (sizeof names / sizeof names[0])) ? names[fc] : "?",
-                 (unsigned long)ig->frames_produced, (unsigned long)ig->frames_drained,
-                 (unsigned long)ig->ring_overflow,
-                 (unsigned long)ig->framing_err, (unsigned long)ig->crc_err);
-        drv_ads131m04_stop();
+    if (s_fault_reported || !drv_ads131m04_faulted()) {
         return;
     }
+    s_fault_reported = true;
 
-    if (ig->slip_excursions > 0U && !s_slip_reported) {
-        s_slip_reported = true;
-        svc_logf(API2_LOG_WARN,
-                 "ADC conv-slip: %lu excursion(s), slip wandered to [%d,%d] "
-                 "outside band [%d,%d]",
-                 (unsigned long)ig->slip_excursions,
-                 (int)ig->slip_min, (int)ig->slip_max,
-                 (int)ig->slip_band_lo, (int)ig->slip_band_hi);
-    }
+    const Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
+    static const char *const names[] = { "none", "overrun", "framing", "crc", "slip" };
+    uint8_t fc = ig->fault_code;
+    svc_logf(API2_LOG_ERROR,
+             "ADC integrity fault: %s (frames %lu ovf %lu framing %lu crc %lu "
+             "deficit %ld [%ld,%ld] run %lu ms) — acquisition stopped",
+             (fc < (sizeof names / sizeof names[0])) ? names[fc] : "?",
+             (unsigned long)ig->frames_produced, (unsigned long)ig->ring_overflow,
+             (unsigned long)ig->framing_err, (unsigned long)ig->crc_err,
+             (long)ig->frame_deficit, (long)ig->frame_deficit_min,
+             (long)ig->frame_deficit_max, (unsigned long)ig->run_ms);
+
+    drv_ads131m04_stop();
 }
 
 bool svc_signal_analysis_is_running(void)

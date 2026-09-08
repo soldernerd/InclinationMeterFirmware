@@ -75,7 +75,11 @@ static volatile uint16_t s_ring_head;   /* produced count (free-running) */
 static volatile uint16_t s_ring_tail;   /* drained count  (free-running) */
 
 static Ads131m04Integrity s_integ;
-static bool               s_slip_out;   /* slip currently outside the settled band */
+static uint32_t           s_start_ms;      /* hal_systick_get_ms() at start() */
+static uint32_t           s_settle_ms;     /* run_ms when the deficit reference was taken */
+static uint32_t           s_settle_frames; /* frames_produced at that point */
+static bool               s_settled;
+static uint16_t           s_deficit_hold;  /* ms the frame deficit has been past the limit */
 
 /* Latch an integrity fault (first one wins). Called from on_trigger (TIM7
  * ISR) and drain_ring (SysTick) — a plain byte store is atomic on M0+. */
@@ -237,8 +241,53 @@ static void drain_ring(void)
 /* Called from Core/Src/stm32g0xx_it.c's SysTick_Handler, once per ms. */
 void drv_ads131m04_drain_tick(void)
 {
-    if (s_running) {
-        drain_ring();
+    if (!s_running) {
+        return;
+    }
+    drain_ring();
+
+    /* Conversion-count integrity, referenced to the SysTick clock.
+     * fDATA = SYSCLK / ADS131M04_FDATA_TIMER_TICKS and SysTick shares the
+     * SYSCLK root, so over any interval the expected frame count is
+     * elapsed_ms * ADC_FDATA_KHZ_NUM / ADC_FDATA_KHZ_DEN with no drift.
+     * (tim7_fires is NOT the reference — the trigger ISR misses ~20 ppm
+     * of fires under load without any sample being lost: bench fw 0.9.24.)
+     *
+     * The reference point is taken once, after ADC_SLIP_SETTLE_MS, so any
+     * pipeline-startup offset is excluded and this measures pure drift.
+     * deficit = expected_since_settle - frames_since_settle. A real lost
+     * or duplicated conversion is a permanent +/-1 step; measured noise is
+     * a few frames. Latch if it sits past the limit for
+     * ADC_FRAME_DEFICIT_HOLD_MS (a transient SysTick stall recovers). */
+    uint32_t run_ms = hal_systick_get_ms() - s_start_ms;
+    s_integ.run_ms = run_ms;
+    if (run_ms < ADC_SLIP_SETTLE_MS) {
+        return;
+    }
+    if (!s_settled) {
+        s_settled       = true;
+        s_settle_ms     = run_ms;
+        s_settle_frames = s_integ.frames_produced;
+        return;
+    }
+
+    uint32_t elapsed  = run_ms - s_settle_ms;
+    uint32_t expected = (uint32_t)((uint64_t)elapsed * ADC_FDATA_KHZ_NUM
+                                   / ADC_FDATA_KHZ_DEN);
+    int32_t deficit = (int32_t)expected
+                    - (int32_t)(s_integ.frames_produced - s_settle_frames);
+    s_integ.frame_deficit = deficit;
+    if (deficit > s_integ.frame_deficit_max) s_integ.frame_deficit_max = deficit;
+    if (deficit < s_integ.frame_deficit_min) s_integ.frame_deficit_min = deficit;
+
+    if (deficit >= ADC_FRAME_DEFICIT_LIMIT || deficit <= -ADC_FRAME_DEFICIT_LIMIT) {
+        if (s_deficit_hold < ADC_FRAME_DEFICIT_HOLD_MS) {
+            s_deficit_hold++;
+        } else {
+            integ_fault(ADS_FAULT_SLIP);
+        }
+    } else {
+        s_deficit_hold = 0U;
     }
 }
 
@@ -282,40 +331,9 @@ static void on_trigger(void)
         } else {
             s_ring_head = head + 1U;
             s_integ.frames_produced++;
-
-            /* Conversion-count integrity. TIM7 is exactly
-             * ADC_TRIGGER_OVERSAMPLE x fDATA (both exact SYSCLK divisors —
-             * frequency-locked, no drift), so tim7_fires / OVERSAMPLE ==
-             * conversions the ADS has finished. slip = frames read minus
-             * that. In steady state slip only jitters within a bounded
-             * band (ISR-servicing timing); a lost or duplicated conversion
-             * shifts it permanently by a whole count. Learn the band over
-             * the first ADC_SLIP_SETTLE_FRAMES, then fault the moment slip
-             * leaves it by >= 1. */
-            int32_t slip = (int32_t)s_integ.frames_produced
-                         - (int32_t)(s_integ.tim7_fires / ADC_TRIGGER_OVERSAMPLE);
-            if (s_integ.frames_produced <= ADC_SLIP_SETTLE_FRAMES) {
-                /* Learn the steady-state jitter band. */
-                if (slip < s_integ.slip_band_lo) s_integ.slip_band_lo = (int16_t)slip;
-                if (slip > s_integ.slip_band_hi) s_integ.slip_band_hi = (int16_t)slip;
-                s_integ.slip_min = s_integ.slip_band_lo;
-                s_integ.slip_max = s_integ.slip_band_hi;
-            } else {
-                /* Post-settle: slip leaving the band by a whole count is a
-                 * lost or duplicated conversion. Bench (fw 0.9.19) shows a
-                 * slow ~0.5/s slip even at the "good" 2x rate — a real but
-                 * tiny read-path loss, not a hard failure — so this is
-                 * counted + surfaced, NOT latched. slip_min/max keep
-                 * tracking how far it has wandered. */
-                if (slip < s_integ.slip_min) s_integ.slip_min = (int16_t)slip;
-                if (slip > s_integ.slip_max) s_integ.slip_max = (int16_t)slip;
-                bool out = (slip < (int32_t)s_integ.slip_band_lo - 1)
-                        || (slip > (int32_t)s_integ.slip_band_hi + 1);
-                if (out && !s_slip_out) {
-                    s_integ.slip_excursions++;
-                }
-                s_slip_out = out;
-            }
+            /* Conversion-count integrity is checked against the SysTick
+             * clock in drv_ads131m04_drain_tick(), not here — tim7_fires
+             * is not a reliable conversion reference. */
         }
     }
 
@@ -396,9 +414,10 @@ DrvStatus drv_ads131m04_init(void)
 
 static void ring_reset(void)
 {
-    s_ring_head  = 0U;
-    s_ring_tail  = 0U;
-    s_slip_out   = false;
+    s_ring_head     = 0U;
+    s_ring_tail     = 0U;
+    s_deficit_hold  = 0U;
+    s_settled       = false;
     for (uint32_t i = 0; i < sizeof s_integ; ++i) {
         ((uint8_t *)&s_integ)[i] = 0U;
     }
@@ -412,6 +431,7 @@ DrvStatus drv_ads131m04_start(void)
     s_dropped_count = 0;
     s_xfer_active   = false;
     ring_reset();
+    s_start_ms = hal_systick_get_ms();
     s_running = true;
     hal_tim_adc_trigger_start();
     return DRV_OK;
