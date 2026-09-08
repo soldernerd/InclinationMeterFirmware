@@ -7,9 +7,8 @@
 
 typedef enum {
     HAL_SPI_DISPLAY  = 0,
-    HAL_SPI_SCL3300  = 1,   /* stub — SCL3300 not on REV B hardware */
-    HAL_SPI_DAC      = 2,   /* AD9833 waveform generator (WP7), SPI3, write-only (no MISO) */
-    HAL_SPI_ADC      = 3,   /* ADS131M04 4-ch ADC (WP8), SPI1, true full-duplex (DIN + DOUT) */
+    HAL_SPI_DAC      = 1,   /* AD9833 waveform generator (WP7), SPI3, write-only (no MISO) */
+    HAL_SPI_ADC      = 2,   /* ADS131M04 4-ch ADC (WP8), SPI1, true full-duplex (DIN + DOUT) */
     HAL_SPI_COUNT,
 } HalSpiInstance;
 

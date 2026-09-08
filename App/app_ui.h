@@ -18,8 +18,6 @@ typedef enum {
     UI_SETTING_BATTERY_CRITICAL,   /* battery_critical_mv — REV B renamed
                                      * this from the original WP3 spec's
                                      * "battery cutoff"; see config.h */
-    UI_SETTING_STREAM_INTERVAL,
-    UI_SETTING_SETTLING_TIMEOUT,
     UI_SETTING_AUTO_POWEROFF,       /* auto_poweroff_s (WP6); 0 = disabled */
     UI_SETTING_FORCE_CHARGE,        /* action — svc_battery_force_charge():
                                      * charge regardless of SOC while USB

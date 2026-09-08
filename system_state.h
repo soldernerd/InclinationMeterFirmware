@@ -17,17 +17,11 @@
 typedef struct {
     /* --- Scheduler/Timing page --- */
     uint16_t task_sensors_ms;
-    uint16_t task_processing_ms;
     uint16_t task_display_ms;
     uint16_t task_ble_ms;
     uint16_t task_usb_ms;
     uint16_t task_battery_ms;
     uint16_t task_temperature_ms;
-    uint16_t stream_interval_ms;
-    int32_t  settling_threshold_umpm;
-    uint32_t settling_timeout_ms;
-    uint16_t filter_cutoff_hz_num;
-    uint16_t filter_cutoff_hz_den;
 
     /* --- Battery page --- */
     uint16_t battery_critical_mv;     /* below this: BATTERY_CRITICAL (power-off) */
@@ -69,16 +63,11 @@ typedef struct {
     /* --- Encoder page (WP3) ---
      * Raw quadrature transitions per mechanical detent — see
      * App/app_ui.c's consume_detents(). Unconfirmed against real
-     * hardware, same as the calibration fields above. */
+     * hardware. */
     uint16_t encoder_counts_per_detent;
 } DeviceSettings;
 
 typedef struct {
-    int16_t  scl3300_x_cdeg;
-    int16_t  scl3300_y_cdeg;
-    int16_t  scl3300_z_cdeg;
-    int32_t  pcap04_1_af;
-    int32_t  pcap04_2_af;
     int16_t  temperature_cdeg;      /* TMP236 on-board (drv_tmp236.c) */
 
     /* LM35 external temperature sensor (WP11, Drivers_App/drv_lm35.c),
@@ -88,11 +77,6 @@ typedef struct {
      * drv_lm35_get_result() rejects it. */
     int16_t  temp_ext_cdeg;        /* 0.01 degC / LSB */
     bool     temp_ext_ok;
-
-    int32_t  tilt_pcap04_umpm;
-    int32_t  tilt_scl3300_x_umpm;
-    int32_t  tilt_scl3300_y_umpm;
-    int32_t  tilt_scl3300_z_umpm;
 
     uint8_t  battery_soc_pct;
     bool     battery_charging;
@@ -105,10 +89,6 @@ typedef struct {
     bool     woke_from_standby;   /* true if this boot resumed from Standby
                                     * mode rather than a power-on/other reset —
                                     * see HAL_App/hal_power.h */
-
-    bool     sensor_scl3300_ok;
-    bool     sensor_pcap04_1_ok;
-    bool     sensor_pcap04_2_ok;
 
     bool     adc_ok;             /* ADC calibrated OK at boot; if false,
                                   * battery/temperature readings are absent
@@ -145,10 +125,9 @@ typedef struct {
     /* BME280 environmental sensor (WP9, Drivers_App/drv_bme280.c),
      * shares I2C1 with the EEPROM. bme280_temp_cdeg is a THIRD,
      * independent temperature reading -- not the same sensor as
-     * temperature_cdeg above (that field is the pre-REV-B
-     * SCL3300/PCAP04-era on-board reading; REV B has since gained its
-     * own separate TMP236, see svc_battery.c) or TEMP_SENSE_EXT's future
-     * LM35. Updated once per second by App/app_scheduler.c's
+     * temperature_cdeg above (the TMP236 on-board sensor, drv_tmp236.c /
+     * svc_battery.c) or temp_ext_cdeg (the LM35 external channel).
+     * Updated once per second by App/app_scheduler.c's
      * task_bme280() (mirrors task_temperature()'s TMP236 pattern -- no
      * Services-layer wrapper needed since drv_bme280.c already does all
      * the compensation math itself); bme280_ok stays false until the
@@ -157,8 +136,6 @@ typedef struct {
     uint32_t bme280_pressure_pa;       /* Pa */
     uint16_t bme280_humidity_centipct; /* 0.01 %RH / LSB */
     bool     bme280_ok;
-
-    bool     calibration_valid;
 
     /* Local UI input (WP3), published by Services/svc_input.c. Raw
      * quadrature transition counts, not mechanical-detent counts — see
@@ -180,15 +157,15 @@ typedef struct {
                                            * one-shot interrupt event */
     bool     encoder2_sw_press_event;
 
-    /* True while an EEPROM write (settings OR calibration) has failed
-     * and hasn't been superseded by a successful one yet. Set from:
+    /* True while an EEPROM settings write has failed and hasn't been
+     * superseded by a successful one yet. Set from:
      * (1) App/app_ui.c's commit_edit(), synchronously, if
      * svc_storage_save_settings() can't even be queued; (2)
-     * Services/svc_api.c's SET_ZERO/SET_CALIBRATION/SET_SETTINGS
-     * handlers, the same way, for a host-triggered save; (3)
+     * Services/svc_api.c's SET_SETTINGS handler, the same way, for a
+     * host-triggered save; (3)
      * Services/svc_storage.c's svc_storage_update(), asynchronously,
-     * possibly many ticks later, if any in-flight write (settings or
-     * calibration) fails partway through after retries are exhausted —
+     * possibly many ticks later, if any in-flight write fails partway
+     * through after retries are exhausted —
      * a synchronous DRV_OK only means the write was queued, not that it
      * completed, so this is the only signal a "successful" queue didn't
      * actually finish; (4) svc_storage_init()'s boot-time per-page
@@ -235,24 +212,7 @@ typedef struct {
     uint16_t api_rx_malformed_count;
 } SystemState;
 
-typedef struct {
-    /* Scale constants — set at manufacturing */
-    int32_t  pcap04_scale_af_per_umpm;
-    int32_t  scl3300_scale_cdeg_per_umpm;
-
-    /* Zero offsets — set by operator */
-    int32_t  pcap04_zero_af;
-    int16_t  scl3300_x_zero_cdeg;
-    int16_t  scl3300_y_zero_cdeg;
-    int16_t  scl3300_z_zero_cdeg;
-
-    uint32_t calibration_timestamp;
-    bool     scale_valid;
-    bool     zero_valid;
-} CalibrationData;
-
 extern SystemState    g_system_state;
 extern DeviceSettings g_device_settings;
-extern CalibrationData g_calibration;
 
 #endif /* SYSTEM_STATE_H */

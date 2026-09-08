@@ -39,7 +39,6 @@ void hal_spi_init(HalSpiInstance instance)
         s_busy[HAL_SPI_ADC] = false;
         s_cb[HAL_SPI_ADC]   = 0;
     }
-    /* HAL_SPI_SCL3300 — stub, sensor not on REV B hardware */
 }
 
 void hal_spi_reinit(HalSpiInstance instance)

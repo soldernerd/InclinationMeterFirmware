@@ -46,7 +46,8 @@ typedef struct {
     uint16_t battery_mv;
     uint8_t  usb_connected;
     uint8_t  ble_connected;
-    uint8_t  calibration_valid;
+    uint8_t  reserved0;         /* was calibration_valid (REV A tilt cal); always 0
+                                  until a REV B calibration store exists */
 } __attribute__((packed)) Api2DeviceStatePayload;
 
 typedef struct {
@@ -287,9 +288,9 @@ static void dispatch_system_status(ApiTransport t, uint16_t opcode, uint8_t verb
         p.battery_state     = (uint8_t)svc_battery_get_state();
         p.battery_soc_pct   = svc_battery_get_soc_pct();
         p.battery_mv        = svc_battery_get_vbat_mv();
-        p.usb_connected     = g_system_state.usb_connected     ? 1U : 0U;
-        p.ble_connected     = g_system_state.ble_connected     ? 1U : 0U;
-        p.calibration_valid = g_system_state.calibration_valid ? 1U : 0U;
+        p.usb_connected     = g_system_state.usb_connected ? 1U : 0U;
+        p.ble_connected     = g_system_state.ble_connected ? 1U : 0U;
+        p.reserved0         = 0U;
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
     }
 }
@@ -911,22 +912,19 @@ typedef struct {
 /* Bounds: *_ms 1..60000 (1 ms scheduler tick .. effectively-disabled);
  * battery_*_mv 2500..4200 (single-cell Li-ion real range); tmp236 voffs /
  * boundary 0..3300 (ADC VDDA); num/den ratio pairs 1..10000 (nonzero
- * divisors); lm35_scale 1..1000; encoder_counts 1..100;
- * settling_threshold 1..100000; tmp236 tinfl 0..20000 (0..200.00 degC);
- * auto_poweroff_s 0..65535 (0 = disabled). */
+ * divisors); lm35_scale 1..1000; encoder_counts 1..100; tmp236 tinfl
+ * 0..20000 (0..200.00 degC); auto_poweroff_s 0..65535 (0 = disabled).
+ *
+ * Resource IDs 0x02 and 0x07..0x0B are retired (REV A task_processing /
+ * stream_interval / settling / complementary-filter fields) — the gaps
+ * are left so the surviving IDs keep their numbers. */
 static const SettingsFieldDesc s_settings_fields[] = {
     SF(API2_RES_SET_TASK_SENSORS_MS,         SF_U16, 2, task_sensors_ms,           1,    60000),
-    SF(API2_RES_SET_TASK_PROCESSING_MS,      SF_U16, 2, task_processing_ms,        1,    60000),
     SF(API2_RES_SET_TASK_DISPLAY_MS,         SF_U16, 2, task_display_ms,           1,    60000),
     SF(API2_RES_SET_TASK_BLE_MS,             SF_U16, 2, task_ble_ms,               1,    60000),
     SF(API2_RES_SET_TASK_USB_MS,             SF_U16, 2, task_usb_ms,               1,    60000),
     SF(API2_RES_SET_TASK_BATTERY_MS,         SF_U16, 2, task_battery_ms,           1,    60000),
     SF(API2_RES_SET_TASK_TEMPERATURE_MS,     SF_U16, 2, task_temperature_ms,       1,    60000),
-    SF(API2_RES_SET_STREAM_INTERVAL_MS,      SF_U16, 2, stream_interval_ms,        1,    60000),
-    SF(API2_RES_SET_SETTLING_THRESHOLD,      SF_I32, 4, settling_threshold_umpm,   1,    100000),
-    SF(API2_RES_SET_SETTLING_TIMEOUT_MS,     SF_U32, 4, settling_timeout_ms,       1,    60000),
-    SF(API2_RES_SET_FILTER_CUTOFF_HZ_NUM,    SF_U16, 2, filter_cutoff_hz_num,      1,    10000),
-    SF(API2_RES_SET_FILTER_CUTOFF_HZ_DEN,    SF_U16, 2, filter_cutoff_hz_den,      1,    10000),
     SF(API2_RES_SET_BATTERY_CRITICAL_MV,     SF_U16, 2, battery_critical_mv,       2500, 4200),
     SF(API2_RES_SET_BATTERY_LOW_MV,          SF_U16, 2, battery_low_mv,            2500, 4200),
     SF(API2_RES_SET_BATTERY_CHARGE_START_MV, SF_U16, 2, battery_charge_start_mv,   2500, 4200),

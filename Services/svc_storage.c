@@ -14,8 +14,8 @@
  *   0x0200  TMP236 settings page
  *   0x0300  LM35 settings page
  *   0x0400  Encoder settings page
- *   0x0500  Calibration page
- *   0x0600  reserved
+ *   0x0500  free (was the REV A tilt calibration page)
+ *   0x0700  boot write self-test scratch
  *
  * Every page: magic[0..1] + version[0..1] + crc[0..1] (6-byte header,
  * CRC covers only the page's own data bytes, not the header) + that
@@ -28,8 +28,6 @@
 #define HDR_MAGIC_0       0xA5U
 #define HDR_MAGIC_1       0x5AU
 #define HDR_SIZE          6U
-
-#define CALIBRATION_BASE  EEPROM_CALIBRATION_ADDR     /* 0x0500 */
 
 /* Blocking-helper timeout: generous margin over any single I2C
  * transaction (each bounded by hal_i2c's own 100 ms HAL timeout) plus the
@@ -58,7 +56,7 @@ typedef struct {
 static const SettingsSection s_sections[] = {
     { EEPROM_SCHEDULER_SETTINGS_ADDR, EEPROM_SCHEDULER_SETTINGS_VERSION,
       offsetof(DeviceSettings, task_sensors_ms),
-      SECTION_SPAN(task_sensors_ms, filter_cutoff_hz_den) },
+      SECTION_SPAN(task_sensors_ms, task_temperature_ms) },
     { EEPROM_BATTERY_SETTINGS_ADDR, EEPROM_BATTERY_SETTINGS_VERSION,
       offsetof(DeviceSettings, battery_critical_mv),
       SECTION_SPAN(battery_critical_mv, vbat_offset_mv) },
@@ -79,7 +77,7 @@ static const SettingsSection s_sections[] = {
  * actual guard in the source. Enforced here so a future field insertion
  * that breaks a section boundary, or a copy-pasted duplicate address,
  * fails the build instead of silently corrupting cross-page data. */
-_Static_assert(offsetof(DeviceSettings, task_sensors_ms) + SECTION_SPAN(task_sensors_ms, filter_cutoff_hz_den)
+_Static_assert(offsetof(DeviceSettings, task_sensors_ms) + SECTION_SPAN(task_sensors_ms, task_temperature_ms)
                 == offsetof(DeviceSettings, battery_critical_mv),
                 "scheduler section must end exactly where battery section begins");
 _Static_assert(offsetof(DeviceSettings, battery_critical_mv) + SECTION_SPAN(battery_critical_mv, vbat_offset_mv)
@@ -95,7 +93,7 @@ _Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPA
                 == sizeof(DeviceSettings),
                 "encoder section must end exactly at the struct's end");
 
-_Static_assert(HDR_SIZE + SECTION_SPAN(task_sensors_ms, filter_cutoff_hz_den) <= 0x0100U,
+_Static_assert(HDR_SIZE + SECTION_SPAN(task_sensors_ms, task_temperature_ms) <= 0x0100U,
                "scheduler page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(battery_critical_mv, vbat_offset_mv) <= 0x0100U,
                "battery page must fit within its 256-byte EEPROM page budget");
@@ -109,24 +107,22 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts
 _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
                && EEPROM_BATTERY_SETTINGS_ADDR != EEPROM_TMP236_SETTINGS_ADDR
                && EEPROM_TMP236_SETTINGS_ADDR != EEPROM_LM35_SETTINGS_ADDR
-               && EEPROM_LM35_SETTINGS_ADDR != EEPROM_ENCODER_SETTINGS_ADDR
-               && EEPROM_ENCODER_SETTINGS_ADDR != EEPROM_CALIBRATION_ADDR,
-               "every settings/calibration EEPROM page address must be distinct");
+               && EEPROM_LM35_SETTINGS_ADDR != EEPROM_ENCODER_SETTINGS_ADDR,
+               "every settings EEPROM page address must be distinct");
 
 /* Pending-write state machine. Sized for one section's header+data (all
- * DeviceSettings sections are small, well under sizeof(DeviceSettings))
- * or a whole CalibrationData save, whichever is larger. */
+ * DeviceSettings sections are small, well under sizeof(DeviceSettings)). */
 typedef struct {
     bool        active;
-    bool        is_settings_save;      /* true: advance through s_sections[] as each completes */
-    uint8_t     section_idx;           /* current index into s_sections[], if is_settings_save */
-    const DeviceSettings *settings_src; /* only valid while is_settings_save && active; must
-                                          * stay alive for the whole multi-tick operation — the
-                                          * only caller passes the persistent &g_device_settings */
+    bool        is_settings_save;      /* advance through s_sections[] as each page completes.
+                                         Always true today (settings is the only EEPROM store
+                                         since the REV A calibration page was removed); kept so
+                                         a future single-page write can reuse this machine. */
+    uint8_t     section_idx;           /* current index into s_sections[] */
+    const DeviceSettings *settings_src; /* must stay alive for the whole multi-tick operation —
+                                          * the only caller passes the persistent &g_device_settings */
     uint16_t    base_addr;      /* EEPROM address of the current page's header */
-    uint8_t     buf[HDR_SIZE + sizeof(DeviceSettings) > HDR_SIZE + sizeof(CalibrationData)
-                    ? HDR_SIZE + sizeof(DeviceSettings)
-                    : HDR_SIZE + sizeof(CalibrationData)];
+    uint8_t     buf[HDR_SIZE + sizeof(DeviceSettings)];
     uint16_t    total_len;
     uint16_t    written;        /* confirmed-written byte count */
     uint16_t    inflight_len;   /* length of the chunk currently in flight, 0 = none */
@@ -143,17 +139,11 @@ static void fill_default_settings(DeviceSettings *s)
 
     /* Scheduler/Timing page */
     s->task_sensors_ms          = DEFAULT_TASK_SENSORS_MS;
-    s->task_processing_ms       = DEFAULT_TASK_PROCESSING_MS;
     s->task_display_ms          = DEFAULT_TASK_DISPLAY_MS;
     s->task_ble_ms              = DEFAULT_TASK_BLE_MS;
     s->task_usb_ms              = DEFAULT_TASK_USB_MS;
     s->task_battery_ms          = DEFAULT_TASK_BATTERY_MS;
     s->task_temperature_ms      = DEFAULT_TASK_TEMPERATURE_MS;
-    s->stream_interval_ms       = DEFAULT_STREAM_INTERVAL_MS;
-    s->settling_threshold_umpm  = DEFAULT_SETTLING_THRESHOLD;
-    s->settling_timeout_ms      = DEFAULT_SETTLING_TIMEOUT_MS;
-    s->filter_cutoff_hz_num     = DEFAULT_FILTER_CUTOFF_HZ_NUM;
-    s->filter_cutoff_hz_den     = DEFAULT_FILTER_CUTOFF_HZ_DEN;
 
     /* Battery page */
     s->battery_critical_mv      = DEFAULT_BATTERY_CRITICAL_MV;
@@ -179,13 +169,6 @@ static void fill_default_settings(DeviceSettings *s)
 
     /* Encoder page */
     s->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
-}
-
-static void fill_default_calibration(CalibrationData *c)
-{
-    memset(c, 0, sizeof(*c));
-    c->scale_valid = false;
-    c->zero_valid  = false;
 }
 
 /* ---------------- header helpers ---------------- */
@@ -332,7 +315,7 @@ static void start_section_write(const DeviceSettings *settings, uint8_t idx)
 
 /* ---------------- boot EEPROM write self-test ---------------- */
 
-/* Scratch region well past every real page (calibration ends by 0x0600),
+/* Scratch region well past every real page (encoder page ends by 0x0500),
  * page-aligned. Two passes with different data so a stale read can't
  * false-pass; the byte values also vary per boot (systick seed) so even
  * two identical boots can't. Result -> g_system_state.eeprom_selftest
@@ -404,54 +387,6 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *settings)
     return DRV_OK;
 }
 
-DrvStatus svc_storage_save_calibration(const CalibrationData *cal)
-{
-    if (cal == 0)                 return DRV_ERR_INVALID;
-    if (s_pending.active)         return DRV_ERR_NOT_READY;
-
-    uint16_t crc = math_crc16((const uint8_t *)cal, sizeof(CalibrationData));
-    build_header(s_pending.buf, EEPROM_CALIBRATION_VERSION, crc);
-    memcpy(&s_pending.buf[HDR_SIZE], cal, sizeof(CalibrationData));
-
-    s_pending.is_settings_save = false;
-    s_pending.base_addr    = CALIBRATION_BASE;
-    s_pending.total_len    = HDR_SIZE + sizeof(CalibrationData);
-    s_pending.written      = 0;
-    s_pending.inflight_len = 0;
-    s_pending.retry_count  = 0;
-    s_pending.active       = true;
-    return DRV_OK;
-}
-
-DrvStatus svc_storage_load_calibration(CalibrationData *cal)
-{
-    if (cal == 0) return DRV_ERR_INVALID;
-
-    uint8_t hdr[HDR_SIZE];
-    if (!blocking_read(CALIBRATION_BASE, hdr, HDR_SIZE)) return DRV_ERR_COMM;
-
-    uint16_t version = 0;
-    uint16_t stored_crc = 0;
-    if (!header_is_present(hdr, EEPROM_CALIBRATION_VERSION, &version, &stored_crc)) {
-        return DRV_ERR_NOT_READY;
-    }
-
-    if (!blocking_read(CALIBRATION_BASE + HDR_SIZE,
-                       (uint8_t *)cal, sizeof(CalibrationData))) {
-        return DRV_ERR_COMM;
-    }
-
-    uint16_t calc_crc = math_crc16((const uint8_t *)cal, sizeof(CalibrationData));
-    if (calc_crc != stored_crc) {
-        return DRV_ERR_INVALID;
-    }
-
-    if (version != EEPROM_CALIBRATION_VERSION) {
-        return DRV_ERR_NOT_READY;
-    }
-    return DRV_OK;
-}
-
 bool svc_storage_is_busy(void)
 {
     return s_pending.active;
@@ -490,24 +425,18 @@ void svc_storage_update(void)
              * forever. The header/CRC written so far (if any) will fail
              * the CRC check on next boot's load and get reseeded. Also
              * abandons any remaining sections of a multi-section
-             * settings save, same reasoning — an aborted save can leave
-             * some pages holding the new values and others the old ones
-             * (not atomic across pages; the single-page design this
-             * replaced didn't have that failure mode, but did have the
-             * exact same "caller already got DRV_OK and never learns
-             * about a later async failure" gap this now also closes).
+             * settings save — an aborted save can leave some pages
+             * holding the new values and others the old ones (not atomic
+             * across pages).
              *
-             * svc_storage_save_settings()/svc_storage_save_calibration()'s
-             * synchronous return only covers whether the write could be
-             * QUEUED, not whether it actually completes — callers that
-             * clear settings_save_failed the moment queueing succeeds
-             * (App/app_ui.c's commit_edit(), Services/svc_api.c's
-             * SET_ZERO/SET_CALIBRATION/SET_SETTINGS ACKing on DRV_OK) can
-             * be premature. Escalate here for BOTH kinds of save — not
-             * just settings — so a calibration write that fails async
-             * after its synchronous ACK is still surfaced somewhere,
-             * rather than the host believing an EEPROM write succeeded
-             * that never actually did. */
+             * svc_storage_save_settings()'s synchronous return only
+             * covers whether the write could be QUEUED, not whether it
+             * actually completes — callers that clear settings_save_failed
+             * the moment queueing succeeds (App/app_ui.c's commit_edit(),
+             * Services/svc_api.c's SET_SETTINGS ACKing on DRV_OK) can be
+             * premature. Escalate here so an async failure after the
+             * synchronous ACK is still surfaced, rather than the host
+             * believing an EEPROM write succeeded that never did. */
             g_system_state.settings_save_failed = true;
             s_pending.active       = false;
             s_pending.inflight_len = 0U;
@@ -525,10 +454,10 @@ void svc_storage_update(void)
             start_section_write(s_pending.settings_src, (uint8_t)(s_pending.section_idx + 1U));
             return;
         }
-        /* The whole write genuinely finished — either all 5 settings
-         * pages, or the single calibration page — the authoritative "did
-         * it really succeed" point, as opposed to commit_edit()'s/
-         * svc_api.c's optimistic synchronous clear on queueing. */
+        /* The whole write genuinely finished — all settings pages — the
+         * authoritative "did it really succeed" point, as opposed to
+         * commit_edit()'s / svc_api.c's optimistic synchronous clear on
+         * queueing. */
         g_system_state.settings_save_failed = false;
         s_pending.active = false;
         return;
@@ -586,18 +515,6 @@ void svc_storage_init(void)
     }
 
     svc_storage_validate_settings(&g_device_settings);
-
-    /* Calibration: same pattern, but a missing/corrupt header just means
-     * the device hasn't been calibrated yet — fill zeros, leave validity
-     * flags false. Don't seed EEPROM with a "default" calibration; that
-     * would lie about the device being calibrated. */
-    DrvStatus cal_rc = svc_storage_load_calibration(&g_calibration);
-    if (cal_rc != DRV_OK) {
-        fill_default_calibration(&g_calibration);
-    }
-
-    g_system_state.calibration_valid =
-        g_calibration.scale_valid && g_calibration.zero_valid;
 }
 
 void svc_storage_validate_settings(DeviceSettings *settings)
@@ -607,10 +524,9 @@ void svc_storage_validate_settings(DeviceSettings *settings)
      * zero divisor (e.g. a future bug in whatever writes this field, or
      * an untrusted SET_SETTINGS payload from svc_api.c) would otherwise
      * fault a consumer. Covers every EEPROM-backed divisor in
-     * DeviceSettings, including filter_cutoff_hz_den/lm35_scale_mv_per_c
-     * below, which have no consumer yet (the complementary filter and
-     * LM35 driver are both future work) — guarded now anyway so whoever
-     * wires either one up inherits protection instead of having to
+     * DeviceSettings, including lm35_scale_mv_per_c below, which has no
+     * consumer yet (the LM35 driver is future work) — guarded now anyway
+     * so whoever wires it up inherits protection instead of having to
      * remember to extend this function first. encoder_counts_per_detent,
      * vbat_scale_den, and the tmp236_seg*_den pair already have live
      * consumers: App/app_ui.c divides by the encoder one every UI tick,
@@ -626,9 +542,6 @@ void svc_storage_validate_settings(DeviceSettings *settings)
     }
     if (settings->tmp236_seg2_den == 0U) {
         settings->tmp236_seg2_den = DEFAULT_TMP236_SEG2_DEN;
-    }
-    if (settings->filter_cutoff_hz_den == 0U) {
-        settings->filter_cutoff_hz_den = DEFAULT_FILTER_CUTOFF_HZ_DEN;
     }
     if (settings->lm35_scale_mv_per_c == 0U) {
         settings->lm35_scale_mv_per_c = DEFAULT_LM35_SCALE_MV_PER_C;

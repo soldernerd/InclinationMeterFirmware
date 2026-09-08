@@ -12,7 +12,6 @@
 #include "hal_power.h"
 #include "svc_api.h"
 #include "svc_battery.h"
-#include "svc_measurement.h"
 #include "svc_signal_analysis.h"
 #include "svc_storage.h"
 #include "svc_input.h"
@@ -154,7 +153,6 @@ static void task_api(void)
     svc_api_measurement_subscriptions_update();
     svc_api_topic_subscriptions_update();
 }
-static void task_measurement(void)     { svc_measurement_update();     }
 static void task_signal_analysis(void) { svc_signal_analysis_update();
                                          svc_signal_analysis_check_integrity(); }
 static void task_power(void)           { svc_power_task();             }
@@ -177,7 +175,6 @@ static SchedulerEntry s_tasks[] = {
     { task_ble,         0,                   0 },
     { task_uart,        0,                   0 },
     { task_api,             0,                   0 },
-    { task_measurement,     0,                   0 },
     { task_signal_analysis, 0,                   0 },
     { task_ui,              0,                   0 },
     { task_display,         0,                   0 },
@@ -208,14 +205,13 @@ void app_scheduler_reload_periods(void)
     s_tasks[8].period_ms  = g_device_settings.task_ble_ms;
     s_tasks[9].period_ms  = SYSTICK_PERIOD_MS;   /* uart — every tick (no EEPROM setting; RX latency + TX drain) */
     s_tasks[10].period_ms = SYSTICK_PERIOD_MS;   /* api — every tick (subscription timing accuracy) */
-    s_tasks[11].period_ms = g_device_settings.task_sensors_ms;   /* measurement */
-    s_tasks[12].period_ms = g_device_settings.task_sensors_ms;   /* signal analysis —
+    s_tasks[11].period_ms = g_device_settings.task_sensors_ms;   /* signal analysis —
                                                                  * finalizes at most this
                                                                  * often; batches complete
                                                                  * faster (see
                                                                  * svc_signal_analysis.c) */
-    s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* ui */
-    s_tasks[14].period_ms = SYSTICK_PERIOD_MS;   /* display — every tick.
+    s_tasks[12].period_ms = g_device_settings.task_display_ms;   /* ui */
+    s_tasks[13].period_ms = SYSTICK_PERIOD_MS;   /* display — every tick.
                                                  * app_display_update() renders
                                                  * the frame in DISPLAY_PAGES_PER_TICK
                                                  * bands per call (see config.h /
@@ -223,10 +219,9 @@ void app_scheduler_reload_periods(void)
                                                  * pumped every tick to finish a
                                                  * redraw promptly. Idle passes are
                                                  * a cheap change-detect early-out. */
-    /* s_tasks[15] (LEDs) and s_tasks[16] (BME280) periods are the fixed
+    /* s_tasks[14] (LEDs) and s_tasks[15] (BME280) periods are the fixed
      * literals set in the table above — not user/BLE-configurable like the
-     * others (DeviceSettings has no room left for another field — see
-     * config.h's DEFAULT_TASK_UART_MS / DEFAULT_TASK_BME280_MS). */
+     * others (see config.h's DEFAULT_TASK_LED_MS / DEFAULT_TASK_BME280_MS). */
 }
 
 void app_scheduler_init(void)

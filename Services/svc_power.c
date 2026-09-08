@@ -1,6 +1,5 @@
 #include "svc_power.h"
 #include "svc_battery.h"
-#include "svc_measurement.h"
 #include "svc_log.h"
 #include "hal_systick.h"
 #include "system_state.h"
@@ -39,8 +38,7 @@ static bool suppressed(void)
 {
     return g_system_state.usb_connected
         || g_system_state.ble_connected
-        || g_system_state.battery_charging
-        || (svc_measurement_get_state() != MEAS_STATE_IDLE);
+        || g_system_state.battery_charging;
 }
 
 void svc_power_init(void)

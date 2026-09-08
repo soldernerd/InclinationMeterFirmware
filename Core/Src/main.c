@@ -62,7 +62,6 @@
 #include "svc_power.h"
 #include "svc_api.h"
 #include "svc_log.h"
-#include "svc_measurement.h"
 #include "svc_powertest.h"
 #include "app_version.h"
 #include "stm32g0xx_ll_gpio.h"
@@ -209,8 +208,7 @@ int main(void)
   /* I2C1 / EEPROM — needs the 3.3V rail above up. */
   hal_i2c_init(HAL_I2C_MAIN);
   /* Storage must come before scheduler init — it populates
-   * g_device_settings (and g_calibration) which the scheduler reads
-   * for its task periods. */
+   * g_device_settings, which the scheduler reads for its task periods. */
   svc_storage_init();
   drv_24lc256_init();            /* idempotent — svc_storage_init already calls this */
   HAL_GPIO_TogglePin(LED_STS_PORT, LED_STS_PIN);   /* checkpoint: EEPROM load/seed done */
@@ -272,7 +270,6 @@ int main(void)
   svc_log_init();             /* log ring up before anything logs into it */
   svc_powertest_init();       /* power-investigation mask defaults to "all on" */
   svc_api_init();
-  svc_measurement_init();
   svc_usb_init();
   hal_uart_init(HAL_UART_BLE);    /* USART6 RX DMA up before the RN4871 talks */
   svc_ble_init();

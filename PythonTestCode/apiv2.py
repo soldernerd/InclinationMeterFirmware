@@ -103,8 +103,8 @@ def decode_topic_status(d: bytes):
                 rtc=(f"{yr:04d}-{mo:02d}-{da:02d} {hh:02d}:{mm:02d}:{ss:02d}"
                      + ("" if rset else " (not set)")))
 
-# Settings resource indices (DeviceSettings field order) — a few useful ones:
-SET_STREAM_INTERVAL_MS = 0x07
+# Settings resource indices — a few useful ones. IDs are stable wire
+# values with gaps (0x01, 0x07..0x0B retired with the REV A fields).
 SET_TASK_BLE_MS        = 0x03
 SET_AUTO_POWEROFF_S    = 0x1B
 SET_VBAT_OFFSET_MV     = 0x1C
@@ -188,10 +188,10 @@ def decode_identity(data: bytes):
 def decode_device_state(data: bytes):
     if len(data) < 7:
         return None
-    bst, soc, mv, usb, ble, cal = struct.unpack("<BBHBBB", data[:7])
+    bst, soc, mv, usb, ble, rsvd = struct.unpack("<BBHBBB", data[:7])
     names = {0: "NORMAL", 1: "LOW", 2: "CRITICAL", 3: "CHARGING", 4: "FULL"}
     return (f"battery={names.get(bst, bst)} {soc}% {mv}mV  "
-            f"usb={usb} ble={ble}  cal_valid={cal}")
+            f"usb={usb} ble={ble}  reserved0={rsvd}")
 
 
 _WD = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}

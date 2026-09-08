@@ -7,7 +7,6 @@
 
 /* --- Scheduler task periods (ms) --- */
 #define DEFAULT_TASK_SENSORS_MS         100
-#define DEFAULT_TASK_PROCESSING_MS      100
 #define DEFAULT_TASK_DISPLAY_MS         100
 #define DEFAULT_TASK_LED_MS             250     /* status LED toggle period -> 2 Hz blink */
 #define DEFAULT_TASK_BLE_MS             100
@@ -24,18 +23,6 @@
  * at -O2). 3 bands/tick -> a full redraw completes in ~5 scheduler ticks;
  * on a Sharp LCD the top-to-bottom fill is imperceptible. */
 #define DISPLAY_PAGES_PER_TICK          3
-
-/* --- Data streaming --- */
-#define DEFAULT_STREAM_INTERVAL_MS      200
-
-/* --- Settling --- */
-#define SETTLING_BUFFER_SIZE            256
-#define DEFAULT_SETTLING_THRESHOLD      10
-#define DEFAULT_SETTLING_TIMEOUT_MS     30000
-
-/* --- Complementary filter --- */
-#define DEFAULT_FILTER_CUTOFF_HZ_NUM    1
-#define DEFAULT_FILTER_CUTOFF_HZ_DEN    2
 
 /* --- Battery ---
  * Voltage-based thresholds (2026-09-01, user-specified):
@@ -107,8 +94,12 @@
  * needing to shift addresses again. */
 #define EEPROM_MAGIC                     0xA55A
 
-#define EEPROM_SCHEDULER_SETTINGS_ADDR    0x0000  /* task periods, stream interval, settling, filter */
-#define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0001
+#define EEPROM_SCHEDULER_SETTINGS_ADDR    0x0000  /* task periods */
+#define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0002  /* 0x0002: dropped the REV A
+                                                     stream_interval / settling /
+                                                     complementary-filter / task_processing
+                                                     fields — a stored 0x0001 page is
+                                                     discarded and reseeded from DEFAULT_*. */
 #define EEPROM_BATTERY_SETTINGS_ADDR      0x0100  /* thresholds + ADC divider scale */
 #define EEPROM_BATTERY_SETTINGS_VERSION   0x0004  /* 0x0002: added battery_charge_start_mv
                                                      and retuned thresholds (WP2 debug).
@@ -124,9 +115,9 @@
 #define EEPROM_LM35_SETTINGS_VERSION      0x0001
 #define EEPROM_ENCODER_SETTINGS_ADDR      0x0400  /* quadrature counts/detent */
 #define EEPROM_ENCODER_SETTINGS_VERSION   0x0001
-
-#define EEPROM_CALIBRATION_ADDR         0x0500     /* moved from 0x0100 */
-#define EEPROM_CALIBRATION_VERSION      0x0001
+/* 0x0500 was the REV A SCL3300/PCAP04 tilt CalibrationData page — removed
+ * with the rest of the REV A sensor stack. Next free page for a REV B
+ * calibration store. */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably

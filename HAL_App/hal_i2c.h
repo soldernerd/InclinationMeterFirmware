@@ -6,8 +6,8 @@
 #include "drv_common.h"
 
 typedef enum {
-    HAL_I2C_MAIN = 0,   /* I2C1 — EEPROM (and PCAP04 #1 in later WPs) */
-    HAL_I2C_AUX  = 1,   /* I2C2 — reserved, stub in WP2 */
+    HAL_I2C_MAIN = 0,   /* I2C1 — EEPROM + BME280 (shared bus) */
+    HAL_I2C_AUX  = 1,   /* I2C2 — reserved, unused */
     HAL_I2C_COUNT
 } HalI2cInstance;
 

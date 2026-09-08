@@ -245,20 +245,20 @@ typedef enum {
 #define API2_TOPIC_SLOTS        4U          /* direct-indexed by resource id */
 
 /* ---------------- Settings (0x3: GET, SET) ----------------
- * Indices in DeviceSettings field order (the pad `battery_page_reserved`
- * is not a resource). */
+ * Resource IDs are stable wire values, not a dense sequence. 0x01 and
+ * 0x07..0x0B are retired: they were the REV A task_processing_ms /
+ * stream_interval_ms / settling_threshold / settling_timeout /
+ * complementary-filter fields, removed with the REV A sensor stack. The
+ * gaps stay so every surviving ID keeps its number. */
 #define API2_RES_SET_TASK_SENSORS_MS         0x00U
-#define API2_RES_SET_TASK_PROCESSING_MS      0x01U
+/* 0x01 retired (task_processing_ms) */
 #define API2_RES_SET_TASK_DISPLAY_MS         0x02U
 #define API2_RES_SET_TASK_BLE_MS             0x03U
 #define API2_RES_SET_TASK_USB_MS             0x04U
 #define API2_RES_SET_TASK_BATTERY_MS         0x05U
 #define API2_RES_SET_TASK_TEMPERATURE_MS     0x06U
-#define API2_RES_SET_STREAM_INTERVAL_MS      0x07U
-#define API2_RES_SET_SETTLING_THRESHOLD      0x08U
-#define API2_RES_SET_SETTLING_TIMEOUT_MS     0x09U
-#define API2_RES_SET_FILTER_CUTOFF_HZ_NUM    0x0AU
-#define API2_RES_SET_FILTER_CUTOFF_HZ_DEN    0x0BU
+/* 0x07..0x0B retired (stream_interval_ms, settling_threshold,
+ * settling_timeout_ms, filter_cutoff_hz_num, filter_cutoff_hz_den) */
 #define API2_RES_SET_BATTERY_CRITICAL_MV     0x0CU
 #define API2_RES_SET_BATTERY_LOW_MV          0x0DU
 #define API2_RES_SET_BATTERY_CHARGE_START_MV 0x0EU

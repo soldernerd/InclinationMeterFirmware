@@ -28,9 +28,6 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *settings);
  * Services/svc_battery.c, Drivers_App/drv_tmp236.c). */
 void svc_storage_validate_settings(DeviceSettings *settings);
 
-DrvStatus svc_storage_save_calibration(const CalibrationData *cal);
-DrvStatus svc_storage_load_calibration(CalibrationData *cal);
-
 bool      svc_storage_is_busy(void); /* true while a write operation is in progress */
 
 #endif /* SVC_STORAGE_H */

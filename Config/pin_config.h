@@ -415,8 +415,9 @@
                                                * generation as the DAC's
                                                * TIM1_CH4/PC11. */
 
-/* Reserved for later work packages:
- *   SCL3300 / PCAP04 — removed from REV B hardware, no longer applicable
+/* The REV A SCL3300 MEMS inclinometer and PCAP04 capacitive front-end are
+ * not on REV B hardware and their firmware was removed — see the git
+ * history around fw 0.9.41 if a future tilt sensor needs a starting point.
  *
  * Encoder A/B quadrature and buzzer TIM3_CH4 were WP3 scope, USB DP/DM
  * was WP4, RN4871 UART/reset/GPIO was WP5, AD9833 DAC was WP7, ADS131M04

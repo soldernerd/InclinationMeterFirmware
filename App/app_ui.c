@@ -1,7 +1,6 @@
 #include "app_ui.h"
 #include "drv_buzzer.h"
 #include "svc_storage.h"
-#include "svc_measurement.h"
 #include "app_scheduler.h"
 #include "system_state.h"
 #include "hal_power.h"
@@ -29,8 +28,6 @@ static int32_t s_enc2_pos;
 static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_DISPLAY_RATE]     = { "Display rate",     "ms",   10,    50,    500 },
     [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
-    [UI_SETTING_STREAM_INTERVAL]  = { "Stream interval",  "ms",   50,   100,   2000 },
-    [UI_SETTING_SETTLING_TIMEOUT] = { "Settling timeout", "ms", 1000,  5000,  60000 },
     [UI_SETTING_AUTO_POWEROFF]    = { "Auto power-off",   "s",    30,     0,   3600 },
     /* step 0 marks these action rows — see UiSettingMeta's comment. */
     [UI_SETTING_FORCE_CHARGE]     = { "Force charge",     "",      0,     0,      0 },
@@ -51,8 +48,6 @@ int32_t app_ui_setting_read(UiSettingIndex i)
     switch (i) {
         case UI_SETTING_DISPLAY_RATE:     return (int32_t)g_device_settings.task_display_ms;
         case UI_SETTING_BATTERY_CRITICAL: return (int32_t)g_device_settings.battery_critical_mv;
-        case UI_SETTING_STREAM_INTERVAL:  return (int32_t)g_device_settings.stream_interval_ms;
-        case UI_SETTING_SETTLING_TIMEOUT: return (int32_t)g_device_settings.settling_timeout_ms;
         case UI_SETTING_AUTO_POWEROFF:    return (int32_t)g_device_settings.auto_poweroff_s;
         default:                          return 0;
     }
@@ -65,10 +60,6 @@ static void setting_write(UiSettingIndex i, int32_t v)
             g_device_settings.task_display_ms = (uint16_t)v;     break;
         case UI_SETTING_BATTERY_CRITICAL:
             g_device_settings.battery_critical_mv = (uint16_t)v; break;
-        case UI_SETTING_STREAM_INTERVAL:
-            g_device_settings.stream_interval_ms = (uint16_t)v;  break;
-        case UI_SETTING_SETTLING_TIMEOUT:
-            g_device_settings.settling_timeout_ms = (uint32_t)v; break;
         case UI_SETTING_AUTO_POWEROFF:
             g_device_settings.auto_poweroff_s = (uint16_t)v;     break;
         default:                                                 break;
@@ -228,8 +219,7 @@ void app_ui_update(void)
     /* ---- LEFT encoder: screen-level navigation ----
      * Rotate = move between screens (LIVE <-> STATUS <-> SETTINGS).
      * Ignored while editing a value so you can't accidentally jump away
-     * mid-edit. Push = back / cancel (and cancels an in-progress
-     * measurement first — see below). */
+     * mid-edit. Push = back / cancel (cancels a settings edit first). */
     if (!g_ui_state.settings_editing) {
         if (e2_steps > 0) {
             switch_screen(next_screen(g_ui_state.current_screen));
@@ -241,14 +231,7 @@ void app_ui_update(void)
     }
     if (e2_press) {
         beep_confirm();
-        /* A measurement in progress takes priority over the normal
-         * back/cancel: App/app_display.c's overlay replaces the whole
-         * screen body and explicitly tells the user "[ENC2 push] Cancel"
-         * while it's showing, so honor that before falling through to
-         * settings-edit-cancel / screen-back. */
-        if (svc_measurement_get_state() != MEAS_STATE_IDLE) {
-            svc_measurement_cancel();
-        } else if (g_ui_state.settings_editing) {
+        if (g_ui_state.settings_editing) {
             cancel_edit();
         } else {
             switch_screen(g_ui_state.previous_screen);

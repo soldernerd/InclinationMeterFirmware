@@ -70,8 +70,8 @@ async def run_basic(link):
     else:
         print(f"  TEMP          [{a.STATUS.get(st, st)}] {(data or b'').hex()}")
 
-    getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)
-    setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_STREAM_INTERVAL_MS)
+    getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
+    setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
     st, data = await request(link, getop)
     if st == 0 and len(data) >= 2:
         cur = struct.unpack("<H", data[:2])[0]
@@ -79,10 +79,10 @@ async def run_basic(link):
         st2, _ = await request(link, setop, struct.pack("<H", new))
         st3, data3 = await request(link, getop)
         back = struct.unpack("<H", data3[:2])[0] if (st3 == 0 and len(data3) >= 2) else None
-        print(f"  SETTINGS      stream_interval_ms {cur} -> set {new} "
+        print(f"  SETTINGS      auto_poweroff_s {cur} -> set {new} "
               f"[{a.STATUS.get(st2, st2)}] -> read back {back}")
     else:
-        print(f"  SETTINGS      GET stream_interval_ms [{a.STATUS.get(st, st)}]")
+        print(f"  SETTINGS      GET auto_poweroff_s [{a.STATUS.get(st, st)}]")
 
     # RTC: read, set to this host's wall clock, read back.
     st, data = await request(link, a.opcode(a.GET, a.CAT_SYSTEM, a.SYS_RTC))
