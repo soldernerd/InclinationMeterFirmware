@@ -207,7 +207,8 @@ def decode_rtc(data: bytes):
 
 
 def decode_adc_diag(data: bytes):
-    """Raw-data 0x7/0x00 GET response-after-status (24 B). Returns a dict."""
+    """Raw-data 0x7/0x00 GET response-after-status. 24 B base + 18 B
+    acquisition-integrity tail (fw 0.9.13+). Returns a dict."""
     if len(data) < 24:
         return None
     (rid, rst, rmode, rclk, rgain, rcfg, rclk_exp,
@@ -216,7 +217,7 @@ def decode_adc_diag(data: bytes):
     osr = _OSR_TABLE[osr_field]
     fdata_nominal = ADC_FCLKIN_HZ / (2 * osr)
     eff = (samp * 1000.0 / elapsed) if elapsed else 0.0
-    return {
+    out = {
         "ID": rid, "STATUS": rst, "MODE": rmode,
         "CLOCK": rclk, "CLOCK_expected": rclk_exp,
         "GAIN1": rgain, "CFG": rcfg,
@@ -226,6 +227,17 @@ def decode_adc_diag(data: bytes):
         "last_capture": {"samples": samp, "drops": drops, "elapsed_ms": elapsed,
                          "effective_Hz": eff},
     }
+    if len(data) >= 48:
+        (produced, drained, overflow, clamped, clamp_max,
+         w0_first, w0_last, crc_last) = struct.unpack("<IIIIHHHH", data[24:48])
+        out["integrity"] = {
+            "frames_produced": produced, "frames_drained": drained,
+            "ring_overflow": overflow, "backlog": produced - drained,
+            "drain_clamped": clamped, "drain_clamp_max": clamp_max,
+            "word0_first": w0_first, "word0_last": w0_last,
+            "crc_rx_last": crc_last,
+        }
+    return out
 
 
 def _s24le(b, o):

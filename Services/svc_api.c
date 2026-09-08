@@ -549,6 +549,7 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
     }
 
     const Ads131m04Regs *r = drv_ads131m04_get_regs();
+    const Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
     uint16_t samples = 0, drops = 0;
     uint32_t elapsed = 0;
     svc_signal_analysis_last_capture(&samples, &drops, &elapsed);
@@ -561,6 +562,15 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         uint16_t last_samples;
         uint16_t last_drops;
         uint32_t last_elapsed_ms;
+        /* acquisition integrity (docs/adc_acquisition_redesign.md) */
+        uint32_t frames_produced;
+        uint32_t frames_drained;
+        uint32_t ring_overflow;
+        uint32_t drain_clamped;
+        uint16_t drain_clamp_max;
+        uint16_t word0_first;
+        uint16_t word0_last;
+        uint16_t crc_rx_last;
     } p;
     p.id              = r->id;
     p.status          = r->status;
@@ -574,6 +584,14 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
     p.last_samples    = samples;
     p.last_drops      = drops;
     p.last_elapsed_ms = elapsed;
+    p.frames_produced = ig->frames_produced;
+    p.frames_drained  = ig->frames_drained;
+    p.ring_overflow   = ig->ring_overflow;
+    p.drain_clamped   = ig->drain_clamped;
+    p.drain_clamp_max = ig->drain_clamp_max;
+    p.word0_first     = ig->word0_count ? ig->word0_sample[0] : 0U;
+    p.word0_last      = ig->word0_count ? ig->word0_sample[ig->word0_count - 1U] : 0U;
+    p.crc_rx_last     = ig->crc_rx_last;
 
     send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
 }

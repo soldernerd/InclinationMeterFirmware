@@ -27,16 +27,41 @@ DrvStatus drv_ads131m04_start(void);
 void      drv_ads131m04_stop(void);
 bool      drv_ads131m04_is_running(void);
 
-/* Fired once per sample, from the acquisition trigger's interrupt
- * context (HAL_App/hal_tim.c's TIM7 callback -> this driver's DMA
- * completion handler) — keep the callback itself short (no blocking
- * calls). Values are raw two's-complement 24-bit ADC codes, sign-
- * extended to int32_t (datasheet "ADC Conversion Data" — 1 LSB =
- * 2.4 V / Gain / 2^24, and Gain = 1 here). Channel-to-voltage and any
- * further signal analysis belongs above this driver, per CLAUDE.md 8.1 —
+/* Fired once per sample. As of the ADC_Optimization work this runs in the
+ * SysTick drain, not the TIM7 ISR: the SPI RX DMA writes each frame
+ * straight into a ring slot, the trigger ISR just advances head, and
+ * SysTick does the sign-extend + this callback in batches
+ * (docs/adc_acquisition_redesign.md). Still keep the callback short — no
+ * blocking calls. Values are raw two's-
+ * complement 24-bit ADC codes, sign-extended to int32_t (datasheet "ADC
+ * Conversion Data" — 1 LSB = 2.4 V / Gain / 2^24, Gain = 1). Channel-to-
+ * voltage and further analysis belong above this driver (CLAUDE.md 8.1) —
  * see Services/svc_signal_analysis.c. */
 typedef void (*Ads131m04SampleCb)(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3);
 void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb);
+
+/* Runs the frame-ring drain (sign-extend + per-sample callback for every
+ * queued frame). Call site: Core/Src/stm32g0xx_it.c's SysTick_Handler,
+ * once per ms. No-op unless acquisition is running. */
+void drv_ads131m04_drain_tick(void);
+
+/* --- acquisition integrity (docs/adc_acquisition_redesign.md) ---
+ * Reset at drv_ads131m04_start(). Phase 1 is mostly observational: the
+ * counters are live, word0_sample/crc_rx_last capture on-the-wire
+ * behaviour so Phase 2 can turn CRC + conversion-count checks into a
+ * latching ERROR gate. */
+typedef struct {
+    uint32_t frames_produced;   /* frames the TIM7 ISR pushed to the ring */
+    uint32_t frames_drained;    /* frames the SysTick drain consumed */
+    uint32_t ring_overflow;     /* pushes dropped: drain a whole ring behind */
+    uint32_t drain_clamped;     /* drain calls where head-tail exceeded the ring */
+    uint16_t drain_clamp_max;   /* largest head-tail gap seen */
+    uint16_t word0_sample[8];   /* first frames' response/STATUS word this run */
+    uint8_t  word0_count;
+    uint16_t crc_rx_last;       /* most recent frame's CRC word (top 16 bits) */
+} Ads131m04Integrity;
+
+const Ads131m04Integrity *drv_ads131m04_get_integrity(void);
 
 /* Saturating count of trigger ticks where DRDY was not yet low (sample
  * skipped rather than read) — CLAUDE.md 7.6 escalation for a case that

@@ -124,9 +124,11 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
         return;
     }
 
-    /* Runs in the ADC DMA-completion interrupt at 20833 Hz — keep it
-     * cheap. Pre-shifted samples keep the products in int32 so this is a
-     * 32x32->32 multiply plus a 64-bit add, not a 32x32->64 multiply. */
+    /* Runs in the PendSV drain (lowest NVIC priority), batched ~1.3 kHz,
+     * ~20833 Hz aggregate — no longer the TIM7 ISR itself (see
+     * docs/adc_acquisition_redesign.md). Still keep it cheap. Pre-shifted
+     * samples keep the products in int32 so this is a 32x32->32 multiply
+     * plus a 64-bit add, not a 32x32->64 multiply. */
     const int32_t ch[NUM_CHANNELS] = {
         ch0 >> SAMPLE_SHIFT, ch1 >> SAMPLE_SHIFT,
         ch2 >> SAMPLE_SHIFT, ch3 >> SAMPLE_SHIFT

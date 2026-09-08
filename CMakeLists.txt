@@ -98,6 +98,19 @@ target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
 set_source_files_properties(${APP_SOURCES} "${CMAKE_SOURCE_DIR}/system_state.c"
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror")
 
+# ADS131M04 acquisition hot path: the per-sample sign-extend + single-bin
+# DFT MAC runs ~20833x/s from the SysTick drain. At the Debug default -O0
+# the int64 MAC is heavy enough to starve the cooperative scheduler
+# (~600 ms thread-mode stalls, see docs/adc_acquisition_redesign.md).
+# Force -O2 on just these two files in every config; the rest of the
+# firmware stays at the build type's optimisation for debuggability.
+# (Overrides the COMPILE_OPTIONS set just above for these files, so the
+# warning flags are repeated here.)
+set_source_files_properties(
+    "${CMAKE_SOURCE_DIR}/Services/svc_signal_analysis.c"
+    "${CMAKE_SOURCE_DIR}/Drivers_App/drv_ads131m04.c"
+    PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-O2")
+
 # Remove wrong libob.a library dependency when using cpp files
 list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 

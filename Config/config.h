@@ -195,6 +195,16 @@
  * 20833.33 Hz — first-cut update rate, safe to retune. */
 #define SIGNAL_ANALYSIS_BATCH_CYCLES   64U
 
+/* --- ADS131M04 frame ring (docs/adc_acquisition_redesign.md) ---
+ * The SPI1 RX DMA writes each frame straight into a ring slot; the TIM7
+ * ISR only advances the head index. The per-sample sign-extend + DFT MAC
+ * + bulk-store run in the SysTick drain (drv_ads131m04_drain_tick, ~21
+ * frames/ms at fDATA). Ring depth in frames (power of two — index math
+ * uses & (N-1)). 64 x 18 B ~= 1.2 KB, ~2 ms of slack before the DMA laps
+ * the drain. Producer laps consumer -> ring_overflow counter + drop-
+ * newest (Phase 2 adds a latching ERROR). */
+#define ADC_FRAME_RING_FRAMES          64U
+
 /* --- Bulk raw-ADC capture (API v2, category 0x8 / START_BULK) ---
  * Decouples high-rate sampling from transport speed: the device fills a
  * RAM buffer at the full 20833.33 Hz sample rate, then streams it out in

@@ -27,20 +27,24 @@ rev: move DRDY to a pin with a free EXTI line.** Until then it is polled.
 
 ### Buffer + drain
 
-- SPI1 RX DMA writes frames into a **64-frame circular ring**
-  (`ADC_FRAME_RING_FRAMES`, 64 × 18 B ≈ 1.2 KB).
-- Consumer runs from **PendSV at the lowest NVIC priority (3)** — preempted
-  by SysTick and every real timer/DMA/comms IRQ, preempts nothing that
-  matters. Its only hard deadline is "drain before the ring wraps": with a
-  half-ring drain that is ~32 frames ≈ 1.5 ms of slack for a ≈ 60 µs job.
-- Drain granularity: **half the ring (32 frames)** per wake — pended at the
-  half and full points. Bigger batches amortise the fixed exception cost;
-  32 is far below any latency any consumer needs (the DFT batch is 512
-  samples ≈ 24 ms before it produces a number).
+- SPI1 RX DMA writes each frame **directly into the next ring slot**
+  (`ADC_FRAME_RING_FRAMES` = 64, 64 × 18 B ≈ 1.2 KB) — zero-copy. The TIM7
+  trigger ISR only advances `s_ring_head` and re-arms the DMA at the
+  following slot; no `memcpy` in the ISR (a byte-copy loop there at the
+  Debug `-O0` cost near-wedged the scheduler — bench, fw 0.9.15).
+- Consumer runs from **SysTick (1 kHz)**, not PendSV. A PendSV soft-IRQ
+  re-pends itself and, being higher exception priority than SysTick, can
+  starve thread mode outright once it can't drain faster than it's pended
+  (bench, fw 0.9.13–0.9.15). A periodic tick can't: it does ~21 frames of
+  work per ms and returns. Slack before the ring wraps is ~2 ms.
+- The per-sample sign-extend + single-bin DFT MAC is heavy at `-O0`;
+  `Services/svc_signal_analysis.c` and `Drivers_App/drv_ads131m04.c` are
+  pinned to `-O2` in every build config (`CMakeLists.txt`) so the SysTick
+  drain stays ~40 µs/ms instead of ~900 µs/ms.
 
 Consumers (`svc_signal_analysis`'s DFT MAC and the bulk-capture store) are
 unchanged — they still receive one `on_sample(ch0..3)` per conversion, just
-from the PendSV drain instead of the TIM7 ISR.
+from the SysTick drain instead of the TIM7 ISR.
 
 ### Pacing / CS
 
@@ -91,14 +95,25 @@ TX ring.
 
 ## Phasing (each phase is independently mergeable)
 
-**Phase 1 — relocate the consumer (this iteration).**
-TIM7 ISR unchanged except it pushes the raw frame (+ a `TIM2->CNT`
-stamp) into the ring and pends PendSV instead of doing sign-extend + MAC
-inline. PendSV drain (prio 3) does sign-extend + `on_sample` + ring-
-overflow detection, and *records* word-0 / CRC behaviour for API
-read-back so Phase 2's integrity gate is built on confirmed facts.
-Bench gate: same ~20 833 Hz, 0 drops, tone at 2604 Hz, scheduler
-responsive (clean status LED), integrity counters zero.
+**Phase 1 — relocate the consumer. DONE (fw 0.9.17, bench-verified).**
+Zero-copy DMA-into-ring; TIM7 ISR advances head + re-arms; SysTick drains
+(sign-extend + `on_sample` + ring-overflow / clamp counters), and records
+word-0 / CRC bytes for API read-back (`Raw data 0x00`) so Phase 2's
+integrity gate is built on confirmed facts. Hot path forced to `-O2`.
+
+Bench (fw 0.9.17): 60 s continuous — rate 20731–20853 Hz (nominal 20833),
+`backlog` steady 6–8 frames, `ring_overflow` 0, `drain_clamped` 0. Bulk
+capture 6144 samples, 0 gaps; tone 2604.1 Hz, 77–78 dB SNR on ch1/ch2;
+ch0/ch3 at the noise floor. Observed: `word0` (STATUS response word) is a
+constant `0x010F` every frame — its DRDY bits do **not** toggle
+fresh/stale, so Phase 2's conversion-count check can't lean on them; the
+CRC word does vary per frame (candidate for the CRC check). API
+round-trip latency while running has an occasional ~245 ms bump (~1/s);
+this is **pre-existing** — master shows the same at ~450 ms — and PC
+sampling during it shows the cooperative loop spinning normally, no
+single hog, so it reads as scheduler-jitter / host-serial interaction
+under the added ISR load rather than a hard stall. Left for a separate
+look; not a regression from this work.
 
 **Phase 2 — integrity gate + optional continuous-CS.**
 Turn the recorded observations into the live checks above (dedup

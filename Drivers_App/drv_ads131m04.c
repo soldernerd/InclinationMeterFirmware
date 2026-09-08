@@ -5,6 +5,7 @@
 #include "hal_systick.h"
 #include "pin_config.h"
 #include "config.h"
+#include "stm32g0xx_hal.h"   /* __disable_irq / __enable_irq */
 
 /* Register addresses used here (datasheet Table 8-12, "Register Map"). */
 #define REG_ID      0x00U
@@ -59,7 +60,20 @@ static bool              s_xfer_active = false;
 static Ads131m04Regs     s_regs;
 
 static const uint8_t s_tx_zero[FRAME_BYTES] = { 0 };   /* NULL command, no CRC */
-static uint8_t       s_rx_buf[FRAME_BYTES];
+
+/* --- Frame ring (docs/adc_acquisition_redesign.md, Phase 1) ---
+ * Zero-copy: the SPI1 RX DMA writes each frame straight into the next
+ * ring slot; on_trigger() (TIM7 ISR) just advances head and re-arms the
+ * DMA at the following slot. drain_ring() (SysTick) does the sign-extend
+ * + per-sample callback. SPSC: head is written only by the TIM7 ISR, tail
+ * only by SysTick; 16-bit aligned index loads/stores are atomic on M0+,
+ * so no locking. FRAME_RING_FRAMES is a power of two -> mask, not modulo. */
+#define FRAME_RING_MASK  (ADC_FRAME_RING_FRAMES - 1U)
+static uint8_t           s_ring[ADC_FRAME_RING_FRAMES][FRAME_BYTES];
+static volatile uint16_t s_ring_head;   /* produced count (free-running) */
+static volatile uint16_t s_ring_tail;   /* drained count  (free-running) */
+
+static Ads131m04Integrity s_integ;
 
 /* Blocking, TX-only, single-register write -- used only during the
  * one-time init sequence below, never during streaming. Ignores
@@ -143,6 +157,68 @@ static int32_t sign_extend24(uint8_t msb, uint8_t mid, uint8_t lsb)
     return (int32_t)v;
 }
 
+/* Frame-ring drain — process every frame the TIM7 ISR has queued. Called
+ * from SysTick (1 kHz, see Core/Src/stm32g0xx_it.c) and, to flush the
+ * tail, from drv_ads131m04_stop() with interrupts masked. A periodic tick
+ * (not a re-pending soft IRQ) can't starve thread mode: ~21 frames/tick
+ * at fDATA, ~40 us of work per 1 ms. Phase 1: sign-extend + per-sample
+ * callback (DFT MAC / bulk store), plus record word0 / CRC bytes per run
+ * for API read-back so Phase 2's integrity gate is built on confirmed
+ * on-the-wire behaviour. */
+static void drain_ring(void)
+{
+    uint16_t tail = s_ring_tail;
+    uint16_t head = s_ring_head;                 /* volatile: snapshot once */
+
+    /* Hard bound: never process more than one ring's worth per call, no
+     * matter what the indices say. A larger gap means the producer lapped
+     * us (already counted as ring_overflow) or an index was seen torn —
+     * clamp rather than spin. */
+    uint16_t gap = (uint16_t)(head - tail);
+    if (gap > ADC_FRAME_RING_FRAMES) {
+        if (gap > s_integ.drain_clamp_max) {
+            s_integ.drain_clamp_max = gap;
+        }
+        s_integ.drain_clamped++;
+        tail = (uint16_t)(head - ADC_FRAME_RING_FRAMES);
+    }
+
+    while (tail != head) {
+        const uint8_t *f = s_ring[tail & FRAME_RING_MASK];
+
+        if (s_integ.word0_count < (uint8_t)(sizeof s_integ.word0_sample /
+                                            sizeof s_integ.word0_sample[0])) {
+            s_integ.word0_sample[s_integ.word0_count++] =
+                (uint16_t)((f[0] << 8) | f[1]);
+        }
+        /* Frame CRC bytes as the ADS sent them (word 5, top 16 bits) —
+         * recorded raw; Phase 2 confirms the polynomial/range before this
+         * becomes a live check. */
+        s_integ.crc_rx_last = (uint16_t)((f[5 * WORD_BYTES] << 8)
+                                       | f[5 * WORD_BYTES + 1]);
+
+        if (s_on_sample != 0) {
+            int32_t ch0 = sign_extend24(f[1 * WORD_BYTES], f[1 * WORD_BYTES + 1], f[1 * WORD_BYTES + 2]);
+            int32_t ch1 = sign_extend24(f[2 * WORD_BYTES], f[2 * WORD_BYTES + 1], f[2 * WORD_BYTES + 2]);
+            int32_t ch2 = sign_extend24(f[3 * WORD_BYTES], f[3 * WORD_BYTES + 1], f[3 * WORD_BYTES + 2]);
+            int32_t ch3 = sign_extend24(f[4 * WORD_BYTES], f[4 * WORD_BYTES + 1], f[4 * WORD_BYTES + 2]);
+            s_on_sample(ch0, ch1, ch2, ch3);
+        }
+
+        tail++;
+        s_integ.frames_drained++;
+    }
+    s_ring_tail = tail;
+}
+
+/* Called from Core/Src/stm32g0xx_it.c's SysTick_Handler, once per ms. */
+void drv_ads131m04_drain_tick(void)
+{
+    if (s_running) {
+        drain_ring();
+    }
+}
+
 /* DRDY poll + raw-DMA frame read -- called from TIM7's lean ISR at 2x the
  * ADC data rate (config.h ADS131M04_TRIGGER_TIMER_PERIOD). DRDY is polled
  * as a level, not an edge (PA1/PB1 EXTI1 conflicts with the encoder --
@@ -171,13 +247,15 @@ static void on_trigger(void)
         hal_spi_cs_deassert(HAL_SPI_ADC);
         s_xfer_active = false;
 
-        if (s_on_sample != 0) {
-            /* word0=response, word1..4 = CH0..CH3, word5 = CRC. */
-            int32_t ch0 = sign_extend24(s_rx_buf[1 * WORD_BYTES], s_rx_buf[1 * WORD_BYTES + 1], s_rx_buf[1 * WORD_BYTES + 2]);
-            int32_t ch1 = sign_extend24(s_rx_buf[2 * WORD_BYTES], s_rx_buf[2 * WORD_BYTES + 1], s_rx_buf[2 * WORD_BYTES + 2]);
-            int32_t ch2 = sign_extend24(s_rx_buf[3 * WORD_BYTES], s_rx_buf[3 * WORD_BYTES + 1], s_rx_buf[3 * WORD_BYTES + 2]);
-            int32_t ch3 = sign_extend24(s_rx_buf[4 * WORD_BYTES], s_rx_buf[4 * WORD_BYTES + 1], s_rx_buf[4 * WORD_BYTES + 2]);
-            s_on_sample(ch0, ch1, ch2, ch3);
+        /* The DMA has already written this frame into s_ring[head]. Commit
+         * it by advancing head — unless the drain is a whole ring behind,
+         * in which case leave head put (drop-newest) and count it. */
+        uint16_t head = s_ring_head;
+        if ((uint16_t)(head - s_ring_tail) >= ADC_FRAME_RING_FRAMES) {
+            s_integ.ring_overflow++;
+        } else {
+            s_ring_head = head + 1U;
+            s_integ.frames_produced++;
         }
     }
 
@@ -185,8 +263,10 @@ static void on_trigger(void)
         return;                           /* DRDY high -- nothing new */
     }
 
+    /* Arm the next read straight into the next ring slot (zero-copy). */
     hal_spi_cs_assert(HAL_SPI_ADC);
-    hal_spi_adc_stream_begin(s_tx_zero, s_rx_buf, FRAME_BYTES);
+    hal_spi_adc_stream_begin(s_tx_zero, s_ring[s_ring_head & FRAME_RING_MASK],
+                             FRAME_BYTES);
     s_xfer_active = true;
 }
 
@@ -229,11 +309,26 @@ DrvStatus drv_ads131m04_init(void)
      * blocking/HAL-SPI calls on this bus after this point). */
     hal_spi_adc_stream_init();
 
+    /* The frame drain runs from SysTick (Core/Src/stm32g0xx_it.c) — a
+     * periodic 1 kHz tick that always preempts thread mode but, being
+     * periodic rather than a self-re-pending soft IRQ, cannot starve it.
+     * SysTick keeps its default priority (lowest, below every peripheral
+     * IRQ). No extra wiring here. */
+
     /* Trigger callback is registered here but the timer is left stopped —
      * drv_ads131m04_start() arms it. See the header comment. */
     hal_tim_adc_trigger_register_callback(on_trigger);
 
     return DRV_OK;
+}
+
+static void ring_reset(void)
+{
+    s_ring_head = 0U;
+    s_ring_tail = 0U;
+    for (uint32_t i = 0; i < sizeof s_integ; ++i) {
+        ((uint8_t *)&s_integ)[i] = 0U;
+    }
 }
 
 DrvStatus drv_ads131m04_start(void)
@@ -243,6 +338,7 @@ DrvStatus drv_ads131m04_start(void)
     }
     s_dropped_count = 0;
     s_xfer_active   = false;
+    ring_reset();
     s_running = true;
     hal_tim_adc_trigger_start();
     return DRV_OK;
@@ -265,6 +361,12 @@ void drv_ads131m04_stop(void)
         s_xfer_active = false;
     }
     hal_spi_cs_deassert(HAL_SPI_ADC);
+
+    /* Flush the tail with SysTick masked so its drain can't race this one
+     * (the trigger is already stopped, so head is stable). */
+    __disable_irq();
+    drain_ring();
+    __enable_irq();
 }
 
 bool drv_ads131m04_is_running(void)
@@ -280,4 +382,9 @@ void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb)
 uint16_t drv_ads131m04_get_dropped_count(void)
 {
     return s_dropped_count;
+}
+
+const Ads131m04Integrity *drv_ads131m04_get_integrity(void)
+{
+    return &s_integ;
 }

@@ -111,6 +111,13 @@ def main():
     lc = d["last_capture"]
     print(f"  last capture: {lc['samples']} samples, {lc['drops']} drops, "
           f"{lc['elapsed_ms']} ms  -> effective {lc['effective_Hz']:.0f} Hz")
+    ig = d.get("integrity")
+    if ig:
+        print(f"  integrity: produced {ig['frames_produced']}  drained {ig['frames_drained']}"
+              f"  backlog {ig['backlog']}  ring_overflow {ig['ring_overflow']}"
+              f"  drain_clamped {ig['drain_clamped']} (max gap {ig['drain_clamp_max']})")
+        print(f"             word0 first=0x{ig['word0_first']:04X} last=0x{ig['word0_last']:04X}"
+              f"  crc_rx_last=0x{ig['crc_rx_last']:04X}")
 
 
 if __name__ == "__main__":

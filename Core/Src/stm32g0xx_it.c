@@ -23,6 +23,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "hal_tim.h"
+#include "drv_ads131m04.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -147,7 +148,11 @@ void SysTick_Handler(void)
   /* USER CODE END SysTick_IRQn 0 */
   HAL_IncTick();
   /* USER CODE BEGIN SysTick_IRQn 1 */
-
+  /* Drain the ADS131M04 frame ring: sign-extend + per-sample MAC / bulk
+   * store for whatever the TIM7 trigger ISR has queued (~21 frames/ms at
+   * fDATA). No-op unless acquisition is running.
+   * See docs/adc_acquisition_redesign.md. */
+  drv_ads131m04_drain_tick();
   /* USER CODE END SysTick_IRQn 1 */
 }
 
