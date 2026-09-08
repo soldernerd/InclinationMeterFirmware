@@ -142,14 +142,18 @@ up on the next fire (DRDY still asserted), so no conversion is skipped.
 The reference is now the SysTick clock; `tim7_fires` is kept only as an
 informational ISR-miss indicator. No sample is being lost.
 
-### Not done: 1x oversampling
+### 1x oversampling — tried, does not work reliably
 
-Deliberately left for a follow-up — it needs its own careful bench pass
-(the 1x history was a hard aliasing failure). The plumbing is ready:
-`ADC_TRIGGER_OVERSAMPLE` drives `ADS131M04_TRIGGER_TIMER_PERIOD`, and
-`hal_tim_adc_trigger_start()` sets TIM7's ARR from it (the CubeMX literal
-in `tim.c` no longer decides the rate), so the change is one line plus a
-validation run.
+Re-tried on the clean Phase 1/2 read path with the SysTick-referenced
+integrity check watching (fw 0.9.27 / 0.9.29). Frequency-lock does not
+help: the phase between TIM7 and the ADS conversion is random per
+`start()`, and an unfavourable one puts every poll on the DRDY edge with
+zero read margin. Observed across runs — mostly a slow ~0.5 lost-frame/s
+drift; occasionally catastrophic (~120/s, `ADS_FAULT_SLIP` within ~15 s).
+2x holds `frame_deficit` at 0 indefinitely. **Kept at 2x.** The 2x is not
+waste — it is the timing margin the polled read needs. Cutting the ISR
+cost further requires the no-CPU **timer -> DMA** read (below); the
+`ADC_TRIGGER_OVERSAMPLE` plumbing stays in place for that.
 
 **Merge to master when the whole thing is bench-clean.**
 

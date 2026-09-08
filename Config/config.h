@@ -181,10 +181,20 @@
  * 3072 TIM7 ticks. TIM7 and fDATA are therefore frequency-LOCKED, not
  * two free-running clocks — the phase relationship is fixed.
  *
- * ADC_TRIGGER_OVERSAMPLE = how many TIM7 fires per conversion. History:
- * 1x aliased (a fixed poll phase sitting on the DRDY edge decimated the
- * capture — bench: effective rate wandered 8-14 kHz); 2x was the fix, at
- * the cost of doubling the ISR fire count.
+ * ADC_TRIGGER_OVERSAMPLE = how many TIM7 fires per conversion. A polled
+ * read needs at least one fire safely inside every conversion period;
+ * 2x provides a spare so a late fire (higher-priority IRQ) still catches
+ * the conversion before the ADS overwrites it.
+ *
+ * 1x was re-tried on the clean Phase 1/2 read path (fw 0.9.27/0.9.29,
+ * with the SysTick-referenced integrity check watching): NOT reliable.
+ * frequency-lock does not save it — the startup phase between TIM7 and
+ * the ADS conversion is random per start(), and an unfavourable one puts
+ * every poll on the DRDY edge with zero read margin. Observed: mostly a
+ * slow ~0.5 lost-frame/s drift, occasionally catastrophic (~120/s,
+ * ADS_FAULT_SLIP within ~15 s). 2x holds frame_deficit at 0 indefinitely.
+ * Keep 2x. The only way to cut the ISR cost further is a timer->DMA
+ * read with no per-sample CPU interrupt (docs/adc_acquisition_redesign.md).
  *
  * The TIM7 ISR uses a lean fast path (Core/Src/stm32g0xx_it.c) rather
  * than the full HAL_TIM_IRQHandler. */
