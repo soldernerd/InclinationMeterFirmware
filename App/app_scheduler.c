@@ -215,7 +215,14 @@ void app_scheduler_reload_periods(void)
                                                                  * faster (see
                                                                  * svc_signal_analysis.c) */
     s_tasks[13].period_ms = g_device_settings.task_display_ms;   /* ui */
-    s_tasks[14].period_ms = g_device_settings.task_display_ms;   /* display */
+    s_tasks[14].period_ms = SYSTICK_PERIOD_MS;   /* display — every tick.
+                                                 * app_display_update() renders
+                                                 * the frame in DISPLAY_PAGES_PER_TICK
+                                                 * bands per call (see config.h /
+                                                 * app_display.c); it needs to be
+                                                 * pumped every tick to finish a
+                                                 * redraw promptly. Idle passes are
+                                                 * a cheap change-detect early-out. */
     /* s_tasks[15] (LEDs) and s_tasks[16] (BME280) periods are the fixed
      * literals set in the table above — not user/BLE-configurable like the
      * others (DeviceSettings has no room left for another field — see

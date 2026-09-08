@@ -4,9 +4,15 @@
 
 /* u8g2's u8x8_d_ls027b7dh01_400x240 driver emits, per DRAW_TILE call:
  *   [cmd=0x80] [line+50B+0x00] x 8 [final 0x00]
- * That's 1 + 8*52 + 1 = 418 bytes per transfer; 30 transfers per frame.
- * We parse the stream, write pixel rows to drv_sharp_lcd's framebuffer,
- * and let app_display_update() trigger one DMA flush after u8g2_SendBuffer().
+ * That's 1 + 8*52 + 1 = 418 bytes per transfer, one transfer per 8-line
+ * tile row. In page-buffer mode (_2, 2 tile rows) app_display_update()
+ * runs u8g2_FirstPage/NextPage: 2 transfers per NextPage, 15 NextPage
+ * calls, 30 transfers total for a full frame — spread across several
+ * scheduler ticks. Each transfer carries an absolute line address, so
+ * this parser places rows by that address regardless of which page they
+ * arrived in; it needs no page awareness. We write pixel rows to
+ * drv_sharp_lcd's framebuffer and let app_display_update() trigger one
+ * DMA flush after the final NextPage.
  */
 
 static inline uint8_t bit_reverse(uint8_t b)
@@ -115,7 +121,12 @@ uint8_t u8g2_hal_callback(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_
 
 void u8g2_hal_init(u8g2_t *u8g2)
 {
-    u8g2_Setup_ls027b7dh01_400x240_f(
+    /* Page-buffer mode (_2): 800-byte tile buffer instead of the 12 KB
+     * full framebuffer (_f). app_display.c renders the frame in 15 bands
+     * via FirstPage/NextPage so no single scheduler tick pays a full
+     * render. The complete image is assembled in drv_sharp_lcd's own
+     * framebuffer and blitted once. */
+    u8g2_Setup_ls027b7dh01_400x240_2(
         u8g2,
         U8G2_R0,
         u8g2_hal_callback,    /* byte_cb */

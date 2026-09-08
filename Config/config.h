@@ -15,6 +15,16 @@
 #define DEFAULT_TASK_BATTERY_MS         1000
 #define DEFAULT_TASK_TEMPERATURE_MS     10000
 
+/* --- Display page rendering ---
+ * app_display_update() renders the frame in u8g2 page-buffer mode: 15
+ * bands (2 tile-rows / 16 px each) into drv_sharp_lcd's framebuffer,
+ * then one DMA blit. task_display runs every tick and advances at most
+ * this many bands per call, so no single call blocks the cooperative
+ * scheduler with a full 400x240 render (~100 ms at -O0, still tens of ms
+ * at -O2). 3 bands/tick -> a full redraw completes in ~5 scheduler ticks;
+ * on a Sharp LCD the top-to-bottom fill is imperceptible. */
+#define DISPLAY_PAGES_PER_TICK          3
+
 /* --- Data streaming --- */
 #define DEFAULT_STREAM_INTERVAL_MS      200
 

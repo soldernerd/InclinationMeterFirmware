@@ -117,11 +117,12 @@ set_source_files_properties(
     "${CMAKE_SOURCE_DIR}/HAL_App/hal_gpio.c"
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-O2")
 
-# Display render path. task_display does a full 400x240 u8g2 render + frame
-# parse in one blocking call; at -O0 that's ~120 ms, and it fires ~1/s
-# (a 1 Hz value on screen changes), stalling the cooperative scheduler /
-# API for that long. -O2 the graphics path (u8g2, the byte sink, the
-# panel driver, the compositor) so the render is ~25 ms instead.
+# Display render path. app_display_update() renders in bands (u8g2
+# page-buffer mode, DISPLAY_PAGES_PER_TICK per tick — see
+# docs/display_page_render.md), but each band still runs the full
+# compositor (u8g2 clips) plus a ~836-byte parse, so the graphics path is
+# still hot. -O2 it (u8g2, the byte sink, the panel driver, the
+# compositor) to keep the per-band cost to a few ms.
 set_source_files_properties(
     ${U8G2_SOURCES}
     "${CMAKE_SOURCE_DIR}/App/app_display.c"

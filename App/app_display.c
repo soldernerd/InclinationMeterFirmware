@@ -40,6 +40,14 @@ typedef struct {
 static DisplaySnapshot s_last = {0};
 static bool            s_have_last = false;
 
+/* Page-render state machine. A frame is rendered in DISPLAY_PAGES_PER_TICK
+ * bands per task_display call (see config.h). s_render_ms freezes the time
+ * base for the whole multi-tick render so the STATUS clock — and anything
+ * else derived purely from elapsed time — can't tear across bands. */
+typedef enum { DISP_IDLE, DISP_RENDER } DisplayPhase;
+static DisplayPhase s_phase     = DISP_IDLE;
+static uint32_t     s_render_ms = 0;
+
 /* ---- format helpers ---- */
 
 static void format_temp(char *buf, size_t bufsz, int16_t cdeg)
@@ -203,7 +211,7 @@ static void draw_status_screen(void)
 {
     char line[40];
     char up_str[16];
-    format_uptime(up_str, sizeof up_str, hal_systick_get_ms());
+    format_uptime(up_str, sizeof up_str, s_render_ms);
 
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     int y = 38;
@@ -386,7 +394,7 @@ static void snapshot_capture(void)
     s_last.settings_cursor  = g_ui_state.settings_cursor;
     s_last.settings_editing = g_ui_state.settings_editing;
     s_last.edit_value       = g_ui_state.edit_value;
-    s_last.uptime_s         = hal_systick_get_ms() / 1000U;
+    s_last.uptime_s         = s_render_ms / 1000U;
     s_have_last = true;
 }
 
@@ -402,16 +410,16 @@ void app_display_init(void)
     s_have_last = false;
 }
 
-void app_display_update(void)
+/* Full-screen compositor. In page mode this runs once per band (15x per
+ * frame); u8g2 clips each draw op to the current band, and a glyph
+ * outside it early-returns before rasterizing, so the redundant calls
+ * are cheap. The structural selectors below (battery_low / meas_state /
+ * current_screen) are still read live each band — a change mid-render
+ * tears one frame, then snapshot_changed() forces a clean redraw next
+ * pass. Fast-updating value screens (a future live-angle readout) would
+ * need their inputs frozen into the snapshot like s_render_ms is. */
+static void draw_active_screen(void)
 {
-    if (drv_sharp_lcd_is_busy()) {
-        return;
-    }
-    if (!g_ui_state.redraw_needed && !snapshot_changed()) {
-        return;
-    }
-
-    u8g2_ClearBuffer(&s_u8g2);
     u8g2_SetDrawColor(&s_u8g2, 1);
 
     if (g_system_state.battery_low) {
@@ -431,10 +439,36 @@ void app_display_update(void)
         }
         draw_screen_indicator(g_ui_state.current_screen);
     }
+}
 
-    u8g2_SendBuffer(&s_u8g2);
-    (void)drv_sharp_lcd_flush_full();
+void app_display_update(void)
+{
+    if (drv_sharp_lcd_is_busy()) {
+        return;   /* previous frame's DMA blit still on the wire */
+    }
 
-    g_ui_state.redraw_needed = false;
-    snapshot_capture();
+    if (s_phase == DISP_IDLE) {
+        if (!g_ui_state.redraw_needed && !snapshot_changed()) {
+            return;
+        }
+        /* Commit to a full frame. Freeze the time base and capture the
+         * value snapshot now so the ~5-tick band render stays coherent;
+         * u8g2_FirstPage clears the first band (is_auto_page_clear). */
+        g_ui_state.redraw_needed = false;
+        s_render_ms = hal_systick_get_ms();
+        snapshot_capture();
+        u8g2_FirstPage(&s_u8g2);
+        s_phase = DISP_RENDER;
+    }
+
+    for (uint8_t n = 0; n < DISPLAY_PAGES_PER_TICK; ++n) {
+        draw_active_screen();
+        if (u8g2_NextPage(&s_u8g2) == 0) {
+            /* Final band written into drv_sharp_lcd's framebuffer — one
+             * DMA blit pushes the whole image to the panel atomically. */
+            (void)drv_sharp_lcd_flush_full();
+            s_phase = DISP_IDLE;
+            return;
+        }
+    }
 }
