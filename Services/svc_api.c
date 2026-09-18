@@ -9,6 +9,7 @@
 #include "svc_log.h"
 #include "hal_rtc.h"
 #include "hal_power.h"
+#include "hal_mcu.h"
 #include "drv_buzzer.h"
 #include "math_crc.h"
 #include "hal_systick.h"
@@ -138,6 +139,18 @@ static void copy_fixed(char *dst, const char *src, size_t cap)
     memcpy(dst, src, n);
     if (n < cap) {
         memset(dst + n, 0, cap - n);
+    }
+}
+
+/* 8 uppercase hex chars, no null terminator — matches serial_str's fixed
+ * 8-byte wire width exactly, so no padding case to handle (unlike
+ * copy_fixed's variable-length source). */
+static void format_hex32(char *dst, uint32_t v)
+{
+    static const char digits[] = "0123456789ABCDEF";
+    for (int8_t i = 7; i >= 0; --i) {
+        dst[i] = digits[v & 0xFU];
+        v >>= 4;
     }
 }
 
@@ -285,7 +298,14 @@ static void dispatch_system_status(ApiTransport t, uint16_t opcode, uint8_t verb
         p.fw_minor = (uint8_t)FW_VERSION_MINOR;
         p.fw_patch = (uint8_t)FW_VERSION_PATCH;
         copy_fixed(p.product_str, USB_PRODUCT_STR, sizeof p.product_str);
-        copy_fixed(p.serial_str,  USB_SERIAL_STR,  sizeof p.serial_str);
+        /* Last 32 bits of the 96-bit factory UID (HAL_App/hal_mcu.c) as 8
+         * hex chars — self-identifying per physical board, unlike the old
+         * hardcoded "001" every board reported. Same value the STATUS
+         * screen shows (app_display.c) and, in full, what the CubeMX USB
+         * descriptor already derives its iSerialNumber string from
+         * (USB_Device/App/usbd_desc.c's Get_SerialNum()) — this is just a
+         * shorter cut of the same identity for the app-layer API. */
+        format_hex32(p.serial_str, hal_mcu_uid_low());
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
     } else {
         Api2DeviceStatePayload p;

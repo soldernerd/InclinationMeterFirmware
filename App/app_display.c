@@ -8,6 +8,7 @@
 #include "svc_api.h"
 #include "hal_rtc.h"
 #include "hal_systick.h"
+#include "hal_mcu.h"
 #include "config.h"
 #include "u8g2.h"
 #include <stdio.h>
@@ -179,6 +180,11 @@ static void draw_status_screen(void)
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     int y = 38;
     snprintf(line, sizeof line, "Firmware:  v%s", FW_VERSION_STRING);
+    u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
+    /* Last 32 bits of the MCU's factory UID (HAL_App/hal_mcu.c) — same
+     * value the API v2 IDENTITY response reports (svc_api.c), telling two
+     * otherwise-identical boards apart without a host tool. */
+    snprintf(line, sizeof line, "Serial:    %08lX", (unsigned long)hal_mcu_uid_low());
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
     {
         uint8_t st = g_system_state.eeprom_selftest;

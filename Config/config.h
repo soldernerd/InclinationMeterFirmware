@@ -137,7 +137,11 @@
 #define USB_HID_REPORT_SIZE             64
 #define USB_MANUFACTURER_STR            "soldernerd"
 #define USB_PRODUCT_STR                 "InclinationMeter"
-#define USB_SERIAL_STR                  "001"
+/* No USB_SERIAL_STR here anymore — the API v2 IDENTITY response's
+ * serial_str is derived per-board from the MCU's factory UID
+ * (HAL_App/hal_mcu.c), not a fixed string. The USB device descriptor's own
+ * iSerialNumber is separate and already UID-derived by CubeMX's generated
+ * Get_SerialNum() (USB_Device/App/usbd_desc.c). */
 
 /* RN4871 advertised name. Set via the module's "S-,<name>" command, which
  * serializes it as "<name>-<last 2 MAC bytes>" (e.g. "Leveltronic-A1B2").
