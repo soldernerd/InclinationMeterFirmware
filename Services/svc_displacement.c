@@ -377,6 +377,20 @@ bool  svc_displacement_get_ok(void)        { return s_disp_ok; }
 void svc_displacement_stop(void)
 {
     drv_ads131m04_stop();
+    /* on_sample() only runs while the driver's trigger is armed (same
+     * reasoning as svc_displacement_start()'s reset), so it's safe to
+     * touch input-ring/batch state here in task context right after
+     * disarming it. Without this, cycles already queued before the stop
+     * get drained by the next task_displacement tick, complete a batch,
+     * and re-set s_disp_ok = true right after the line below clears it. */
+    s_in_head = s_in_tail = 0;
+    batch_reset();
+    s_batch_seq = 0;
+    /* disp_ok reports "have a currently-valid measurement", not just
+     * "the last batch before stop succeeded" -- clear it so a host
+     * reading Measurements 0x0D right after a stop doesn't see a stale
+     * ok=1 from before acquisition was halted. */
+    s_disp_ok = false;
 }
 
 bool svc_displacement_is_running(void)
