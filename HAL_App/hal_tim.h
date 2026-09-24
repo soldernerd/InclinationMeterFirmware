@@ -51,7 +51,7 @@ typedef void (*HalTimCallback)(void);
  * The trigger is NOT started at boot (WP8, v0.8.2): the 20833 Hz stream
  * has no consumer yet and running it unconditionally starved the
  * scheduler's SysTick. drv_ads131m04_start()/stop() gate it at runtime
- * (toggled over the API — API2_RES_CMD_SIGNAL_ANALYSIS); _stop() calls
+ * (toggled over the API — API2_RES_CMD_DISPLACEMENT); _stop() calls
  * hal_tim_adc_trigger_stop(). */
 void hal_tim_adc_trigger_start(void);
 void hal_tim_adc_trigger_stop(void);

@@ -70,9 +70,11 @@ static uint8_t s_valid_sample_count = 0;
 
 static uint16_t adc_to_vbat_mv(uint16_t vbat_raw, uint16_t vrefint_raw)
 {
-    /* Vbat_mv = V_ADC_mv × vbat_scale_num / vbat_scale_den (100k/33k
-     * divider — see pin_config.h; the scale factor itself is EEPROM-backed,
-     * not a #define, per project convention). V_ADC_mv comes from the
+    /* Vbat_mv = V_ADC_mv × vbat_scale_num / vbat_scale_den (R6/R9 divider,
+     * pin_config.h's BATTERY_SENSE — 33k/100k as of the 2026-09-24 swap,
+     * config.h's DEFAULT_VBAT_SCALE_* comment has the before/after ratios;
+     * the scale factor itself is EEPROM-backed, not a #define, per project
+     * convention). V_ADC_mv comes from the
      * VREFINT-ratiometric conversion, not a raw-code shortcut: REV B ties
      * VREF+ directly to the 3V3_STANDBY rail rather than a fixed-voltage
      * reference, so VDDA can't be assumed constant. Both raw values must

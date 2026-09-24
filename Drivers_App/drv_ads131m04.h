@@ -16,12 +16,12 @@
 DrvStatus drv_ads131m04_init(void);
 
 /* Start / stop the 20833 Hz acquisition trigger. Split out from _init()
- * in v0.8.2: the sample stream feeds only Services/svc_signal_analysis.c,
+ * in v0.8.2: the sample stream feeds only Services/svc_displacement.c,
  * which has no consumer of its own output yet, and running the pipeline
  * unconditionally at boot starved the cooperative scheduler's SysTick
  * (erratic status LED / 1-2 s stalls). Both are cheap and idempotent;
  * _stop() also parks CS deasserted. Toggled at runtime over the API
- * (API2_RES_CMD_SIGNAL_ANALYSIS). Not interrupt-safe — call from task
+ * (API2_RES_CMD_DISPLACEMENT). Not interrupt-safe — call from task
  * context only. */
 DrvStatus drv_ads131m04_start(void);
 void      drv_ads131m04_stop(void);
@@ -36,7 +36,7 @@ bool      drv_ads131m04_is_running(void);
  * complement 24-bit ADC codes, sign-extended to int32_t (datasheet "ADC
  * Conversion Data" — 1 LSB = 2.4 V / Gain / 2^24, Gain = 1). Channel-to-
  * voltage and further analysis belong above this driver (CLAUDE.md 8.1) —
- * see Services/svc_signal_analysis.c. */
+ * see Services/svc_displacement.c. */
 typedef void (*Ads131m04SampleCb)(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3);
 void drv_ads131m04_set_on_sample(Ads131m04SampleCb cb);
 
@@ -48,7 +48,7 @@ void drv_ads131m04_drain_tick(void);
 /* --- acquisition integrity (docs/adc_acquisition_redesign.md) ---
  * All counters reset at drv_ads131m04_start(). Any one of four faults
  * latches acquisition (on_trigger stops arming reads) and sets
- * fault_code; Services/svc_signal_analysis.c notices it, emits one
+ * fault_code; Services/svc_displacement.c notices it, emits one
  * API2_LOG_ERROR, and stops the pipeline. */
 typedef enum {
     ADS_FAULT_NONE     = 0,

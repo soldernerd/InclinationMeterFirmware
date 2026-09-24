@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 """
+INCOMPATIBLE with fw >= 0.10.0 (2026-09-24): WP10's displacement demod
+(Services/svc_displacement.c) took over the ADS131M04's one sample-
+callback slot from svc_signal_analysis.c, which backed the raw-ADC
+capture this script drives (API v2 Bulk category 0x8, retired the same
+day). START_BULK now gets UNKNOWN_CATEGORY. Kept as a reference for the
+technique (and for going back to a pre-0.10.0 build) rather than deleted
+-- see docs/wp10_displacement.md.
+
 Pull one bulk raw-ADC capture off the InclinationMeter and write it to CSV.
 
 The device samples all 4 ADS131M04 channels at the full 20833.33 Hz into a

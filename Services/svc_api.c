@@ -1,7 +1,7 @@
 #include "svc_api.h"
 #include "svc_battery.h"
 #include "svc_storage.h"
-#include "svc_signal_analysis.h"
+#include "svc_displacement.h"
 #include "svc_powertest.h"
 #include "hal_pintest.h"
 #include "hal_dfu.h"
@@ -116,19 +116,6 @@ static ApiTransportState s_t[API_TRANSPORT_COUNT];
  * Settings SET so the App layer can re-apply derived state. NULL until
  * registered — a SET still succeeds, just nothing downstream re-applies. */
 static ApiSettingsChangedFn s_settings_changed_fn = 0;
-
-/* ---------------- bulk transfer state (docs/api-v2-spec.md §4.5) ----------------
- * One at a time, device-wide. CAPTURING while the RAM buffer fills at the
- * ADC sample rate; SENDING streams it out in chunks paced by the
- * transport's ready_fn. */
-static struct {
-    bool         active;
-    enum { BULK_IDLE = 0, BULK_CAPTURING, BULK_SENDING } phase;
-    ApiTransport transport;
-    uint16_t     opcode;
-    uint16_t     send_pos;   /* next sample index to send, during SENDING */
-    uint8_t      page;       /* wrapping chunk counter */
-} s_bulk;
 
 /* ---------------- helpers ---------------- */
 
@@ -347,8 +334,8 @@ static void cmd_test_beep(ApiTransport t, uint16_t opcode,
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
-static void cmd_signal_analysis(ApiTransport t, uint16_t opcode,
-                                const uint8_t *pl, uint16_t paylen)
+static void cmd_displacement(ApiTransport t, uint16_t opcode,
+                             const uint8_t *pl, uint16_t paylen)
 {
     (void)paylen;
     uint8_t on = pl[0];
@@ -357,16 +344,16 @@ static void cmd_signal_analysis(ApiTransport t, uint16_t opcode,
         return;
     }
     if (on) {
-        /* Return dropped deliberately: svc_signal_analysis_start() is
+        /* Return dropped deliberately: svc_displacement_start() is
          * idempotent (no-op if already running) and its only failure mode
          * is the ADS131M04 not having init'd at boot, already reported via
          * g_system_state.ads_ok. The OK below acks the command, not that
          * acquisition is healthy — the host polls Raw data 0x00 for that. */
-        (void)svc_signal_analysis_start();
+        (void)svc_displacement_start();
     } else {
-        svc_signal_analysis_stop();
+        svc_displacement_stop();
     }
-    svc_logf(API2_LOG_INFO, "cmd: signal analysis %s", on ? "start" : "stop");
+    svc_logf(API2_LOG_INFO, "cmd: displacement %s", on ? "start" : "stop");
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
@@ -423,7 +410,7 @@ static void cmd_reboot_dfu(ApiTransport t, uint16_t opcode,
 
 static const CommandDesc s_commands[] = {
     { API2_RES_CMD_TEST_BEEP,       0U, cmd_test_beep       },
-    { API2_RES_CMD_SIGNAL_ANALYSIS, 1U, cmd_signal_analysis },
+    { API2_RES_CMD_DISPLACEMENT,    1U, cmd_displacement    },
     { API2_RES_CMD_FORCE_CHARGE,    0U, cmd_force_charge    },
     { API2_RES_CMD_POWER_TEST,      4U, cmd_power_test      },
     { API2_RES_CMD_PIN_TEST,        1U, cmd_pin_test        },
@@ -454,121 +441,13 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
     cmd->handler(t, opcode, &frame[API2_PACKET_HDR_BYTES], paylen);
 }
 
-/* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ---------------- */
-
-static void bulk_abort(void)
-{
-    svc_signal_analysis_capture_end();
-    s_bulk.active = false;
-    s_bulk.phase  = BULK_IDLE;
-}
-
-static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
-                          uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_START_BULK && verb != API2_VERB_CANCEL_BULK) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    if (res != API2_RES_BULK_RAW_ADC) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-
-    if (verb == API2_VERB_CANCEL_BULK) {
-        if (!s_bulk.active) {
-            send_response(t, opcode, API2_STATUS_NOTHING_TO_CANCEL, 0, 0);
-            return;
-        }
-        bulk_abort();
-        svc_log(API2_LOG_INFO, "bulk: raw adc cancelled");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    /* START_BULK */
-    if (s_bulk.active) {
-        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
-        return;
-    }
-    if (!g_system_state.ads_ok) {
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    if (svc_signal_analysis_is_running()) {
-        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
-        return;
-    }
-    if (svc_signal_analysis_capture_begin() != DRV_OK) {
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    s_bulk.active    = true;
-    s_bulk.phase     = BULK_CAPTURING;
-    s_bulk.transport = t;
-    s_bulk.opcode    = opcode;
-    s_bulk.send_pos  = 0;
-    s_bulk.page      = 0;
-    svc_log(API2_LOG_INFO, "bulk: raw adc capture started");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-/* Chunk pump — runs from svc_api_update() each tick while a bulk transfer
- * is active. CAPTURING: wait for the RAM buffer to fill. SENDING: emit up
- * to ADC_BULK_CHUNKS_PER_TICK chunks, but only while the owning
- * transport's TX ring has headroom (ready_fn) so we pace to the wire and
- * yield to other traffic between bursts (spec §4.1). */
-static void bulk_pump(void)
-{
-    if (!s_bulk.active) return;
-
-    ApiTransport t = s_bulk.transport;
-    if (!s_t[t].connected) {           /* peer vanished mid-transfer */
-        bulk_abort();
-        return;
-    }
-
-    if (s_bulk.phase == BULK_CAPTURING) {
-        if (!svc_signal_analysis_capture_done()) return;
-        uint16_t drops = svc_signal_analysis_capture_drops();
-        svc_signal_analysis_capture_end();   /* stop the stream ASAP */
-        s_bulk.phase    = BULK_SENDING;
-        s_bulk.send_pos = 0;
-        s_bulk.page     = 0;
-        svc_logf(API2_LOG_INFO, "bulk: capture full, %u ring overflows", (unsigned)drops);
-    }
-
-    const uint8_t *buf   = svc_signal_analysis_capture_buffer();   /* total * BPS bytes */
-    const uint16_t total = svc_signal_analysis_capture_sample_count();
-    const ApiReadyFn ready = s_t[t].ready_fn;
-    enum { BPS = ADC_BULK_BYTES_PER_SAMPLE };
-
-    for (uint8_t c = 0; c < ADC_BULK_CHUNKS_PER_TICK && s_bulk.send_pos < total; ++c) {
-        if (ready != 0 && !ready()) break;   /* let the link drain */
-
-        uint16_t k = (uint16_t)(total - s_bulk.send_pos);
-        if (k > ADC_BULK_CHUNK_SAMPLES) k = ADC_BULK_CHUNK_SAMPLES;
-
-        uint8_t payload[1U + ADC_BULK_CHUNK_SAMPLES * BPS];
-        payload[0] = s_bulk.page++;
-        memcpy(&payload[1], &buf[(size_t)s_bulk.send_pos * BPS], (size_t)k * BPS);
-
-        send_framed(t, s_bulk.opcode, API2_STATUS_OK, payload,
-                    (uint16_t)(1U + (size_t)k * BPS), false);
-        s_bulk.send_pos = (uint16_t)(s_bulk.send_pos + k);
-    }
-
-    if (s_bulk.send_pos >= total) {
-        svc_logf(API2_LOG_INFO, "bulk: raw adc sent (%u samples)", (unsigned)total);
-        s_bulk.active = false;
-        s_bulk.phase  = BULK_IDLE;
-    }
-}
+/* ---------------- Bulk transfers (0x8) — retired 2026-09-24 ----------------
+ * The raw-ADC-code capture that lived here (dispatch_bulk()/bulk_pump(),
+ * backed by svc_signal_analysis.c's capture_begin/done/end) is gone: it
+ * shared the ADS131M04's one sample-callback slot with WP10's
+ * displacement demod (Services/svc_displacement.c), which now owns that
+ * slot, and capturing raw codes can't coexist with the real-time
+ * per-cycle demodulation. See svc_api.h's Bulk transfers comment. */
 
 /* ---------------- Raw data (0x7: GET) ---------------- */
 
@@ -602,18 +481,20 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
 
     const Ads131m04Regs *r = drv_ads131m04_get_regs();
     const volatile Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
-    uint16_t samples = 0, drops = 0;
-    uint32_t elapsed = 0;
-    svc_signal_analysis_last_capture(&samples, &drops, &elapsed);
 
     struct __attribute__((packed)) {
         uint16_t id, status, mode, clock, gain1, cfg;
         uint16_t clock_expected;
         uint8_t  regs_read_ok;
         uint8_t  ads_ok;
-        uint16_t last_samples;
-        uint16_t last_drops;
-        uint32_t last_elapsed_ms;
+        /* WP10 displacement demod (Services/svc_displacement.c) --
+         * replaced the WP8 bulk-capture stats (last_samples/last_drops/
+         * last_elapsed_ms) here 2026-09-24 when that capture path was
+         * retired. reserved0 keeps this struct's size unchanged. */
+        uint16_t disp_input_drop_count;
+        uint16_t disp_output_drop_count;
+        uint16_t disp_degenerate_count;
+        uint16_t reserved0;
         /* acquisition integrity (docs/adc_acquisition_redesign.md) */
         uint32_t frames_produced;
         uint32_t frames_drained;
@@ -643,9 +524,10 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
     p.clock_expected  = r->clock_expected;
     p.regs_read_ok    = r->read_ok ? 1U : 0U;
     p.ads_ok          = g_system_state.ads_ok ? 1U : 0U;
-    p.last_samples    = samples;
-    p.last_drops      = drops;
-    p.last_elapsed_ms = elapsed;
+    p.disp_input_drop_count  = svc_displacement_get_input_drop_count();
+    p.disp_output_drop_count = svc_displacement_get_output_drop_count();
+    p.disp_degenerate_count  = svc_displacement_get_degenerate_count();
+    p.reserved0       = 0U;
     p.frames_produced = ig->frames_produced;
     p.frames_drained  = ig->frames_drained;
     p.tim7_fires      = ig->tim7_fires;
@@ -723,6 +605,38 @@ static uint16_t read_ext_temp_ok(uint8_t *buf)
     buf[0] = g_system_state.temp_ext_ok ? 1U : 0U;
     return 1U;
 }
+/* Displacement (WP10) -- float32 LE, memcpy'd as raw bytes like every
+ * other fixed-width field here (Cortex-M0+ is little-endian, matching
+ * the wire's declared byte order). */
+static uint16_t read_disp1_delta(uint8_t *buf)
+{
+    float v = svc_displacement_get_delta1_mm();
+    memcpy(buf, &v, sizeof(float));
+    return sizeof(float);
+}
+static uint16_t read_disp1_residual(uint8_t *buf)
+{
+    float v = svc_displacement_get_residual1();
+    memcpy(buf, &v, sizeof(float));
+    return sizeof(float);
+}
+static uint16_t read_disp2_delta(uint8_t *buf)
+{
+    float v = svc_displacement_get_delta2_mm();
+    memcpy(buf, &v, sizeof(float));
+    return sizeof(float);
+}
+static uint16_t read_disp2_residual(uint8_t *buf)
+{
+    float v = svc_displacement_get_residual2();
+    memcpy(buf, &v, sizeof(float));
+    return sizeof(float);
+}
+static uint16_t read_disp_ok(uint8_t *buf)
+{
+    buf[0] = svc_displacement_get_ok() ? 1U : 0U;
+    return 1U;
+}
 
 typedef struct {
     uint8_t           resource;
@@ -739,6 +653,11 @@ static const MeasurementResourceDesc s_meas_resources[] = {
     { API2_RES_MEAS_BME280_OK,    read_bme280_ok },
     { API2_RES_MEAS_EXT_TEMP,     read_ext_temp },
     { API2_RES_MEAS_EXT_TEMP_OK,  read_ext_temp_ok },
+    { API2_RES_MEAS_DISP1_DELTA_MM, read_disp1_delta },
+    { API2_RES_MEAS_DISP1_RESIDUAL, read_disp1_residual },
+    { API2_RES_MEAS_DISP2_DELTA_MM, read_disp2_delta },
+    { API2_RES_MEAS_DISP2_RESIDUAL, read_disp2_residual },
+    { API2_RES_MEAS_DISP_OK,        read_disp_ok },
 };
 #define MEAS_RESOURCE_COUNT (sizeof(s_meas_resources) / sizeof(s_meas_resources[0]))
 
@@ -1090,6 +1009,94 @@ static void dispatch_settings(ApiTransport t, uint16_t opcode, uint8_t verb,
     }
 }
 
+/* ---------------- Calibrations (0x2: GET, SET) ----------------
+ * Structurally identical to Settings above -- same SettingsFieldDesc /
+ * SF() / parse_settings_value() machinery (those aren't Settings-
+ * specific despite the name; they just describe a field within
+ * DeviceSettings), a separate table and dispatch function only so the
+ * two categories can evolve independently on the wire. First resources
+ * in this category (WP10, 2026-09-24) -- see svc_api.h's Calibrations
+ * comment for why displacement calibration lives here, not Settings. */
+static const SettingsFieldDesc s_calibration_fields[] = {
+    SF(API2_RES_CALIB_DISP_ATTEN_MILLI,       SF_UNSIGNED, disp_atten_milli,           100, 100000),
+    SF(API2_RES_CALIB_DISP_S1_GAIN_MILLI,     SF_UNSIGNED, disp_s1_gain_milli,         100, 1000000),
+    SF(API2_RES_CALIB_DISP_S1_D0_UM,          SF_UNSIGNED, disp_s1_d0_um,                1, 10000),
+    SF(API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM, SF_SIGNED,   disp_s1_zero_offset_um,   -5000, 5000),
+    SF(API2_RES_CALIB_DISP_S2_GAIN_MILLI,     SF_UNSIGNED, disp_s2_gain_milli,         100, 1000000),
+    SF(API2_RES_CALIB_DISP_S2_D0_UM,          SF_UNSIGNED, disp_s2_d0_um,                1, 10000),
+    SF(API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM, SF_SIGNED,   disp_s2_zero_offset_um,   -5000, 5000),
+};
+#define CALIBRATION_FIELD_COUNT (sizeof(s_calibration_fields) / sizeof(s_calibration_fields[0]))
+
+static const SettingsFieldDesc *find_calibration_field(uint8_t res)
+{
+    for (size_t i = 0; i < CALIBRATION_FIELD_COUNT; ++i) {
+        if (s_calibration_fields[i].resource == res) {
+            return &s_calibration_fields[i];
+        }
+    }
+    return 0;
+}
+
+static void dispatch_calibrations(ApiTransport t, uint16_t opcode, uint8_t verb,
+                                  uint8_t res, const uint8_t *frame, uint16_t paylen)
+{
+    if (verb != API2_VERB_GET && verb != API2_VERB_SET) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    const SettingsFieldDesc *desc = find_calibration_field(res);
+    if (desc == 0) {
+        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
+        return;
+    }
+    if (!check_crc(t, opcode, frame, paylen)) return;
+
+    if (verb == API2_VERB_GET) {
+        if (paylen != 0U) {
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        uint8_t buf[4];
+        memcpy(buf, (const uint8_t *)&g_device_settings + desc->offset, desc->size);
+        send_response(t, opcode, API2_STATUS_OK, buf, desc->size);
+        return;
+    }
+
+    /* SET */
+    if (paylen != desc->size) {
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+    if (svc_storage_is_busy()) {
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    int64_t val = parse_settings_value(desc, &frame[API2_PACKET_HDR_BYTES]);
+    if (val < desc->min || val > desc->max) {
+        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+        return;
+    }
+
+    uint32_t u = (uint32_t)val;
+    memcpy((uint8_t *)&g_device_settings + desc->offset, &u, desc->size);
+    svc_storage_validate_settings(&g_device_settings);
+    DrvStatus rc = svc_storage_save_settings(&g_device_settings);
+    if (rc == DRV_OK) {
+        /* No s_settings_changed_fn() call: nothing derived from a
+         * calibration constant needs re-applying outside
+         * svc_displacement.c, which reads g_device_settings live every
+         * cycle (see load_sensor_cal()) -- unlike Settings' scheduler
+         * periods, there's no cached copy to refresh. */
+        svc_logf(API2_LOG_INFO, "calib: res 0x%02X saved", res);
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+    } else {
+        g_system_state.settings_save_failed = true;
+        svc_logf(API2_LOG_ERROR, "calib: res 0x%02X save failed", res);
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+    }
+}
+
 /* ---------------- Debug messages (0x6: SUBSCRIBE, UNSUBSCRIBE) ---------------- */
 
 static void dispatch_debug(ApiTransport t, uint16_t opcode, uint8_t verb,
@@ -1170,21 +1177,15 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
         case API2_CAT_RAW_DATA:
             dispatch_raw_data(t, opcode, verb, res, frame, paylen);
             return;
-        case API2_CAT_BULK:
-            dispatch_bulk(t, opcode, verb, res, frame, paylen);
+        case API2_CAT_CALIBRATIONS:
+            dispatch_calibrations(t, opcode, verb, res, frame, paylen);
             return;
         default:
-            /* Calibrations (0x2) and 0x6-0xF beyond Debug/Raw/Bulk: not
-             * built yet. Spec §7 -- "not implemented yet" and "not a real
-             * category" are the same answer on the wire.
-             *
-             * WP11 note: Calibrations 0x2 is a GET/SET-of-stored-constants
-             * category, structurally identical to Settings (0x3). Implement
-             * it by copying the s_settings_fields[] / SF() machinery as
-             * s_calibration_fields[] over its own EEPROM page (add
-             * EEPROM_CALIBRATION_* in config.h and a SettingsSection row in
-             * svc_storage.c) plus a dispatch_calibrations() that mirrors
-             * dispatch_settings(). Do NOT hand-roll an if-ladder. */
+            /* Bulk (0x8 — its one-time raw-ADC-capture consumer was
+             * retired 2026-09-24, see the "Bulk transfers" comment just
+             * above dispatch_raw_data()) and 0x9-0xF: not built. Spec §7
+             * -- "not implemented yet" and "not a real category" are the
+             * same answer on the wire. */
             send_response(t, opcode, API2_STATUS_UNKNOWN_CATEGORY, 0, 0);
             return;
     }
@@ -1203,7 +1204,6 @@ static void clear_subs(ApiTransport t)
 void svc_api_init(void)
 {
     memset(s_t, 0, sizeof s_t);
-    memset(&s_bulk, 0, sizeof s_bulk);
 }
 
 void svc_api_register_transport(ApiTransport t, ApiSendFn send_fn)
@@ -1235,9 +1235,6 @@ void svc_api_disconnected(ApiTransport t)
     if (t >= API_TRANSPORT_COUNT) return;
     s_t[t].connected = false;
     clear_subs(t);
-    if (s_bulk.active && s_bulk.transport == t) {
-        bulk_abort();
-    }
 }
 
 void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len)
@@ -1290,8 +1287,6 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
 
 void svc_api_update(void)
 {
-    bulk_pump();
-
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
         if (!s_t[t].connected || !s_t[t].dbg.active) continue;
         DebugSubState *d = &s_t[t].dbg;

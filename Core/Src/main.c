@@ -47,7 +47,7 @@
 #include "drv_encoder.h"
 #include "drv_buzzer.h"
 #include "drv_ad9833.h"
-#include "svc_signal_analysis.h"
+#include "svc_displacement.h"
 #include "svc_storage.h"
 #include "svc_battery.h"
 #include "app_scheduler.h"
@@ -275,11 +275,13 @@ int main(void)
   }
 
   /* ADS131M04 4-ch ADC (WP8) — SPI1 full-duplex DMA + TIM2 MCLK + TIM7
-   * sample trigger (all CubeMX-generated above); samples the sine the DAC
-   * above drives onto the board. svc_signal_analysis_init() registers its
-   * per-sample callback then starts drv_ads131m04 itself. Not
+   * sample trigger (all CubeMX-generated above); WP10's
+   * svc_displacement_init() registers its per-sample callback then
+   * configures drv_ads131m04 (but doesn't start the acquisition trigger —
+   * that's toggled at runtime over the API, Commands/API2_RES_CMD_
+   * DISPLACEMENT, same bring-up caution WP8 established). Not
    * boot-critical — same non-fatal handling as the DAC / internal ADC. */
-  g_system_state.ads_ok = (svc_signal_analysis_init() == DRV_OK);
+  g_system_state.ads_ok = (svc_displacement_init() == DRV_OK);
 
   /* WP4 comms stack. svc_api_init() before the three transport inits:
    * each registers itself via svc_api_register_transport(), which needs

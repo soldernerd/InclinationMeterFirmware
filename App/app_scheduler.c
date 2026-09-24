@@ -12,7 +12,7 @@
 #include "hal_power.h"
 #include "svc_api.h"
 #include "svc_battery.h"
-#include "svc_signal_analysis.h"
+#include "svc_displacement.h"
 #include "svc_storage.h"
 #include "svc_input.h"
 #include "svc_usb.h"
@@ -162,8 +162,8 @@ static void task_api(void)
     svc_api_measurement_subscriptions_update();
     svc_api_topic_subscriptions_update();
 }
-static void task_signal_analysis(void) { svc_signal_analysis_update();
-                                         svc_signal_analysis_check_integrity(); }
+static void task_displacement(void) { svc_displacement_update();
+                                      svc_displacement_check_integrity(); }
 static void task_power(void)           { svc_power_task();             }
 
 /* ---- task table ----
@@ -192,7 +192,7 @@ static SchedulerEntry s_tasks[] = {
     { task_ble,             &g_device_settings.task_ble_ms,         0,                      0 },
     { task_uart,            NULL,                                  EVERY_TICK,             0 },  /* RX latency + TX drain; no EEPROM setting */
     { task_api,             NULL,                                  EVERY_TICK,             0 },  /* subscription timing accuracy */
-    { task_signal_analysis, &g_device_settings.task_sensors_ms,     0,                      0 },  /* finalizes at most this often; batches complete faster (svc_signal_analysis.c) */
+    { task_displacement,    NULL,                                  EVERY_TICK,             0 },  /* ~2.6 kHz cycle production (svc_displacement.c) needs draining every tick, not a slower period */
     { task_ui,              &g_device_settings.task_display_ms,     0,                      0 },
     { task_display,         NULL,                                  EVERY_TICK,             0 },  /* renders DISPLAY_PAGES_PER_TICK bands/call (app_display.c); pump every tick to finish a redraw promptly */
     { task_leds,            NULL,                                  DEFAULT_TASK_LED_MS,    0 },  /* not user/BLE-configurable */

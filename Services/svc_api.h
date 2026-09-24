@@ -15,8 +15,8 @@
  * what this (REV B, hardware-validated) build can actually back:
  * System status, Commands, Measurements (onboard temp + battery only),
  * Settings (every DeviceSettings field), and a new Debug-messages log
- * stream (§0x6). Calibrations and WP7-11 sensor resources stay on the
- * wp11-api-v2 branch until those drivers come across and get bench time. */
+ * stream (§0x6). Calibrations (§0x2) added 2026-09-24 for WP10's
+ * displacement demodulation — the first resources in that category. */
 
 typedef enum {
     API_TRANSPORT_USB  = 0,
@@ -155,9 +155,11 @@ typedef enum {
 
 /* ---------------- Commands (0x1, EXECUTE only) ----------------
  * 0x00 Test beep — no payload.
- * 0x01 Signal analysis — 1-byte payload: 0 = stop the ADS131M04 sample
- *      stream + DFT, 1 = start it. Off at boot (v0.8.2); see
- *      Services/svc_signal_analysis.h for why.
+ * 0x01 Displacement — 1-byte payload: 0 = stop the ADS131M04 sample
+ *      stream + WP10 per-cycle demodulation, 1 = start it. Off at boot
+ *      (same bring-up caution WP8's original signal-analysis toggle had —
+ *      running the pipeline unconditionally at boot starved the
+ *      cooperative scheduler); see Services/svc_displacement.h.
  * 0x02 Force charge — no payload. Enables the charger regardless of SOC
  *      while USB is present (a one-shot overnight top-off); self-clears on
  *      full or USB removal. No-op with no USB. See svc_battery.h.
@@ -167,7 +169,8 @@ typedef enum {
  *      resulting mask is echoed back and also readable via Raw data 0x01.
  *      Default at boot is all bits set (normal behaviour). */
 #define API2_RES_CMD_TEST_BEEP        0x00U
-#define API2_RES_CMD_SIGNAL_ANALYSIS  0x01U
+#define API2_RES_CMD_DISPLACEMENT     0x01U   /* was API2_RES_CMD_SIGNAL_ANALYSIS (WP8) — same
+                                                  wire value, repointed at WP10 2026-09-24 */
 #define API2_RES_CMD_FORCE_CHARGE     0x02U
 #define API2_RES_CMD_POWER_TEST       0x03U
 /* 0x04 Pin test — 1-byte payload. bits[5:0] drive the 6 MCU->level-
@@ -187,8 +190,8 @@ typedef enum {
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
-#define API2_OP_CMD_SIGNAL_ANALYSIS \
-    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_SIGNAL_ANALYSIS)
+#define API2_OP_CMD_DISPLACEMENT \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_DISPLACEMENT)
 #define API2_OP_CMD_FORCE_CHARGE \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_FORCE_CHARGE)
 #define API2_OP_CMD_POWER_TEST \
@@ -212,6 +215,22 @@ typedef enum {
 /* LM35 external temperature (WP11), TEMP_SENSE_EXT / PB11. */
 #define API2_RES_MEAS_EXT_TEMP       0x07U   /* int16 centi-degC */
 #define API2_RES_MEAS_EXT_TEMP_OK    0x08U   /* uint8 0/1 — in-range reading present */
+/* Displacement (WP10), Services/svc_displacement.c. delta_mm/residual
+ * are the latest completed batch's values (config.h's
+ * DISPLACEMENT_BATCH_CYCLES consecutive carrier cycles, coherently
+ * summed before the demod math -- ~325 updates/s at the default batch
+ * size, float32 LE, IEEE-754
+ * — the first floats on this wire; MEAS_VALUE_MAX_LEN is 4 bytes, an
+ * exact fit). Both only meaningful while disp_ok is true — GET/SUBSCRIBE
+ * that first if freshness matters, same pattern as bme280_ok above.
+ * residual is Im(x) — should sit near 0 if the Calibrations (0x2) page
+ * below holds up; a consistently nonzero residual usually means a
+ * calibration constant is off, not a faulty sensor. */
+#define API2_RES_MEAS_DISP1_DELTA_MM 0x09U   /* float32 mm, Sensor 1 (CH3) */
+#define API2_RES_MEAS_DISP1_RESIDUAL 0x0AU   /* float32, Im(x1) diagnostic */
+#define API2_RES_MEAS_DISP2_DELTA_MM 0x0BU   /* float32 mm, Sensor 2 (CH0) */
+#define API2_RES_MEAS_DISP2_RESIDUAL 0x0CU   /* float32, Im(x2) diagnostic */
+#define API2_RES_MEAS_DISP_OK        0x0DU   /* uint8 0/1 */
 
 #define API2_MEASUREMENT_MIN_INTERVAL_MS 50U
 #define API2_MEASUREMENT_MAX_INTERVAL_MS 3600000U   /* 1 hour */
@@ -250,6 +269,28 @@ typedef enum {
 #define API2_RES_TOPIC_ENV      0x00U
 #define API2_RES_TOPIC_STATUS   0x01U
 #define API2_TOPIC_SLOTS        4U          /* direct-indexed by resource id */
+
+/* ---------------- Calibrations (0x2: GET, SET) ----------------
+ * Sensor-correction constants — structurally identical to Settings
+ * (0x3), same SF()-style integer field machinery (Services/svc_api.c),
+ * just a separate category/EEPROM page per the API spec's own split
+ * ("Sensor-correction constants: offsets, gains" vs Settings'
+ * "Operational/behavioral config"). First resources to use this
+ * category (WP10, 2026-09-24) — the wire values below are all new, no
+ * gaps to preserve.
+ *
+ * Displacement (Services/svc_displacement.c) — milli-units (x1000) for
+ * the two dimensionless ratios, micrometers for the two lengths, not
+ * raw floats (see system_state.h's comment on these DeviceSettings
+ * fields for why). All u32 payload (4 bytes), int32 signed for the
+ * offsets. */
+#define API2_RES_CALIB_DISP_ATTEN_MILLI        0x00U   /* shared A/B attenuator, x1000 */
+#define API2_RES_CALIB_DISP_S1_GAIN_MILLI      0x01U   /* S1 amplifier gain, x1000 */
+#define API2_RES_CALIB_DISP_S1_D0_UM           0x02U   /* S1 neutral air gap, um */
+#define API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM  0x03U   /* S1 zero calibration, um, signed */
+#define API2_RES_CALIB_DISP_S2_GAIN_MILLI      0x04U   /* S2 amplifier gain, x1000 */
+#define API2_RES_CALIB_DISP_S2_D0_UM           0x05U   /* S2 neutral air gap, um */
+#define API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM  0x06U   /* S2 zero calibration, um, signed */
 
 /* ---------------- Settings (0x3: GET, SET) ----------------
  * Resource IDs are stable wire values, not a dense sequence. 0x01 and
@@ -304,15 +345,19 @@ typedef enum {
 } Api2LogSeverity;
 
 /* ---------------- Raw data (0x7: GET) ----------------
- * Development/debug intermediate values. 0x00 = ADS131M04 diagnostics,
- * GET only, no request payload. Response payload (24 B, LE):
+ * Development/debug intermediate values. 0x00 = ADS131M04 + WP10
+ * displacement diagnostics, GET only, no request payload. Response
+ * payload (24 B, LE):
  *   u16 reg_id, reg_status, reg_mode, reg_clock, reg_gain1, reg_cfg
  *   u16 clock_expected      (what the driver wrote to CLOCK)
  *   u8  regs_read_ok        (all RREG transfers succeeded)
  *   u8  ads_ok              (g_system_state.ads_ok)
- *   u16 last_capture_samples
- *   u16 last_capture_drops
- *   u32 last_capture_elapsed_ms
+ *   u16 disp_input_drop_count    (svc_displacement_get_input_drop_count())
+ *   u16 disp_output_drop_count   (svc_displacement_get_output_drop_count())
+ *   u16 disp_degenerate_count    (svc_displacement_get_degenerate_count())
+ *   u16 reserved0                 (was last_capture_elapsed_ms's low half
+ *                                   before the WP8 bulk-capture path was
+ *                                   retired 2026-09-24; always 0 now)
  * CLOCK.OSR is bits [4:2]: 0=128,1=256,2=512,3=1024,4=2048,5=4096,6=8192,7=16256;
  * fDATA = fCLKIN / (2 * OSR), fCLKIN ~= 5.3333 MHz. */
 #define API2_RES_RAW_ADC_DIAG   0x00U
@@ -327,24 +372,12 @@ typedef enum {
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_PWRTEST)
 
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ----------------
- * 0x00 Raw ADC capture. START_BULK: no request payload (the transfer size
- *      is fixed and known from this doc, spec §4.5). Ack is a bare status
- *      byte. Then Config/config.h ADC_BULK_SAMPLE_COUNT samples are
- *      streamed as chunk packets under the same opcode, each:
- *        [status=OK][page:1][sample:12]xN,  N <= ADC_BULK_CHUNK_SAMPLES
- *      one sample = ch0,ch1,ch2,ch3 each as a 3-byte little-endian signed
- *      24-bit ADC code (1 LSB = 2.4 V / 2^23, gain 1). `page` is the wrapping
- *      chunk counter (§2.3) for gap detection. The host knows it's done
- *      when it has ADC_BULK_SAMPLE_COUNT samples; on a CRC error or gap it
- *      CANCEL_BULKs and restarts (§4.5, no per-chunk resend).
- *      Exclusivity: device-wide, one bulk at a time; also NACKs
- *      BUSY_EXCLUSIVE while the real-time signal-analysis stream is running
- *      and BUSY_RESOURCE if the ADS131M04 failed to init. */
-#define API2_RES_BULK_RAW_ADC   0x00U
-
-#define API2_OP_BULK_RAW_ADC_START \
-    API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
-#define API2_OP_BULK_RAW_ADC_CANCEL \
-    API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
+ * Category reserved for large RAM-buffered transfers (spec §3.2) — no
+ * resource implements it right now. Its one consumer, the raw-ADC-code
+ * capture, was retired 2026-09-24 when WP10's displacement demod took
+ * over the ADS131M04's single sample-callback slot (Services/
+ * svc_displacement.c) — capturing raw codes and running the real-time
+ * demod can't coexist. A GET/START_BULK to this category currently gets
+ * UNKNOWN_CATEGORY. */
 
 #endif /* SVC_API_H */

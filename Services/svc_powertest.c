@@ -1,5 +1,5 @@
 #include "svc_powertest.h"
-#include "svc_signal_analysis.h"
+#include "svc_displacement.h"
 #include "svc_log.h"
 #include "hal_power.h"
 #include "hal_tim.h"
@@ -39,7 +39,7 @@ static void set_ads131m04(bool on)
         hal_gpio_set(ADC_SYNC_RESET_PORT, ADC_SYNC_RESET_PIN, true);   /* release reset */
         hal_tim_adc_clock_start();
     } else {
-        svc_signal_analysis_stop();        /* stop the acquisition trigger, if running */
+        svc_displacement_stop();           /* stop the acquisition trigger, if running */
         hal_gpio_set(ADC_SYNC_RESET_PORT, ADC_SYNC_RESET_PIN, false);  /* hold in reset */
         hal_tim_adc_clock_stop();          /* kill the external MCLK on PB10 */
     }

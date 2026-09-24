@@ -106,6 +106,8 @@ def decode_topic_status(d: bytes):
 # Settings resource indices — a few useful ones. IDs are stable wire
 # values with gaps (0x01, 0x07..0x0B retired with the REV A fields).
 SET_TASK_BLE_MS        = 0x03
+SET_VBAT_SCALE_NUM     = 0x0F
+SET_VBAT_SCALE_DEN     = 0x10
 SET_AUTO_POWEROFF_S    = 0x1B
 SET_VBAT_OFFSET_MV     = 0x1C
 

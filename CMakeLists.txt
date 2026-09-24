@@ -110,9 +110,10 @@ set_source_files_properties(${APP_SOURCES} "${CMAKE_SOURCE_DIR}/system_state.c"
 # repeated here. Math/HAL_App files aren't in ${APP_SOURCES}'s warning set
 # but -Werror-clean anyway.)
 set_source_files_properties(
-    "${CMAKE_SOURCE_DIR}/Services/svc_signal_analysis.c"
+    "${CMAKE_SOURCE_DIR}/Services/svc_displacement.c"
     "${CMAKE_SOURCE_DIR}/Drivers_App/drv_ads131m04.c"
     "${CMAKE_SOURCE_DIR}/Math/math_crc.c"
+    "${CMAKE_SOURCE_DIR}/Math/math_phasor.c"
     "${CMAKE_SOURCE_DIR}/HAL_App/hal_spi.c"
     "${CMAKE_SOURCE_DIR}/HAL_App/hal_gpio.c"
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-O2")

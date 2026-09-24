@@ -65,6 +65,26 @@ typedef struct {
      * App/app_ui.c's consume_detents(). Unconfirmed against real
      * hardware. */
     uint16_t encoder_counts_per_detent;
+
+    /* --- Displacement calibration page (WP10) ---
+     * Differential-capacitor sensor calibration — see
+     * Services/svc_displacement.c for the demod math these feed and
+     * config.h's DEFAULT_DISP_* for the nominal values. Scaled integers
+     * (milli-units — x1000 — for the two dimensionless ratios, plain
+     * micrometers for the two lengths), not raw floats: Services/svc_api.c's
+     * SF() field machinery is integer-only, matching every other
+     * calibration constant in this struct. svc_displacement.c converts
+     * to float once per carrier cycle, where CLAUDE.md permits floating
+     * point (Math/Services layer, not HAL/driver). Exposed over the API
+     * under Calibrations (category 0x2), not Settings (0x3) — the first
+     * resources to use that category. */
+    int32_t disp_atten_milli;        /* shared A/B attenuator, x1000 (nominal 3.000) */
+    int32_t disp_s1_gain_milli;      /* S1 amplifier gain, x1000 (nominal 10.000) */
+    int32_t disp_s1_d0_um;           /* S1 neutral air gap, micrometers (nominal 100) */
+    int32_t disp_s1_zero_offset_um;  /* S1 displacement zero calibration, micrometers, signed */
+    int32_t disp_s2_gain_milli;      /* S2 amplifier gain, x1000 */
+    int32_t disp_s2_d0_um;           /* S2 neutral air gap, micrometers */
+    int32_t disp_s2_zero_offset_um;  /* S2 displacement zero calibration, micrometers, signed */
 } DeviceSettings;
 
 typedef struct {
@@ -104,10 +124,18 @@ typedef struct {
                                   * readback to confirm anyway). */
 
     bool     ads_ok;             /* ADS131M04 external ADC (WP8) init +
-                                  * svc_signal_analysis wiring succeeded at
-                                  * boot. If false the per-channel
-                                  * amplitude/phase readout is absent; not
+                                  * svc_displacement wiring (WP10)
+                                  * succeeded at boot. If false the
+                                  * displacement readout is absent; not
                                   * boot-halting. */
+
+    /* Differential-capacitor displacement (WP10) latest-value state
+     * deliberately does NOT live here -- see Services/svc_displacement.h's
+     * top comment: writing those float fields into g_system_state was
+     * bench-reproducible as an instant hang (root cause unresolved).
+     * svc_displacement_get_delta1_mm()/_get_residual1()/_get_delta2_mm()/
+     * _get_residual2()/_get_ok() are the equivalent of ads_ok above, for
+     * Sensor 1 (CH3) / Sensor 2 (CH0). */
 
     bool     display_ok;         /* False if the Sharp LCD's SPI2 peripheral
                                   * wedged and a flush had to be abandoned —

@@ -48,9 +48,19 @@
  * is EEPROM-backed (see system_state.h/svc_storage.c). The actual
  * consuming code (Services/svc_battery.c, Drivers_App/drv_tmp236.c) reads
  * g_device_settings.*, never these macros directly, past first boot. */
-#define DEFAULT_VBAT_SCALE_NUM          133     /* 100k/33k divider — see pin_config.h */
-#define DEFAULT_VBAT_SCALE_DEN          33
-#define DEFAULT_VBAT_OFFSET_MV         0       /* additive Vbat correction; set by bench cal */
+/* R6/R9 battery divider (BATTERY_SENSE, pin_config.h) swapped on the
+ * board 2026-09-24: was 100k/33k (ratio 33/133 = 0.248, 4.2V -> 1.04V),
+ * now 33k/100k (ratio 100/133 = 0.752, 4.2V -> 3.16V) -- the ADC now
+ * reads ~3.03x (100/33) more signal for the same battery voltage. NUM
+ * stays 133; only DEN changes (Vbat_mv = V_ADC_mv * NUM/DEN + offset,
+ * svc_battery.c). */
+#define DEFAULT_VBAT_SCALE_NUM          133
+#define DEFAULT_VBAT_SCALE_DEN          100
+#define DEFAULT_VBAT_OFFSET_MV         0       /* additive Vbat correction; set by bench cal --
+                                                  * reset to 0 with the divider swap above; the
+                                                  * old +79mV (memory: battery-voltage-calibrated)
+                                                  * was fit to the old ratio's residual error and
+                                                  * does not carry over. Needs a fresh bench cal. */
 /* TMP236 piecewise-linear transfer function (TI datasheet SBOS857E,
  * Table 2) — see Drivers_App/drv_tmp236.c for the equation this feeds. */
 #define DEFAULT_TMP236_SEG1_VOFFS_MV    400
@@ -115,9 +125,14 @@
 #define EEPROM_LM35_SETTINGS_VERSION      0x0001
 #define EEPROM_ENCODER_SETTINGS_ADDR      0x0400  /* quadrature counts/detent */
 #define EEPROM_ENCODER_SETTINGS_VERSION   0x0001
-/* 0x0500 was the REV A SCL3300/PCAP04 tilt CalibrationData page — removed
- * with the rest of the REV A sensor stack. Next free page for a REV B
- * calibration store. */
+#define EEPROM_DISPLACEMENT_SETTINGS_ADDR    0x0500  /* WP10 disp calibration —
+                                                         was the REV A SCL3300/
+                                                         PCAP04 tilt CalibrationData
+                                                         page, removed with the
+                                                         rest of the REV A sensor
+                                                         stack; first REV B use of
+                                                         this freed page. */
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0001
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -233,47 +248,89 @@
 #define ADC_FRAME_DEFICIT_LIMIT     8         /* frames off the SysTick estimate */
 #define ADC_FRAME_DEFICIT_HOLD_MS   200U      /* sustained before it latches */
 
-/* Services/svc_signal_analysis.c: complete 8-sample sine cycles per
- * amplitude/phase recompute. 64 cycles = 512 samples ~= 24.6 ms at
- * 20833.33 Hz — first-cut update rate, safe to retune. */
-#define SIGNAL_ANALYSIS_BATCH_CYCLES   64U
-
 /* --- ADS131M04 frame ring (docs/adc_acquisition_redesign.md) ---
  * The SPI1 RX DMA writes each frame straight into a ring slot; the TIM7
- * ISR only advances the head index. The per-sample sign-extend + DFT MAC
- * + bulk-store run in the SysTick drain (drv_ads131m04_drain_tick, ~21
- * frames/ms at fDATA). Ring depth in frames (power of two — index math
- * uses & (N-1)). 64 x 18 B ~= 1.2 KB, ~2 ms of slack before the DMA laps
- * the drain. Producer laps consumer -> ring_overflow counter + drop-
- * newest (Phase 2 adds a latching ERROR). */
+ * ISR only advances the head index. The per-sample sign-extend runs in
+ * the SysTick drain (drv_ads131m04_drain_tick, ~21 frames/ms at fDATA),
+ * which calls into Services/svc_displacement.c's per-sample callback.
+ * Ring depth in frames (power of two — index math uses & (N-1)). 64 x
+ * 18 B ~= 1.2 KB, ~2 ms of slack before the DMA laps the drain. Producer
+ * laps consumer -> ring_overflow counter + drop-newest (Phase 2 adds a
+ * latching ERROR). */
 #define ADC_FRAME_RING_FRAMES          64U
 
-/* --- Bulk raw-ADC capture (API v2, category 0x8 / START_BULK) ---
- * Decouples high-rate sampling from transport speed: the device fills a
- * RAM buffer at the full 20833.33 Hz sample rate, then streams it out in
- * chunks over whatever transport at whatever speed the link allows
- * (docs/api-v2-spec.md §4.5).
+/* --- Displacement demodulation (WP10, Services/svc_displacement.c) ---
+ * Producer (the per-sample callback, called from the SysTick frame
+ * drain above) -> consumer (svc_displacement_update(), every scheduler
+ * tick) ring depth, one entry per completed 8-sample carrier cycle
+ * (~2.6 kHz production rate — see math_phasor.h). Same
+ * shape/reasoning as ADC_FRAME_RING_FRAMES above, just one layer up the
+ * pipeline (cycles, not raw frames) and used for two SPSC rings (raw
+ * I/Q in, computed delta out — see svc_displacement.c). Power of two,
+ * index math uses & (N-1). 64 cycles ~= 24.6 ms of slack. */
+#define DISPLACEMENT_RING_DEPTH        64U
+
+/* ROOT-CAUSED 2026-09-24 with a real debugger session (STM32_Programmer_CLI
+ * -halt/-coreReg/-r32 over SWD -- see docs/wp10_displacement.md for the
+ * full walkthrough), after the earlier "known open issue" writeup that
+ * used to sit here turned out to be chasing the wrong layer entirely.
+ * The MCU was never actually crashed: uwTick (pure SysTick-ISR-driven,
+ * independent of the scheduler) kept advancing normally throughout,
+ * while app_scheduler.c's s_tasks[] showed task_displacement's
+ * last_run_ms frozen from the moment it was first called -- i.e. the
+ * scheduler's main loop was stuck *inside one call* to
+ * svc_displacement_update(), specifically its `while (s_in_tail !=
+ * s_in_head)` drain loop, and never returned.
  *
- * Buffer = ADC_BULK_SAMPLE_COUNT samples x 4 channels x 3 bytes. The ADC
- * codes are 24-bit, stored packed little-endian signed -- the
- * sign-extension byte that int32 storage wasted is dropped. 6144 x 4 x 3
- * = 73728 bytes ~= 50% of the 144 KB SRAM. At 20833.33 Hz one capture
- * spans ~295 ms (~768 cycles of the 2604 Hz DAC tone). */
-#define ADC_BULK_SAMPLE_COUNT          6144U
+ * Why: the per-cycle complex-division math (3 float divisions +
+ * surrounding multiplies, no hardware FPU on this Cortex-M0+) costs more
+ * per cycle than the ~384 us a cycle takes to produce (2.6 kHz carrier).
+ * Compute-only, that's already marginal -- bench-measured ~18% of
+ * cycles dropped even with nowhere to store the result. Add the few
+ * extra stores push_output()/the API snapshot need and the average
+ * tips over budget: on_sample() (ISR context) queues new cycles into
+ * s_in_ring faster than the drain loop can empty it, so the loop's own
+ * exit condition can never become true -- a livelock, not a crash, and
+ * not fixable by changing what gets stored (every earlier bisection
+ * attempt that "fixed" it by removing storage was really just removing
+ * enough per-cycle cost to stay under budget, not fixing a logic bug).
+ *
+ * Real fix, two parts:
+ *  1. DISPLACEMENT_BATCH_CYCLES -- coherently sum this many consecutive
+ *     cycles' raw I/Q (cheap int64 adds, same accumulation ISR-side)
+ *     before running the expensive per-batch complex division once,
+ *     instead of once per single cycle. Cuts the division-heavy work by
+ *     this factor (and, as a bonus, is a longer coherent integration --
+ *     better SNR, not just a workaround). 8 gives ~325 updates/s, ample
+ *     for a mechanical displacement reading with generous headroom
+ *     under the ~18%-marginal single-cycle budget.
+ *  2. DISPLACEMENT_MAX_CYCLES_PER_TICK -- defensive cap on how many raw
+ *     cycles svc_displacement_update() will dequeue in one call,
+ *     regardless of backlog, so a future transient overload (scheduler
+ *     jitter, a slow tick elsewhere) can degrade to dropped cycles
+ *     (already-proven-safe, graceful) instead of ever livelocking the
+ *     scheduler again -- same bounded-pump shape as
+ *     DISPLAY_PAGES_PER_TICK / the retired bulk-chunk pump. */
+#define DISPLACEMENT_BATCH_CYCLES         8U
+#define DISPLACEMENT_MAX_CYCLES_PER_TICK  32U
 
-/* 4 channels x 3 bytes -- size of one full sample, in RAM and on the wire. */
-#define ADC_BULK_BYTES_PER_SAMPLE     12U
-
-/* Samples per bulk chunk packet. Each chunk payload is
- * [page:1][sample:12]xN; the whole API2 packet must fit API2_PACKET_MAX_SIZE
- * (128): 6 (frame) + 1 (status) + 1 (page) + 12*N <= 128 -> N <= 10. */
-#define ADC_BULK_CHUNK_SAMPLES        10U
-
-/* Chunks pushed per svc_api_update() tick, upper bound — actual pace is
- * governed by the transport TX-ring headroom (svc_api's ready_fn). Keeps
- * the pump yielding so command responses / other traffic still get a turn
- * mid-transfer (docs/api-v2-spec.md §4.1). */
-#define ADC_BULK_CHUNKS_PER_TICK      4U
+/* Nominal calibration seeds (DeviceSettings' displacement page, EEPROM-
+ * backed past first boot — see system_state.h's comment on those
+ * fields). Scaled integers, not raw floats, to fit svc_api.c's
+ * integer-only SF() field machinery: milli-units (x1000) for the two
+ * dimensionless ratios (atten, gain), micrometers for the two lengths
+ * (d0, zero_offset). Nominal atten=3 matches the board's actual A/B
+ * attenuator (bench-confirmed, 2026-09 RC-filter investigation); gain
+ * and d0 are un-bench-calibrated starting points, same "unconfirmed
+ * against real hardware" caveat as DEFAULT_ENCODER_COUNTS_PER_DETENT
+ * above. zero_offset starts at 0 (no bench zero calibration done yet). */
+#define DEFAULT_DISP_ATTEN_MILLI            3000    /* atten = 3.000 */
+#define DEFAULT_DISP_S1_GAIN_MILLI         10000    /* gain  = 10.000 */
+#define DEFAULT_DISP_S1_D0_UM                100    /* d0    = 0.100 mm */
+#define DEFAULT_DISP_S1_ZERO_OFFSET_UM         0
+#define DEFAULT_DISP_S2_GAIN_MILLI         10000
+#define DEFAULT_DISP_S2_D0_UM                100
+#define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
 
 /* --- BME280 environmental sensor (WP9) ---
  * Shares I2C1 with the EEPROM (see pin_config.h) — no CubeMX changes
