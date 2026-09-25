@@ -147,6 +147,19 @@ static bool     s_phasor_log_active      = false;
 static bool     s_phasor_log_done        = false;
 static uint8_t  s_phasor_log_decim_count = 0;
 
+/* --- Zero calibration state (2026-09-25) --- see svc_displacement.h's
+ * comment. Task context only, same reasoning as the phasor log state
+ * above (the "producer" is process_one_batch(), the "consumer" is
+ * svc_api.c's svc_api_update(), both task-context callers). */
+static DisplacementZeroCalPhase s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
+static uint16_t s_zero_cal_count = 0;
+static float    s_zero_cal_sum1  = 0.0f;   /* running sum for the CURRENT step */
+static float    s_zero_cal_sum2  = 0.0f;
+static float    s_zero_cal_step1_avg1 = 0.0f;   /* saved once step 1 completes */
+static float    s_zero_cal_step1_avg2 = 0.0f;
+static float    s_zero_cal_result1_mm = 0.0f;   /* new absolute zero_offset, once RESULT_READY */
+static float    s_zero_cal_result2_mm = 0.0f;
+
 /* Same reasoning as s_sample_idx above -- assigned in on_sample() to
  * every completed 8-sample cycle *before* the input-ring-full check, so
  * a cycle dropped there (consumer not keeping up) still consumes a seq
@@ -341,6 +354,44 @@ typedef struct {
     int64_t iB, qB, iA, qA, iS1, qS1, iS2, qS2;
 } BatchSums;
 
+/* Feeds one batch's delta1_mm/delta2_mm into an in-progress zero-cal
+ * step, if one is armed -- called unconditionally from process_one_batch()
+ * (cheap no-op via the phase check when idle). Completing
+ * DISPLACEMENT_ZERO_CAL_SAMPLES samples finishes the current step: step 1
+ * just saves its average and waits for step2_begin(); step 2 combines
+ * both steps' averages into the new absolute zero offset (config.h's
+ * "Displacement zero calibration" comment has the derivation) and moves
+ * to RESULT_READY for svc_api.c to consume. */
+static void zero_cal_accumulate(float delta1, float delta2)
+{
+    if (s_zero_cal_phase != DISP_ZERO_CAL_STEP1_RUNNING
+        && s_zero_cal_phase != DISP_ZERO_CAL_STEP2_RUNNING) {
+        return;
+    }
+    s_zero_cal_sum1 += delta1;
+    s_zero_cal_sum2 += delta2;
+    if (++s_zero_cal_count < DISPLACEMENT_ZERO_CAL_SAMPLES) {
+        return;
+    }
+    float avg1 = s_zero_cal_sum1 / (float)DISPLACEMENT_ZERO_CAL_SAMPLES;
+    float avg2 = s_zero_cal_sum2 / (float)DISPLACEMENT_ZERO_CAL_SAMPLES;
+    if (s_zero_cal_phase == DISP_ZERO_CAL_STEP1_RUNNING) {
+        s_zero_cal_step1_avg1 = avg1;
+        s_zero_cal_step1_avg2 = avg2;
+        s_zero_cal_phase = DISP_ZERO_CAL_STEP1_DONE;
+    } else {
+        /* zero_error = (step1_avg + step2_avg) / 2 -- see config.h. The
+         * NEW absolute offset is the OLD one plus that error: delta_mm
+         * already has the old zero_offset subtracted (compute_sensor_delta()),
+         * so the averaged residual bias IS the correction still needed. */
+        s_zero_cal_result1_mm = (float)g_device_settings.disp_s1_zero_offset_um / 1000.0f
+                               + (s_zero_cal_step1_avg1 + avg1) / 2.0f;
+        s_zero_cal_result2_mm = (float)g_device_settings.disp_s2_zero_offset_um / 1000.0f
+                               + (s_zero_cal_step1_avg2 + avg2) / 2.0f;
+        s_zero_cal_phase = DISP_ZERO_CAL_RESULT_READY;
+    }
+}
+
 static void process_one_batch(const BatchSums *s, uint16_t seq)
 {
     float iB = (float)s->iB, qB = (float)s->qB;
@@ -392,6 +443,8 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     s_delta2_mm = delta2;
     s_residual2 = residual2;
     s_disp_ok   = true;
+
+    zero_cal_accumulate(delta1, delta2);
 }
 
 DrvStatus svc_displacement_init(void)
@@ -438,6 +491,10 @@ DrvStatus svc_displacement_start(void)
     s_disp_ok = false;
     batch_reset();
     s_batch_seq = 0;
+    /* A fresh start invalidates any in-progress zero-cal run -- its
+     * averaging assumed a continuous demod session, not one straddling a
+     * stop/start. */
+    svc_displacement_zero_cal_cancel();
     return drv_ads131m04_start();
 }
 
@@ -471,6 +528,11 @@ void svc_displacement_stop(void)
      * reading Measurements 0x0D right after a stop doesn't see a stale
      * ok=1 from before acquisition was halted. */
     s_disp_ok = false;
+    /* A stop mid-calibration leaves a stale, confusing in-progress state
+     * (e.g. a step 1 average from before the stop, paired with a step 2
+     * that never got to run) -- cancel rather than let a later
+     * step2_begin() silently combine data from two different sessions. */
+    svc_displacement_zero_cal_cancel();
 }
 
 bool svc_displacement_is_running(void)
@@ -702,4 +764,61 @@ uint16_t svc_displacement_phasor_log_count(void)
 uint16_t svc_displacement_phasor_log_progress(void)
 {
     return s_phasor_log_idx;
+}
+
+DrvStatus svc_displacement_zero_cal_step1_begin(void)
+{
+    if (!svc_displacement_is_running()) {
+        return DRV_ERR_NOT_READY;
+    }
+    if (s_zero_cal_phase != DISP_ZERO_CAL_IDLE
+        && s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
+        return DRV_ERR_NOT_READY;   /* already mid-run -- cancel first */
+    }
+    s_zero_cal_sum1  = s_zero_cal_sum2  = 0.0f;
+    s_zero_cal_count = 0;
+    s_zero_cal_phase = DISP_ZERO_CAL_STEP1_RUNNING;
+    return DRV_OK;
+}
+
+DrvStatus svc_displacement_zero_cal_step2_begin(void)
+{
+    if (!svc_displacement_is_running()) {
+        return DRV_ERR_NOT_READY;
+    }
+    if (s_zero_cal_phase != DISP_ZERO_CAL_STEP1_DONE) {
+        return DRV_ERR_NOT_READY;   /* step 1 hasn't finished (or wasn't started) */
+    }
+    s_zero_cal_sum1  = s_zero_cal_sum2  = 0.0f;
+    s_zero_cal_count = 0;
+    s_zero_cal_phase = DISP_ZERO_CAL_STEP2_RUNNING;
+    return DRV_OK;
+}
+
+void svc_displacement_zero_cal_cancel(void)
+{
+    s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
+    s_zero_cal_count = 0;
+}
+
+DisplacementZeroCalPhase svc_displacement_zero_cal_get_phase(void)
+{
+    return s_zero_cal_phase;
+}
+
+void svc_displacement_zero_cal_progress(uint16_t *count_out, uint16_t *target_out)
+{
+    if (count_out)  *count_out  = s_zero_cal_count;
+    if (target_out) *target_out = DISPLACEMENT_ZERO_CAL_SAMPLES;
+}
+
+bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out)
+{
+    if (s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
+        return false;
+    }
+    if (offset1_mm_out) *offset1_mm_out = s_zero_cal_result1_mm;
+    if (offset2_mm_out) *offset2_mm_out = s_zero_cal_result2_mm;
+    s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
+    return true;
 }

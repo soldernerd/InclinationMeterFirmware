@@ -440,12 +440,53 @@ static void cmd_reboot_dfu(ApiTransport t, uint16_t opcode,
     hal_dfu_enter_bootloader();
 }
 
+/* Zero calibration (180-degree reversal test) -- see svc_api.h's
+ * API2_RES_CMD_ZERO_CAL comment and Config/config.h's "Displacement zero
+ * calibration" comment for the procedure/math. Applying the RESULT_READY
+ * phase (writing g_device_settings + the EEPROM save) happens in
+ * svc_api_update() below, not here -- step 2's EXECUTE just arms the
+ * averaging and acks immediately; the result isn't ready until
+ * DISPLACEMENT_ZERO_CAL_SAMPLES batches later. */
+static void cmd_zero_cal(ApiTransport t, uint16_t opcode,
+                         const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    uint8_t action = pl[0];
+    DrvStatus rc;
+    switch (action) {
+        case 0U:
+            svc_displacement_zero_cal_cancel();
+            svc_log(API2_LOG_INFO, "cmd: zero-cal cancelled");
+            send_response(t, opcode, API2_STATUS_OK, 0, 0);
+            return;
+        case 1U:
+            rc = svc_displacement_zero_cal_step1_begin();
+            break;
+        case 2U:
+            rc = svc_displacement_zero_cal_step2_begin();
+            break;
+        default:
+            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+            return;
+    }
+    if (rc != DRV_OK) {
+        /* Not running yet, or the wrong step for the current phase
+         * (e.g. step 2 before step 1 finished) -- same BUSY_RESOURCE
+         * mapping the bulk-capture begin() failures use. */
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    svc_logf(API2_LOG_INFO, "cmd: zero-cal step %u started", (unsigned)action);
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
 static const CommandDesc s_commands[] = {
     { API2_RES_CMD_TEST_BEEP,       0U, cmd_test_beep       },
     { API2_RES_CMD_DISPLACEMENT,    1U, cmd_displacement    },
     { API2_RES_CMD_FORCE_CHARGE,    0U, cmd_force_charge    },
     { API2_RES_CMD_POWER_TEST,      4U, cmd_power_test      },
     { API2_RES_CMD_PIN_TEST,        1U, cmd_pin_test        },
+    { API2_RES_CMD_ZERO_CAL,        1U, cmd_zero_cal        },
     { API2_RES_CMD_REBOOT_DFU,      0U, cmd_reboot_dfu      },
 };
 #define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
@@ -661,7 +702,7 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         return;
     }
     if (res != API2_RES_RAW_ADC_DIAG && res != API2_RES_RAW_PWRTEST
-        && res != API2_RES_RAW_DISPLACEMENT_DIAG) {
+        && res != API2_RES_RAW_DISPLACEMENT_DIAG && res != API2_RES_RAW_ZERO_CAL_STATUS) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
@@ -693,6 +734,20 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         p.degenerate  = svc_displacement_get_degenerate_count();
         p.disp_ok     = svc_displacement_get_ok() ? 1U : 0U;
         p.phasor_log_progress = svc_displacement_phasor_log_progress();
+        send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
+        return;
+    }
+
+    if (res == API2_RES_RAW_ZERO_CAL_STATUS) {
+        struct __attribute__((packed)) {
+            uint8_t  phase;
+            uint16_t progress, target;
+        } p;
+        uint16_t progress, target;
+        p.phase = (uint8_t)svc_displacement_zero_cal_get_phase();
+        svc_displacement_zero_cal_progress(&progress, &target);
+        p.progress = progress;
+        p.target   = target;
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }
@@ -1514,6 +1569,55 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
     }
 }
 
+/* Applies a completed zero-calibration run (svc_displacement.h's
+ * DISP_ZERO_CAL_RESULT_READY phase) to this instrument's own
+ * g_device_settings and persists it, the same "only the API layer
+ * touches settings/EEPROM" split dispatch_calibrations()'s SET handler
+ * follows -- svc_displacement.c computes the result but never writes
+ * settings itself. Called every tick from svc_api_update() so the save
+ * happens promptly (usually the very tick step 2 finishes) rather than
+ * waiting for a host to poll Raw data 0x03. mm -> um matches
+ * dispatch_calibrations()'s existing ZERO_OFFSET_UM bounds (-5000..5000)
+ * exactly -- clamped, not rejected, since this is a computed result, not
+ * a host-supplied value that should ever be "invalid" in normal use. */
+static void zero_cal_apply_if_ready(void)
+{
+    float offset1_mm, offset2_mm;
+    if (!svc_displacement_zero_cal_consume_result(&offset1_mm, &offset2_mm)) {
+        return;
+    }
+    if (svc_storage_is_busy()) {
+        /* Extremely unlikely (a settings SET landing on the exact same
+         * tick), but don't silently drop a completed calibration --
+         * the phase already reset to IDLE in consume_result(), so
+         * without a retry this result would just be lost. Re-run the
+         * whole procedure instead of queuing: simplest correct
+         * response to a one-in-many-thousands race, and the host
+         * already knows how to drive the two-step flow. */
+        svc_log(API2_LOG_WARN, "zero-cal: EEPROM busy, result dropped -- retry the calibration");
+        return;
+    }
+    /* Round to nearest micrometer, not truncate toward zero (a naive
+     * cast would silently discard any sub-micrometer correction --
+     * e.g. -0.6 um truncates to 0, not -1 -- same rounding
+     * App/app_display.c's format_displacement_mm() already uses). */
+    int32_t off1_um = (int32_t)(offset1_mm * 1000.0f + (offset1_mm >= 0.0f ? 0.5f : -0.5f));
+    int32_t off2_um = (int32_t)(offset2_mm * 1000.0f + (offset2_mm >= 0.0f ? 0.5f : -0.5f));
+    if (off1_um < -5000) off1_um = -5000; else if (off1_um > 5000) off1_um = 5000;
+    if (off2_um < -5000) off2_um = -5000; else if (off2_um > 5000) off2_um = 5000;
+    g_device_settings.disp_s1_zero_offset_um = off1_um;
+    g_device_settings.disp_s2_zero_offset_um = off2_um;
+    svc_storage_validate_settings(&g_device_settings);
+    DrvStatus rc = svc_storage_save_settings(&g_device_settings);
+    if (rc == DRV_OK) {
+        svc_logf(API2_LOG_INFO, "zero-cal: applied, S1 offset %ld um, S2 offset %ld um",
+                 (long)off1_um, (long)off2_um);
+    } else {
+        g_system_state.settings_save_failed = true;
+        svc_log(API2_LOG_ERROR, "zero-cal: save failed");
+    }
+}
+
 /* Debug-log push: a few lines per call per subscribed transport so a slow
  * BLE link isn't flooded in one tick. */
 #define DEBUG_PUSH_PER_TICK 4U
@@ -1521,6 +1625,7 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
 void svc_api_update(void)
 {
     bulk_pump();
+    zero_cal_apply_if_ready();
 
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
         if (!s_t[t].connected || !s_t[t].dbg.active) continue;

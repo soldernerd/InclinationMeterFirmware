@@ -351,6 +351,29 @@
 #define DEFAULT_DISP_S2_D0_UM                100
 #define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
 
+/* --- Displacement zero calibration (180-degree reversal test, 2026-09-25) ---
+ * Standard precision-level technique: place the instrument, average its
+ * reading (step 1), physically rotate it 180 degrees IN PLACE, average
+ * again (step 2). A real surface tilt phi contributes with opposite sign
+ * to each step's reading (the instrument's own frame flips relative to
+ * the surface), while the instrument's own zero error stays the same
+ * (it's intrinsic to the sensor, not the surface) -- so the two steps'
+ * average cancels phi and isolates the zero error:
+ *   step1 = phi + zero_error, step2 = -phi + zero_error
+ *   zero_error = (step1 + step2) / 2
+ * Applied independently per sensor head (S1, S2 each have their own
+ * disp_*_zero_offset_um -- see svc_displacement.c's
+ * svc_displacement_zero_cal_*() and Services/svc_api.c's Commands
+ * API2_RES_CMD_ZERO_CAL). Per-instrument by construction: this only ever
+ * reads/writes THIS device's own g_device_settings and its own EEPROM --
+ * nothing here is shared across physical units.
+ *
+ * Samples averaged per step. At the default DISPLACEMENT_BATCH_CYCLES
+ * (32, ~81 batches/s), 128 samples =~ 1.6 s per step -- enough averaging
+ * to ride out ordinary sensor noise (see the bulk-capture signal-quality
+ * analysis) without making the user hold the instrument still for long. */
+#define DISPLACEMENT_ZERO_CAL_SAMPLES        128U
+
 /* --- Bulk raw-ADC capture (API v2 category 0x8: START_BULK/CANCEL_BULK) ---
  * Restored 2026-09-25 -- an important bench diagnostic tool, mistakenly
  * retired 2026-09-24 on the theory that WP10's displacement demod owning

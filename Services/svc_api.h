@@ -187,6 +187,26 @@ typedef enum {
  *   STM32_Programmer_CLI -c port=USB1 -w fw.hex -ob nSWBOOT0=1 nBOOT0=1 -v -rst
  * (or PythonTestCode/dfu_flash.ps1). See HAL_App/hal_dfu.h. */
 #define API2_RES_CMD_REBOOT_DFU       0x05U
+/* 0x06 Zero calibration — 1-byte payload, the classic 180-degree
+ * reversal test (Config/config.h's "Displacement zero calibration"
+ * comment has the derivation):
+ *   0x00 cancel — abort an in-progress run, no-op if already idle.
+ *   0x01 step 1 — place the instrument, then EXECUTE this. Averages
+ *        DISPLACEMENT_ZERO_CAL_SAMPLES batches at the current
+ *        orientation. Requires the demod already running (Commands
+ *        API2_RES_CMD_DISPLACEMENT) — BUSY_RESOURCE otherwise.
+ *   0x02 step 2 — after physically rotating the instrument 180 degrees,
+ *        EXECUTE this. Same averaging at the new orientation, then
+ *        computes and PERSISTS new disp_s1/s2_zero_offset_um values to
+ *        this instrument's own EEPROM (Calibrations 0x2, resources
+ *        0x03/0x06) — BUSY_RESOURCE if step 1 hasn't finished yet.
+ * Each EXECUTE just starts/cancels a step and acks immediately — the
+ * averaging itself takes ~1.6 s per step (see config.h). Poll progress
+ * via Raw data (0x7) resource 0x03; a GET on Calibrations 0x2 after step
+ * 2 completes reads back the new persisted offsets. Entirely local to
+ * this physical instrument: reads/writes only this device's own
+ * g_device_settings and EEPROM, never anything shared across units. */
+#define API2_RES_CMD_ZERO_CAL         0x06U
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
@@ -196,6 +216,8 @@ typedef enum {
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_FORCE_CHARGE)
 #define API2_OP_CMD_POWER_TEST \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_POWER_TEST)
+#define API2_OP_CMD_ZERO_CAL \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_ZERO_CAL)
 #define API2_OP_CMD_REBOOT_DFU \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_REBOOT_DFU)
 
@@ -392,6 +414,19 @@ typedef enum {
  *                                  DISPLACEMENT_PHASOR_LOG_DEPTH; lets a host
  *                                  poll progress instead of guessing) */
 #define API2_RES_RAW_DISPLACEMENT_DIAG  0x02U
+/* 0x03 = zero-calibration progress (Commands 0x06, see its comment for
+ * the full procedure). GET, no request payload. Response (5 B, LE):
+ *   u8  phase     (DisplacementZeroCalPhase: 0 idle, 1 step1 running,
+ *                   2 step1 done (ready for step2), 3 step2 running,
+ *                   4 result ready -- transient, svc_api_update() applies
+ *                   and persists it within one tick, so a host polling
+ *                   slower than that will normally see phase go straight
+ *                   from 3 back to 0)
+ *   u16 progress  (samples averaged so far in the CURRENT step, 0 while
+ *                   idle or between steps)
+ *   u16 target    (DISPLACEMENT_ZERO_CAL_SAMPLES, so a host doesn't need
+ *                   to hardcode it) */
+#define API2_RES_RAW_ZERO_CAL_STATUS    0x03U
 
 #define API2_OP_RAW_ADC_DIAG \
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_ADC_DIAG)
@@ -399,6 +434,8 @@ typedef enum {
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_PWRTEST)
 #define API2_OP_RAW_DISPLACEMENT_DIAG \
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_DISPLACEMENT_DIAG)
+#define API2_OP_RAW_ZERO_CAL_STATUS \
+    API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_ZERO_CAL_STATUS)
 
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ----------------
  * 0x00 Raw ADC capture. START_BULK: no request payload (the transfer size

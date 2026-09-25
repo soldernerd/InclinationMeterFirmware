@@ -257,7 +257,62 @@ that actually restored most of the headroom; the display's residual cost is a sm
 secondary effect worth a closer look if the readout's refresh rate ever needs to go
 back up.
 
-## Current status (fw 0.10.29)
+## Zero calibration (180-degree reversal test, 2026-09-25, fw 0.10.31)
+
+Standard precision-level calibration procedure, added on request: place the instrument,
+trigger step 1; physically rotate it 180 degrees in place, trigger step 2; the instrument
+is then zeroed. Config/config.h's "Displacement zero calibration" comment has the full
+derivation -- in short, a real surface tilt contributes with opposite sign to each step's
+reading while the instrument's own zero error doesn't, so averaging the two steps cancels
+the (unknown) surface tilt and isolates the (wanted) zero error:
+```
+step1 = surface_tilt + zero_error
+step2 = -surface_tilt + zero_error
+zero_error = (step1 + step2) / 2
+```
+Applied independently per sensor head (S1, S2 each have their own `disp_s1/s2_zero_offset_um`
+calibration constant already) -- one 180-degree flip of the whole instrument zeroes both
+sensors in a single two-step run, since both are rigidly mounted in the same housing and
+both see the same physical rotation.
+
+**Entirely per-instrument by construction**: the whole procedure only ever reads/writes
+*this* device's own `g_device_settings` and *its own* EEPROM (Services/svc_storage.c) --
+there is no shared or global calibration state, so running this on one physical unit can
+never affect another's calibration. Confirmed with the user as an explicit requirement,
+not just incidentally true.
+
+**API**: Commands (0x1) resource `0x06` (`API2_RES_CMD_ZERO_CAL`), EXECUTE, 1-byte
+payload: `0x00` cancel, `0x01` step 1, `0x02` step 2. Each call just arms/cancels a step
+and acks immediately -- averaging `DISPLACEMENT_ZERO_CAL_SAMPLES` (128, ~1.6 s at the
+default batch rate) batches happens over the following ticks inside
+`svc_displacement.c`'s `process_one_batch()`, the same place `delta1_mm`/`delta2_mm`
+themselves get computed. Progress is pollable via Raw data (0x7) resource `0x03`
+(phase/progress/target); once step 2 finishes, `svc_api.c`'s `svc_api_update()` applies
+and persists the result within the same tick (rounded to the nearest micrometer, clamped
+to the existing Calibrations `ZERO_OFFSET_UM` bounds of ±5000) -- a host reading
+Calibrations 0x2 resources `0x03`/`0x06` afterward sees the new values directly, no
+separate "commit" step needed. Requires the demod already running (Commands
+`API2_RES_CMD_DISPLACEMENT`); `svc_displacement_stop()` or a fresh `start()` cancels an
+in-progress run rather than leaving stale step-1 data around.
+
+Bench-verified on board 2 (mechanism only -- see caveat below): step 1 and step 2 both
+completed in ~1s with correct progress reporting; all edge cases correctly rejected
+(step 1 while not running, step 2 before step 1, an invalid action byte, cancel while
+already idle); offsets went from `(0, 0)` µm to `(-1, -1)` µm and `disp1_delta_mm`/
+`disp2_delta_mm` shifted by the mathematically correct amount and direction; the new
+offsets persisted across a stop and a fresh GET (confirmed written to EEPROM, not just
+RAM). A rounding bug was caught and fixed during this verification: the mm-to-µm
+conversion originally truncated toward zero instead of rounding to nearest, silently
+discarding any correction under 1 µm.
+
+**Caveat on the bench verification above**: both steps were triggered at the SAME
+physical orientation (no actual 180-degree flip was performed -- this session has no way
+to physically manipulate the instrument). That exercises the state machine, API,
+persistence, and math direction correctly, but is NOT a real calibration run --
+performing an actual flip between step 1 and step 2 is the real end-to-end test still
+needed on real hardware.
+
+## Current status (fw 0.10.31)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified.
@@ -269,9 +324,11 @@ back up.
 - Timing margin hardened (`DISPLACEMENT_BATCH_CYCLES`/`_RING_DEPTH`/
   `_MAX_CYCLES_PER_TICK`, see above) after board 2 exposed the original tuning as too
   thin in general, not board-specific.
+- Zero calibration (180-degree reversal test) implemented and API-accessible, mechanism
+  bench-verified -- see above. Still needs a real physical-flip test.
 - Deferred, not blocking: the high-rate per-cycle stream (nothing drains
   `svc_displacement_pop()` yet); a fresh bench calibration of `gain`/`d0`/`zero_offset`
   (currently nominal/un-calibrated defaults — the bulk-capture signal-quality pass found
   the nominal S-channel gain of 10x doesn't match either board's actual hardware, real
   gain is closer to ~0.13x); the LIVE-screen readout's own residual, not-fully-root-caused
-  rendering cost noted above.
+  rendering cost noted above; a real physical-flip zero-cal test.

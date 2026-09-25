@@ -244,4 +244,58 @@ uint16_t                          svc_displacement_phasor_log_count(void);   /* 
  * on Raw data (0x7) GET API2_RES_RAW_DISPLACEMENT_DIAG. */
 uint16_t svc_displacement_phasor_log_progress(void);
 
+/* --- Zero calibration (180-degree reversal test) ---
+ * Added 2026-09-25 -- see Config/config.h's "Displacement zero
+ * calibration" comment for the math. A two-step procedure driven by the
+ * API (Commands API2_RES_CMD_ZERO_CAL, Services/svc_api.c):
+ *   1. svc_displacement_zero_cal_step1_begin() while the instrument sits
+ *      in its starting orientation -- averages DISPLACEMENT_ZERO_CAL_SAMPLES
+ *      consecutive batches' delta1_mm/delta2_mm.
+ *   2. Once svc_displacement_zero_cal_get_phase() reports
+ *      DISP_ZERO_CAL_STEP1_DONE, the instrument is physically rotated
+ *      180 degrees and svc_displacement_zero_cal_step2_begin() is called
+ *      -- same averaging, at the new orientation.
+ *   3. Once the phase reports DISP_ZERO_CAL_RESULT_READY, the new
+ *      per-sensor zero offsets are ready; svc_api.c's svc_api_update()
+ *      polls for this and applies + persists them to
+ *      g_device_settings.disp_s1/s2_zero_offset_um via
+ *      svc_displacement_zero_cal_consume_result() (task context, same
+ *      "only touch g_device_settings/EEPROM from the API layer" pattern
+ *      Calibrations SET already follows) -- this module computes the
+ *      result but never writes settings or touches EEPROM itself.
+ * Requires svc_displacement_is_running() -- delta1_mm/delta2_mm are only
+ * meaningful while the demod is live. Accumulation happens inside
+ * process_one_batch() (task context, same place s_delta1_mm etc. get
+ * written), so it runs at whatever the current batch rate is -- no
+ * separate polling loop needed. svc_displacement_stop() cancels an
+ * in-progress run (a stale mid-calibration state after a stop would be
+ * more confusing than starting over). */
+typedef enum {
+    DISP_ZERO_CAL_IDLE = 0,
+    DISP_ZERO_CAL_STEP1_RUNNING,
+    DISP_ZERO_CAL_STEP1_DONE,        /* ready for step2_begin() after the 180-degree flip */
+    DISP_ZERO_CAL_STEP2_RUNNING,
+    DISP_ZERO_CAL_RESULT_READY,      /* computed, not yet consumed/applied */
+} DisplacementZeroCalPhase;
+
+DrvStatus svc_displacement_zero_cal_step1_begin(void);   /* DRV_ERR_NOT_READY if not running or already in progress */
+DrvStatus svc_displacement_zero_cal_step2_begin(void);   /* DRV_ERR_NOT_READY unless phase == DISP_ZERO_CAL_STEP1_DONE */
+void      svc_displacement_zero_cal_cancel(void);        /* back to IDLE from any phase; harmless if already idle */
+
+/* count_out and target_out (both may be NULL) report progress within the
+ * CURRENT step only (0 while idle or between steps). target_out is
+ * always DISPLACEMENT_ZERO_CAL_SAMPLES, included so a host doesn't need
+ * to hardcode it. */
+DisplacementZeroCalPhase svc_displacement_zero_cal_get_phase(void);
+void svc_displacement_zero_cal_progress(uint16_t *count_out, uint16_t *target_out);
+
+/* Only succeeds (returns true, fills offset1_mm_out/offset2_mm_out,
+ * resets phase to IDLE) while phase == DISP_ZERO_CAL_RESULT_READY --
+ * false (outputs untouched) otherwise. These are the NEW absolute
+ * zero-offset values in mm (this run's computed zero error added to
+ * whatever disp_s1/s2_zero_offset_um already held, NOT a delta) -- the
+ * caller still has to convert to micrometers and persist them; this
+ * module never touches g_device_settings or EEPROM itself. */
+bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out);
+
 #endif /* SVC_DISPLACEMENT_H */
