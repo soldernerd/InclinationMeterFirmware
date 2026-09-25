@@ -7,6 +7,7 @@
 #include "hal_dfu.h"
 #include "svc_power.h"
 #include "svc_battery.h"
+#include "svc_displacement.h"
 
 UiState g_ui_state = {
     .current_screen   = UI_SCREEN_LIVE,
@@ -31,6 +32,7 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_AUTO_POWEROFF]    = { "Auto power-off",   "s",    30,     0,   3600 },
     /* step 0 marks these action rows — see UiSettingMeta's comment. */
     [UI_SETTING_FORCE_CHARGE]     = { "Force charge",     "",      0,     0,      0 },
+    [UI_SETTING_ZERO_CAL]         = { "Zero calibration", "",      0,     0,      0 },
     [UI_SETTING_REBOOT_DFU]       = { "Reboot to DFU",    "",      0,     0,      0 },
     [UI_SETTING_POWER_OFF]        = { "Power off",        "",      0,     0,      0 },
 };
@@ -262,6 +264,12 @@ void app_ui_update(void)
              * state) performs the action immediately.
              *   FORCE_CHARGE — svc_battery_force_charge(); returns, drop
              *     back to the row list.
+             *   ZERO_CAL     — WP10's 180-degree reversal zero calibration
+             *     (Services/svc_displacement.h): starts whichever step the
+             *     module's own phase says is next. Returns immediately
+             *     (averaging happens in the background over the next ~1-2s,
+             *     App/app_display.c's SETTINGS row shows live progress);
+             *     drop back to the row list same as FORCE_CHARGE.
              *   REBOOT_DFU   — hal_dfu_enter_bootloader(): sets nBOOT0=0 and
              *     launches an option-byte reload. No return. Device boots to
              *     the ROM bootloader and STAYS there (a power-cycle will NOT
@@ -273,6 +281,22 @@ void app_ui_update(void)
                 switch ((UiSettingIndex)g_ui_state.settings_cursor) {
                     case UI_SETTING_FORCE_CHARGE:
                         svc_battery_force_charge();
+                        g_ui_state.settings_editing = false;
+                        g_ui_state.redraw_needed    = true;
+                        break;
+                    case UI_SETTING_ZERO_CAL:
+                        /* Return dropped deliberately: this local UI has no
+                         * channel to report an error (e.g. displacement not
+                         * running) beyond the row's own live phase text,
+                         * which will just keep showing the "not started"
+                         * state instead of advancing -- same reasoning
+                         * cmd_displacement()/cmd_zero_cal() in Services/
+                         * svc_api.c already document for this exact call. */
+                        if (svc_displacement_zero_cal_get_phase() == DISP_ZERO_CAL_STEP1_DONE) {
+                            (void)svc_displacement_zero_cal_step2_begin();
+                        } else {
+                            (void)svc_displacement_zero_cal_step1_begin();
+                        }
                         g_ui_state.settings_editing = false;
                         g_ui_state.redraw_needed    = true;
                         break;

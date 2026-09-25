@@ -394,7 +394,24 @@ again, `disp1/disp2_delta_mm` reads ~1.29-1.70 mm for the same physical (unmoved
 instrument -- roughly 7x the previous (~0.21-0.24 mm) reading, consistent with the change
 (exact ratio varies run-to-run for the same real-noise reasons as the first bump).
 
-## Current status (fw 0.10.34)
+## Zero calibration added to the local menu (2026-09-26, fw 0.10.35)
+
+User asked where the zeroing routine was in the menu structure -- it wasn't: WP10's
+zero-cal shipped API-only (Commands 0x1/0x06), even though the described workflow
+("user places the instrument and starts step 1... turns instrument 180 degrees and
+triggers step 2") is clearly a local, hands-on operation. Added a `UI_SETTING_ZERO_CAL`
+action row to the SETTINGS screen (`App/app_ui.h`/`.c`, `App/app_display.c`), between
+"Force charge" and "Reboot to DFU", following the exact existing action-row pattern
+(first RIGHT press shows a confirm prompt, second RIGHT press fires). One press starts
+whichever step `svc_displacement_zero_cal_get_phase()` says is next -- step 1 normally,
+step 2 once step 1 has finished. Unlike the other action rows, this one shows **live
+progress text** (`[step 1: 43/128]`, then `[flip 180, RIGHT]` once step 1 finishes, then
+`[step 2: 12/128]`) computed fresh every redraw regardless of cursor position, since the
+averaging runs in the background over the following ~1-2 s independent of what the UI is
+doing. Shares the exact same `svc_displacement_zero_cal_*()` calls the API path already
+used and bench-verified -- confirmed no regression there after adding the UI code.
+
+## Current status (fw 0.10.35)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified. Displacement now auto-starts at boot (see above) instead of requiring
@@ -410,13 +427,15 @@ instrument -- roughly 7x the previous (~0.21-0.24 mm) reading, consistent with t
 - Timing margin hardened (`DISPLACEMENT_BATCH_CYCLES`/`_RING_DEPTH`/
   `_MAX_CYCLES_PER_TICK`, see above) after board 2 exposed the original tuning as too
   thin in general, not board-specific.
-- Zero calibration (180-degree reversal test) implemented and API-accessible, mechanism
-  bench-verified -- see above. Needs re-running after the sensitivity bump, and still
-  needs a real physical-flip test.
+- Zero calibration (180-degree reversal test) implemented, API-accessible AND now in the
+  local SETTINGS menu (see above), mechanism bench-verified via the API. Needs re-running
+  after the sensitivity bump, and still needs a real physical-flip test -- and the new
+  local menu entry itself needs the user's own eyes/hands on the panel to confirm.
 - LIVE screen redesigned to show displacement prominently (see above) -- visually
   confirmed working by the user on the physical panel.
 - Deferred, not blocking: the high-rate per-cycle stream (nothing drains
   `svc_displacement_pop()` yet); a proper bench calibration of `gain`/`d0`/`zero_offset`
   against a certified reference (the ~7000x `d0` bump above is a coarse per-board sanity
   check, not that calibration); the LIVE-screen readout's own residual, not-fully-
-  root-caused rendering cost noted earlier; a real physical-flip zero-cal test.
+  root-caused rendering cost noted earlier; a real physical-flip zero-cal test; visual/
+  hands-on confirmation of the new SETTINGS menu entry.

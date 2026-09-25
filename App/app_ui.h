@@ -22,6 +22,16 @@ typedef enum {
     UI_SETTING_FORCE_CHARGE,        /* action — svc_battery_force_charge():
                                      * charge regardless of SOC while USB
                                      * present (one-shot overnight top-off) */
+    UI_SETTING_ZERO_CAL,            /* action — WP10's 180-degree reversal
+                                     * zero calibration (Services/
+                                     * svc_displacement.h). One press starts
+                                     * whichever step the module's own phase
+                                     * says is next (step 1, or step 2 once
+                                     * step 1 has finished and the instrument
+                                     * has been physically flipped) — see
+                                     * app_ui.c's action-row switch and
+                                     * App/app_display.c's SETTINGS row for
+                                     * the live progress/phase text. */
     UI_SETTING_REBOOT_DFU,          /* action, not a value — see its
                                      * UiSettingMeta.step == 0 and
                                      * app_ui.c's app_ui_update() */

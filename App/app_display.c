@@ -334,6 +334,36 @@ static void draw_settings_screen(void)
                      m->label,
                      (long)setting_value_for_display((UiSettingIndex)i),
                      m->unit);
+        } else if ((UiSettingIndex)i == UI_SETTING_ZERO_CAL) {
+            /* Live phase/progress, not the generic "RIGHT again to
+             * confirm" suffix -- this row's meaning genuinely changes
+             * between step 1 and step 2 (place vs. flip-and-confirm), and
+             * the averaging (~1-2 s, config.h's DISPLACEMENT_ZERO_CAL_SAMPLES)
+             * happens in the background regardless of cursor/editing
+             * state, so the progress must keep showing even when this
+             * isn't the selected row. See Services/svc_displacement.h's
+             * zero-cal comment for the phase state machine. */
+            uint16_t count = 0, target = 1;
+            svc_displacement_zero_cal_progress(&count, &target);
+            switch (svc_displacement_zero_cal_get_phase()) {
+                case DISP_ZERO_CAL_STEP1_RUNNING:
+                    snprintf(line, sizeof line, "%s %-18s[step 1: %u/%u]",
+                             cursor, m->label, (unsigned)count, (unsigned)target);
+                    break;
+                case DISP_ZERO_CAL_STEP1_DONE:
+                    snprintf(line, sizeof line, "%s %-18s%s", cursor, m->label,
+                             is_selected_and_editing ? "  RIGHT: confirm step 2"
+                                                      : "  [flip 180, RIGHT]");
+                    break;
+                case DISP_ZERO_CAL_STEP2_RUNNING:
+                    snprintf(line, sizeof line, "%s %-18s[step 2: %u/%u]",
+                             cursor, m->label, (unsigned)count, (unsigned)target);
+                    break;
+                default:   /* IDLE or the (essentially instantaneous) RESULT_READY */
+                    snprintf(line, sizeof line, "%s %-18s%s", cursor, m->label,
+                             is_selected_and_editing ? "  RIGHT: confirm step 1" : "");
+                    break;
+            }
         } else {
             /* Action row (step == 0, e.g. "Reboot to DFU") — no numeric
              * value to show; a confirm prompt replaces it once the row is
