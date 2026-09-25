@@ -79,11 +79,21 @@ typedef struct {
     uint8_t  rtc_set;
 } __attribute__((packed)) Api2TopicStatusPayload;
 
+/* WP10 displacement demod diagnostics (Services/svc_displacement.c) --
+ * see svc_api.h's Topic groups 0x02 doc comment for field meanings. */
+typedef struct {
+    float iB, qB;
+    float iA, qA;
+    float iS1, qS1;
+    float iS2, qS2;
+} __attribute__((packed)) Api2TopicPhasorsPayload;
+
 _Static_assert(sizeof(Api2IdentityPayload)    + 1U <= MAX_PAYLOAD, "IDENTITY response too large");
 _Static_assert(sizeof(Api2DeviceStatePayload) + 1U <= MAX_PAYLOAD, "DEVICE_STATE response too large");
 /* +3: stream pushes prefix [status][issue_seq][page] */
 _Static_assert(sizeof(Api2TopicEnvPayload)    + 3U <= MAX_PAYLOAD, "TOPIC env push too large");
 _Static_assert(sizeof(Api2TopicStatusPayload) + 3U <= MAX_PAYLOAD, "TOPIC status push too large");
+_Static_assert(sizeof(Api2TopicPhasorsPayload) + 3U <= MAX_PAYLOAD, "TOPIC phasors push too large");
 
 /* ---------------- per-transport state ---------------- */
 
@@ -118,15 +128,20 @@ static ApiTransportState s_t[API_TRANSPORT_COUNT];
 static ApiSettingsChangedFn s_settings_changed_fn = 0;
 
 /* ---------------- bulk transfer state (docs/api-v2-spec.md §4.5) ----------------
- * One at a time, device-wide. CAPTURING while the RAM buffer fills at the
- * ADC sample rate; SENDING streams it out in chunks paced by the
- * transport's ready_fn. */
+ * One at a time, device-wide, either resource. CAPTURING while the RAM
+ * buffer fills; SENDING streams it out in chunks paced by the transport's
+ * ready_fn. `resource` (added 2026-09-25 alongside API2_RES_BULK_PHASORS)
+ * tells bulk_pump()/bulk_abort() which capture's begin/done/end/buffer
+ * functions to drive -- both resources share this one transfer state
+ * since only one bulk transfer is ever active at a time regardless of
+ * which resource it's for. */
 static struct {
     bool         active;
     enum { BULK_IDLE = 0, BULK_CAPTURING, BULK_SENDING } phase;
     ApiTransport transport;
     uint16_t     opcode;
-    uint16_t     send_pos;   /* next sample index to send, during SENDING */
+    uint8_t      resource;
+    uint16_t     send_pos;   /* next sample/entry index to send, during SENDING */
     uint8_t      page;       /* wrapping chunk counter */
 } s_bulk;
 
@@ -458,19 +473,15 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
     cmd->handler(t, opcode, &frame[API2_PACKET_HDR_BYTES], paylen);
 }
 
-/* ---------------- Bulk transfers (0x8) — retired 2026-09-24 ----------------
- * The raw-ADC-code capture that lived here (dispatch_bulk()/bulk_pump(),
- * backed by svc_signal_analysis.c's capture_begin/done/end) is gone: it
- * shared the ADS131M04's one sample-callback slot with WP10's
- * displacement demod (Services/svc_displacement.c), which now owns that
- * slot, and capturing raw codes can't coexist with the real-time
- * per-cycle demodulation. See svc_api.h's Bulk transfers comment. */
-
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ---------------- */
 
 static void bulk_abort(void)
 {
-    svc_displacement_capture_end();
+    if (s_bulk.resource == API2_RES_BULK_PHASORS) {
+        svc_displacement_phasor_log_end();
+    } else {
+        svc_displacement_capture_end();
+    }
     s_bulk.active = false;
     s_bulk.phase  = BULK_IDLE;
 }
@@ -482,7 +493,7 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
         return;
     }
-    if (res != API2_RES_BULK_RAW_ADC) {
+    if (res != API2_RES_BULK_RAW_ADC && res != API2_RES_BULK_PHASORS) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
@@ -493,12 +504,12 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
     }
 
     if (verb == API2_VERB_CANCEL_BULK) {
-        if (!s_bulk.active) {
+        if (!s_bulk.active || s_bulk.resource != res) {
             send_response(t, opcode, API2_STATUS_NOTHING_TO_CANCEL, 0, 0);
             return;
         }
         bulk_abort();
-        svc_log(API2_LOG_INFO, "bulk: raw adc cancelled");
+        svc_log(API2_LOG_INFO, "bulk: cancelled");
         send_response(t, opcode, API2_STATUS_OK, 0, 0);
         return;
     }
@@ -516,7 +527,9 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
         return;
     }
-    if (svc_displacement_capture_begin() != DRV_OK) {
+    DrvStatus rc = (res == API2_RES_BULK_PHASORS) ? svc_displacement_phasor_log_begin()
+                                                   : svc_displacement_capture_begin();
+    if (rc != DRV_OK) {
         send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
         return;
     }
@@ -524,27 +537,18 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
     s_bulk.phase     = BULK_CAPTURING;
     s_bulk.transport = t;
     s_bulk.opcode    = opcode;
+    s_bulk.resource  = res;
     s_bulk.send_pos  = 0;
     s_bulk.page      = 0;
-    svc_log(API2_LOG_INFO, "bulk: raw adc capture started");
+    svc_logf(API2_LOG_INFO, "bulk: %s capture started",
+             (res == API2_RES_BULK_PHASORS) ? "phasor log" : "raw adc");
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
-/* Chunk pump — runs from svc_api_update() each tick while a bulk transfer
- * is active. CAPTURING: wait for the RAM buffer to fill. SENDING: emit up
- * to ADC_BULK_CHUNKS_PER_TICK chunks, but only while the owning
- * transport's TX ring has headroom (ready_fn) so we pace to the wire and
- * yield to other traffic between bursts (spec §4.1). */
-static void bulk_pump(void)
+/* Chunk pump for the raw-ADC capture (API2_RES_BULK_RAW_ADC) half of
+ * bulk_pump() below. */
+static void bulk_pump_raw_adc(ApiTransport t)
 {
-    if (!s_bulk.active) return;
-
-    ApiTransport t = s_bulk.transport;
-    if (!s_t[t].connected) {           /* peer vanished mid-transfer */
-        bulk_abort();
-        return;
-    }
-
     if (s_bulk.phase == BULK_CAPTURING) {
         if (!svc_displacement_capture_done()) return;
         uint16_t drops = svc_displacement_capture_drops();
@@ -552,7 +556,7 @@ static void bulk_pump(void)
         s_bulk.phase    = BULK_SENDING;
         s_bulk.send_pos = 0;
         s_bulk.page     = 0;
-        svc_logf(API2_LOG_INFO, "bulk: capture full, %u ring overflows", (unsigned)drops);
+        svc_logf(API2_LOG_INFO, "bulk: raw adc capture full, %u ring overflows", (unsigned)drops);
     }
 
     const uint8_t *buf   = svc_displacement_capture_buffer();   /* total * BPS bytes */
@@ -579,6 +583,71 @@ static void bulk_pump(void)
         svc_logf(API2_LOG_INFO, "bulk: raw adc sent (%u samples)", (unsigned)total);
         s_bulk.active = false;
         s_bulk.phase  = BULK_IDLE;
+    }
+}
+
+/* Chunk pump for the phasor log capture (API2_RES_BULK_PHASORS) half of
+ * bulk_pump() below -- same CAPTURING/SENDING shape as
+ * bulk_pump_raw_adc(), one DisplacementPhasorLogEntry per wire entry
+ * instead of one raw ADC sample. */
+static void bulk_pump_phasors(ApiTransport t)
+{
+    if (s_bulk.phase == BULK_CAPTURING) {
+        if (!svc_displacement_phasor_log_done()) return;
+        svc_displacement_phasor_log_end();   /* stop the stream ASAP */
+        s_bulk.phase    = BULK_SENDING;
+        s_bulk.send_pos = 0;
+        s_bulk.page     = 0;
+        svc_log(API2_LOG_INFO, "bulk: phasor log capture full");
+    }
+
+    const DisplacementPhasorLogEntry *buf = svc_displacement_phasor_log_buffer();
+    const uint16_t total = svc_displacement_phasor_log_count();
+    const ApiReadyFn ready = s_t[t].ready_fn;
+    enum { EPS = sizeof(DisplacementPhasorLogEntry) };
+
+    for (uint8_t c = 0; c < DISPLACEMENT_PHASOR_LOG_CHUNKS_PER_TICK && s_bulk.send_pos < total; ++c) {
+        if (ready != 0 && !ready()) break;   /* let the link drain */
+
+        uint16_t k = (uint16_t)(total - s_bulk.send_pos);
+        if (k > DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES) k = DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES;
+
+        uint8_t payload[1U + DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES * EPS];
+        payload[0] = s_bulk.page++;
+        memcpy(&payload[1], &buf[s_bulk.send_pos], (size_t)k * EPS);
+
+        send_framed(t, s_bulk.opcode, API2_STATUS_OK, payload,
+                    (uint16_t)(1U + (size_t)k * EPS), false);
+        s_bulk.send_pos = (uint16_t)(s_bulk.send_pos + k);
+    }
+
+    if (s_bulk.send_pos >= total) {
+        svc_logf(API2_LOG_INFO, "bulk: phasor log sent (%u entries)", (unsigned)total);
+        s_bulk.active = false;
+        s_bulk.phase  = BULK_IDLE;
+    }
+}
+
+/* Chunk pump — runs from svc_api_update() each tick while a bulk transfer
+ * is active. CAPTURING: wait for the RAM buffer to fill. SENDING: emit a
+ * few chunks, but only while the owning transport's TX ring has headroom
+ * (ready_fn) so we pace to the wire and yield to other traffic between
+ * bursts (spec §4.1). Dispatches to whichever resource's own pump is
+ * actually running this transfer. */
+static void bulk_pump(void)
+{
+    if (!s_bulk.active) return;
+
+    ApiTransport t = s_bulk.transport;
+    if (!s_t[t].connected) {           /* peer vanished mid-transfer */
+        bulk_abort();
+        return;
+    }
+
+    if (s_bulk.resource == API2_RES_BULK_PHASORS) {
+        bulk_pump_phasors(t);
+    } else {
+        bulk_pump_raw_adc(t);
     }
 }
 
@@ -617,11 +686,13 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         struct __attribute__((packed)) {
             uint16_t input_drop, output_drop, degenerate;
             uint8_t  disp_ok;
+            uint16_t phasor_log_progress;
         } p;
         p.input_drop  = svc_displacement_get_input_drop_count();
         p.output_drop = svc_displacement_get_output_drop_count();
         p.degenerate  = svc_displacement_get_degenerate_count();
         p.disp_ok     = svc_displacement_get_ok() ? 1U : 0U;
+        p.phasor_log_progress = svc_displacement_phasor_log_progress();
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }
@@ -924,14 +995,28 @@ static uint16_t build_topic_status(uint8_t *buf)
     return sizeof p;
 }
 
+static uint16_t build_topic_phasors(uint8_t *buf)
+{
+    DisplacementPhasors ph;
+    svc_displacement_get_phasors(&ph);
+    Api2TopicPhasorsPayload p;
+    p.iB = ph.iB;   p.qB = ph.qB;
+    p.iA = ph.iA;   p.qA = ph.qA;
+    p.iS1 = ph.iS1; p.qS1 = ph.qS1;
+    p.iS2 = ph.iS2; p.qS2 = ph.qS2;
+    memcpy(buf, &p, sizeof p);
+    return sizeof p;
+}
+
 typedef struct {
     uint8_t      resource;
     TopicBuildFn build;
 } TopicResourceDesc;
 
 static const TopicResourceDesc s_topic_resources[] = {
-    { API2_RES_TOPIC_ENV,    build_topic_env },
-    { API2_RES_TOPIC_STATUS, build_topic_status },
+    { API2_RES_TOPIC_ENV,     build_topic_env },
+    { API2_RES_TOPIC_STATUS,  build_topic_status },
+    { API2_RES_TOPIC_PHASORS, build_topic_phasors },
 };
 #define TOPIC_RESOURCE_COUNT (sizeof(s_topic_resources) / sizeof(s_topic_resources[0]))
 

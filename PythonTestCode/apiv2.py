@@ -55,8 +55,21 @@ ADC_BULK_CHUNK_SAMPLES    = 10     # must match Config/config.h
 ADC_BULK_BYTES_PER_SAMPLE = 12     # 4 ch x 3-byte packed signed LE
 ADC_RAW_LSB_V             = 2.4 / (1 << 23)   # 1 raw code = 2.4 V / 2^23 (gain 1)
 
+# Bulk phasor log capture (category 0x8, resource 0x01) -- WP10 diagnostics,
+# added 2026-09-25. START_BULK has no request payload; chunks come back
+# under the SAME opcode, each: [status=OK][page:1][entry:34]xN, one entry =
+# 8x float32 LE (iB,qB,iA,qA,iS1,qS1,iS2,qS2) + uint16 LE seq.
+BULK_PHASORS                       = 0x01
+OP_BULK_PHASORS_START              = opcode(START_BULK,  CAT_BULK, BULK_PHASORS)
+OP_BULK_PHASORS_CANCEL             = opcode(CANCEL_BULK, CAT_BULK, BULK_PHASORS)
+DISPLACEMENT_PHASOR_LOG_DEPTH         = 512   # must match Config/config.h
+DISPLACEMENT_PHASOR_LOG_DECIMATION    = 8     # must match Config/config.h
+DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES = 3     # must match Config/config.h
+DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES   = 34    # 8x float32 (32) + u16 seq (2), packed
+
 # Raw data (category 0x7) — ADS131M04 register / capture diagnostics
 OP_RAW_ADC_DIAG           = opcode(GET, CAT_RAW, 0x00)
+OP_RAW_DISPLACEMENT_DIAG  = opcode(GET, CAT_RAW, 0x02)
 ADC_FCLKIN_HZ             = 5.3333e6
 _OSR_TABLE                = {0: 128, 1: 256, 2: 512, 3: 1024,
                             4: 2048, 5: 4096, 6: 8192, 7: 16256}
@@ -70,11 +83,19 @@ MEAS_BME280_HUMID = 0x05   # uint16 centi-%RH
 MEAS_BME280_OK    = 0x06   # uint8  0/1  (last reading fresh)
 MEAS_EXT_TEMP     = 0x07   # int16  centi-degC (LM35, TEMP_SENSE_EXT)
 MEAS_EXT_TEMP_OK  = 0x08   # uint8  0/1  (in-range reading present)
+# Displacement (WP10) — GET or SUBSCRIBE under CAT_MEAS, all float32 LE
+# except disp_ok. Valid only while disp_ok is true.
+MEAS_DISP1_DELTA_MM = 0x09
+MEAS_DISP1_RESIDUAL = 0x0A
+MEAS_DISP2_DELTA_MM = 0x0B
+MEAS_DISP2_RESIDUAL = 0x0C
+MEAS_DISP_OK        = 0x0D   # uint8 0/1
 DBG_LOG_STREAM = 0x00
 
 # Topic groups (CAT_TOPICS = 5) — GET or SUBSCRIBE (4-byte LE interval_ms payload)
-TOPIC_ENV    = 0x00   # BME280 + onboard + external temp
-TOPIC_STATUS = 0x01   # battery / connections / charging / rails / RTC
+TOPIC_ENV     = 0x00   # BME280 + onboard + external temp
+TOPIC_STATUS  = 0x01   # battery / connections / charging / rails / RTC
+TOPIC_PHASORS = 0x02   # WP10 displacement demod's raw batch phasors
 
 
 def build_interval(ms: int) -> bytes:
@@ -102,6 +123,38 @@ def decode_topic_status(d: bytes):
                 force_charging=bool(fchg), rail_3v3=bool(r3), rail_5v=bool(r5),
                 rtc=(f"{yr:04d}-{mo:02d}-{da:02d} {hh:02d}:{mm:02d}:{ss:02d}"
                      + ("" if rset else " (not set)")))
+
+
+def decode_topic_phasors(d: bytes):
+    """WP10 displacement diagnostics (Topic groups 0x02): the latest
+    completed batch's 8 raw I/Q phasors, float32 LE. Valid only while
+    MEAS_DISP_OK is true."""
+    if len(d) < 32:
+        return None
+    iB, qB, iA, qA, iS1, qS1, iS2, qS2 = struct.unpack("<8f", d[:32])
+    return dict(iB=iB, qB=qB, iA=iA, qA=qA, iS1=iS1, qS1=qS1, iS2=iS2, qS2=qS2)
+
+
+def decode_phasor_log_entry(d: bytes):
+    """One DisplacementPhasorLogEntry (34 B): 8x float32 LE + u16 LE seq."""
+    if len(d) < DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES:
+        return None
+    iB, qB, iA, qA, iS1, qS1, iS2, qS2, seq = struct.unpack("<8fH", d[:34])
+    return dict(iB=iB, qB=qB, iA=iA, qA=qA, iS1=iS1, qS1=qS1, iS2=iS2, qS2=qS2, seq=seq)
+
+
+def decode_phasor_log_chunk(data: bytes):
+    """A bulk phasor-log chunk's payload-after-status:
+    [page:1][entry:34]xN. Returns (page, [entry_dict, ...])."""
+    if not data:
+        return (None, [])
+    page = data[0]
+    body = data[1:]
+    n = len(body) // DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES
+    entries = [decode_phasor_log_entry(body[DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES * i:
+                                            DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES * (i + 1)])
+               for i in range(n)]
+    return (page, entries)
 
 # Settings resource indices — a few useful ones. IDs are stable wire
 # values with gaps (0x01, 0x07..0x0B retired with the REV A fields).

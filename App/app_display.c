@@ -16,14 +16,35 @@
 #include <string.h>
 
 /* LIVE screen's displacement readout refreshes at a fixed cadence rather
- * than on every completed demod batch (~40 Hz, config.h's
+ * than on every completed demod batch (~325 Hz, config.h's
  * DISPLACEMENT_BATCH_CYCLES) -- same reasoning the STATUS screen's BME280
  * line already relies on (it piggybacks on that screen's once-a-second
- * clock redraw instead of being in snapshot_changed()'s comparison):
- * forcing a full-frame redraw at batch rate would flicker the display and
- * defeat app_display's whole change-detection design. 4 Hz is fast
- * enough to read as "live" without being distracting. */
-#define LIVE_DISPLACEMENT_REFRESH_MS  250U
+ * clock redraw instead of being in snapshot_changed()'s comparison).
+ *
+ * INVESTIGATED 2026-09-25 on bench board 2: this readout (originally
+ * 250 ms) measurably increases svc_displacement.c's input_drop_count
+ * (API Raw data 0x7 resource 0x02) -- confirmed with a full bisection
+ * against fw predating this readout entirely (git commit 027aff7):
+ * that "clean" build ALREADY drops cycles on THIS board in bursts
+ * (~400-700/s average over a 10 s window, alternating multi-second
+ * plateaus of zero growth with sudden jumps) -- board 2 has a
+ * board-specific marginal timing budget for WP10's batching design that
+ * board 1's original "300/300 poll, 242 s soak, zero drops" verification
+ * never exercised. Adding this readout roughly triples to quadruples
+ * that baseline (~1500-2000/s) regardless of refresh interval (250 ms
+ * and 1000 ms measured the same) -- the dominant cost turned out to be
+ * format_displacement_mm()'s float math running once per rendered BAND
+ * (u8g2 page mode calls draw_live_screen() ~15x per redraw, clipping
+ * non-visible draws only AFTER formatting the string), not the redraw
+ * frequency. Moved that formatting into snapshot_capture() (runs once
+ * per redraw, not once per band) below, which measurably helps but does
+ * not eliminate the gap back to board 2's own baseline -- see
+ * docs/wp10_displacement.md for the full writeup and the still-open
+ * board-2-margin follow-up. 1000 ms matches the STATUS screen's already-
+ * used once-a-second cadence; slower than this file's original 250 ms,
+ * but a readable, non-flickering number that competes less with the ADC
+ * pipeline matters more than sub-second refresh here. */
+#define LIVE_DISPLACEMENT_REFRESH_MS  1000U
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
  * config. At -O0 a full banded render is tens of ms and the per-tick
@@ -59,6 +80,12 @@ typedef struct {
                                      * shape as uptime_s, at
                                      * LIVE_DISPLACEMENT_REFRESH_MS instead
                                      * of 1000 ms. */
+    char displacement_line[48];   /* pre-formatted once per redraw in
+                                     * snapshot_capture() -- see that
+                                     * function's comment for why this
+                                     * can't just be computed inline in
+                                     * draw_live_screen() the way
+                                     * format_temp()/format_volts() are. */
 } DisplaySnapshot;
 
 static DisplaySnapshot s_last = {0};
@@ -200,16 +227,10 @@ static void draw_live_screen(void)
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 180, "Displacement");
 
-    if (svc_displacement_get_ok()) {
-        char d1[16], d2[16];
-        format_displacement_mm(d1, sizeof d1, svc_displacement_get_delta1_mm());
-        format_displacement_mm(d2, sizeof d2, svc_displacement_get_delta2_mm());
-        snprintf(line, sizeof line, "S1 %smm   S2 %smm", d1, d2);
-    } else {
-        snprintf(line, sizeof line, "-- (not running)");
-    }
+    /* s_last.displacement_line is pre-formatted once per redraw in
+     * snapshot_capture(), NOT here -- see that function's comment. */
     u8g2_SetFont(&s_u8g2, u8g2_font_ncenB14_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 208, line);
+    u8g2_DrawUTF8(&s_u8g2, 8, 208, s_last.displacement_line);
 }
 
 /* ---- STATUS screen ---- */
@@ -408,6 +429,35 @@ static void snapshot_capture(void)
     s_last.edit_value       = g_ui_state.edit_value;
     s_last.uptime_s         = s_render_ms / 1000U;
     s_last.displacement_tick = s_render_ms / LIVE_DISPLACEMENT_REFRESH_MS;
+
+    /* INVESTIGATED 2026-09-25 (see this file's LIVE_DISPLACEMENT_REFRESH_MS
+     * comment for the full bisection): this float->string formatting used
+     * to live inline in draw_live_screen(), which u8g2's page-mode
+     * renderer calls once per band (~15x per redraw, clipping non-visible
+     * draws AFTER the fact -- see draw_active_screen()'s comment).
+     * format_temp()/format_volts() are cheap enough that 15x redundant
+     * calls don't matter, but format_displacement_mm()'s float multiply
+     * is a soft-float library call on this FPU-less Cortex-M0+ -- 15x
+     * redundant calls (30x counting both sensors) measurably added to
+     * svc_displacement.c's input_drop_count on bench board 2. Computing
+     * the string once here (this function runs once per redraw, not once
+     * per band) measurably reduces that contribution, but does NOT bring
+     * board 2 back to zero drops -- this board has its own pre-existing,
+     * non-zero baseline (confirmed against a build predating this whole
+     * readout) that WP10's original batching design wasn't tuned against.
+     * See docs/wp10_displacement.md for the full writeup and the
+     * still-open board-2-margin follow-up. */
+    if (svc_displacement_get_ok()) {
+        char d1[16], d2[16];
+        format_displacement_mm(d1, sizeof d1, svc_displacement_get_delta1_mm());
+        format_displacement_mm(d2, sizeof d2, svc_displacement_get_delta2_mm());
+        snprintf(s_last.displacement_line, sizeof s_last.displacement_line,
+                 "S1 %smm   S2 %smm", d1, d2);
+    } else {
+        snprintf(s_last.displacement_line, sizeof s_last.displacement_line,
+                 "-- (not running)");
+    }
+
     s_have_last = true;
 }
 

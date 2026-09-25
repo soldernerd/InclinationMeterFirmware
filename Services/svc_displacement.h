@@ -86,6 +86,24 @@ typedef struct {
                               * stays naturally aligned. */
 } DisplacementCycle;
 
+/* The 8 raw batch-summed phasors feeding process_one_batch()'s complex
+ * division -- one step upstream of delta_mm/residual, exposed 2026-09-25
+ * for bench diagnosis (see Config/config.h's "Displacement phasor
+ * diagnostics" comment). Field order matches process_one_batch()'s
+ * BatchSums exactly (Services/svc_displacement.c) to avoid a
+ * transposition hazard when copying between them: B = Exciter B (CH1),
+ * A = Exciter A (CH2), S1/S2 = the two sensor heads (CH3/CH0). Plain
+ * float, not the int64 the ISR-side accumulator actually holds --
+ * process_one_batch() already does this exact int64->float conversion
+ * for its own math, so reusing it here costs nothing extra and matches
+ * the precision the real demod itself accepts. */
+typedef struct {
+    float iB, qB;
+    float iA, qA;
+    float iS1, qS1;
+    float iS2, qS2;
+} DisplacementPhasors;
+
 /* Registers the ADC sample callback and configures drv_ads131m04.c (but
  * does not start the acquisition trigger -- see svc_displacement_start()
  * below, same split as WP8's svc_signal_analysis.c had). Call once from
@@ -120,6 +138,12 @@ float svc_displacement_get_residual1(void);
 float svc_displacement_get_delta2_mm(void);
 float svc_displacement_get_residual2(void);
 bool  svc_displacement_get_ok(void);
+
+/* Latest completed batch's raw phasors -- same validity contract as the
+ * getters above (all-zero before the first batch / while !get_ok()).
+ * Feeds the API v2 Topic groups (0x5) real-time diagnostic resource
+ * (Services/svc_api.c). */
+void svc_displacement_get_phasors(DisplacementPhasors *out);
 
 /* Call alongside svc_displacement_update() from the scheduler. If the
  * acquisition driver (Drivers_App/drv_ads131m04.c) has latched an
@@ -182,5 +206,42 @@ uint16_t       svc_displacement_capture_drops(void);    /* acquisition ring over
  * NULL. All zero until the first capture completes. */
 void svc_displacement_last_capture(uint16_t *samples, uint16_t *drops,
                                     uint32_t *elapsed_ms);
+
+/* --- Bulk phasor log capture (feeds the API v2 category 0x8 bulk
+ * transfer, resource API2_RES_BULK_PHASORS) ---
+ * Added 2026-09-25 for bench diagnosis of behaviour on timescales the
+ * ~0.3 s raw-ADC capture above can't reach (drift, degenerate-denominator
+ * excursions, a pendulum swinging) -- see Config/config.h's "Displacement
+ * phasor diagnostics" comment for the full reasoning. Unlike the raw-ADC
+ * capture, this does NOT bypass the phasor accumulation -- it reuses the
+ * exact same on_sample()/batching pipeline as normal operation and only
+ * changes what svc_displacement_update() does once a batch completes:
+ * store a decimated (Config/config.h DISPLACEMENT_PHASOR_LOG_DECIMATION)
+ * snapshot here instead of running process_one_batch()'s delta/residual
+ * math. Same one-shot arm/fill/drain shape and the same "not for
+ * concurrent use with the real-time _start()/_stop() path, caller
+ * enforces exclusivity" contract as the raw-ADC capture. Task context
+ * only. */
+typedef struct {
+    float    iB, qB;
+    float    iA, qA;
+    float    iS1, qS1;
+    float    iS2, qS2;
+    uint16_t seq;   /* the last raw cycle folded into this stored batch --
+                       * same wraparound-safe-comparison caveat as
+                       * DisplacementCycle::seq above. */
+} __attribute__((packed)) DisplacementPhasorLogEntry;
+
+DrvStatus                         svc_displacement_phasor_log_begin(void);
+bool                               svc_displacement_phasor_log_done(void);
+void                               svc_displacement_phasor_log_end(void);
+const DisplacementPhasorLogEntry *svc_displacement_phasor_log_buffer(void);
+uint16_t                          svc_displacement_phasor_log_count(void);   /* always DISPLACEMENT_PHASOR_LOG_DEPTH */
+
+/* Entries stored so far in the current (or most recently finished)
+ * capture, 0..DISPLACEMENT_PHASOR_LOG_DEPTH -- lets a host poll progress
+ * instead of guessing how long a capture has left. Surfaced over the API
+ * on Raw data (0x7) GET API2_RES_RAW_DISPLACEMENT_DIAG. */
+uint16_t svc_displacement_phasor_log_progress(void);
 
 #endif /* SVC_DISPLACEMENT_H */

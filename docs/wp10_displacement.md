@@ -186,13 +186,69 @@ the G0B1's 144 KB SRAM) -- same size as before, just living in
 `svc_displacement.c` now. Build after restoring: RAM 74.3% / FLASH 29.4%,
 zero warnings.
 
-## Current status (fw 0.10.17)
+## Phasor diagnostics added (2026-09-25, fw 0.10.27)
+
+Exposed the demod's intermediate I/Q phasors (`BatchSums`, one step upstream of
+`delta_mm`/`residual`) for bench diagnosis, at the user's request ("the phasors
+definitely, maybe also some other values... real time or at least capture longer time
+slots via bulk capture"):
+
+- **Real-time**: Topic groups (0x5) resource `0x02` (`API2_RES_TOPIC_PHASORS`) — the
+  latest completed batch's 8 raw phasors bundled into one 32-byte payload, GET +
+  SUBSCRIBE, same generic mechanism as every other topic. Chosen over 8 separate
+  Measurements resources: an atomic snapshot avoids a torn read across separate polls,
+  and Measurements' 16-slot budget was nearly full anyway (`TOPIC_VALUE_MAX_LEN` was
+  already provisioned at 32 bytes for exactly this kind of bundle, no size bump needed).
+- **Longer time slots**: Bulk (0x8) resource `0x01` (`API2_RES_BULK_PHASORS`) — reuses
+  the exact same accumulation/batching pipeline as normal operation (`on_sample()`
+  untouched); only `svc_displacement_update()`'s "batch complete" branch forks to store
+  a decimated snapshot (every `DISPLACEMENT_PHASOR_LOG_DECIMATION`th batch, 8 by
+  default) instead of demodulating. 512 entries at the ~40.7 Hz effective rate spans
+  ~12.6 s, versus the raw-ADC capture's ~0.3 s, for the same reason the user gave:
+  phasors are far lower data volume per unit time than raw ADC samples. Bench-verified:
+  512/512 entries, 0 gap/CRC events end to end.
+- A new `svc_displacement_phasor_log_progress()` getter (Raw data 0x7/0x02) lets a host
+  poll how far a capture has gotten instead of guessing.
+
+### Board 2's timing margin (found while bench-verifying the above)
+
+Testing on a second REV B board (see memory `two-bench-boards`) surfaced something
+board 1 never exposed: **even firmware predating this whole phasor-diagnostics
+feature and the LIVE-screen displacement readout** (`git` commit `027aff7`) drops
+`svc_displacement.c` input cycles on this board, in bursts — multi-second plateaus of
+zero growth interrupted by sudden jumps, averaging roughly 400-700 cycles/s over a 10 s
+window. Board 1's original "300/300 poll, 242 s soak, zero drops" verification (the
+livelock fix writeup above) never caught this because it was never run on board 2.
+
+Separately, the LIVE-screen displacement readout added in the prior session turn (fw
+0.10.22) made this measurably worse (roughly 3-4x) regardless of its refresh interval
+(250 ms and 1000 ms measured the same) — traced to `format_displacement_mm()`'s float
+math running once per rendered *band* (u8g2 page mode calls `draw_live_screen()` ~15x
+per redraw) instead of once per redraw. Moved the formatting into `snapshot_capture()`
+(`App/app_display.c`, fw 0.10.27), which measurably reduces the readout's own
+contribution but does not eliminate board 2's pre-existing baseline.
+
+**Not yet root-caused or fixed**: why board 2 has less timing margin than board 1 for
+the same `DISPLACEMENT_BATCH_CYCLES`/`DISPLACEMENT_MAX_CYCLES_PER_TICK` tuning that gave
+board 1 zero drops. Candidates for a future session: board-to-board component/clock
+tolerance, a noisier analog front end on board 2 (its sensor-channel SNR was already
+observed to be more capture-to-capture variable than board 1's — see the bulk-capture
+signal-quality analysis), or the batching constants simply needing more headroom than
+board 1's bench-only verification revealed. Does not block ordinary use (the demod still
+produces correct, if occasionally gap-y, results on board 2), but is worth a dedicated
+investigation before treating board 2 as fully characterized.
+
+## Current status (fw 0.10.27)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified.
-- Full pipeline verified end-to-end with real data: `disp_ok=1`, plausible small
-  (sub-millimeter) delta values, residuals near 0 as expected for a working calibration.
-- Deferred, not blocking: the high-rate per-batch stream (nothing drains
+- Full pipeline verified end-to-end with real data on two boards: `disp_ok=1`, plausible
+  small (sub-millimeter) delta values, residuals near 0 as expected for a working
+  calibration. Board 2 has both S1 and S2 physically connected (board 1 only has S1).
+- Bulk raw-ADC capture and bulk phasor-log capture both bench-verified, including their
+  mutual exclusivity with the real-time demod and with each other.
+- Deferred, not blocking: the high-rate per-cycle stream (nothing drains
   `svc_displacement_pop()` yet); a fresh bench calibration of `gain`/`d0`/`zero_offset`
-  (currently nominal/un-calibrated defaults); Sensor 2 (CH0) isn't physically connected on
-  this bench yet.
+  (currently nominal/un-calibrated defaults — the bulk-capture signal-quality pass found
+  the nominal S-channel gain of 10x doesn't match either board's actual hardware, real
+  gain is closer to ~0.13x); board 2's timing-margin gap above.

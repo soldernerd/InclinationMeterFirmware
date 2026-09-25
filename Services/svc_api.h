@@ -265,9 +265,24 @@ typedef enum {
  *   uint16 rtc_year
  *   uint8  rtc_month, rtc_day, rtc_hour, rtc_minute, rtc_second
  *   uint8  rtc_set               (1 once the clock has ever been set)
+ *
+ * 0x02 Displacement phasors — WP10 demod diagnostics (32 B, added
+ * 2026-09-25, Config/config.h's "Displacement phasor diagnostics"
+ * comment has the full reasoning for exposing these at all): the latest
+ * completed batch's 8 raw I/Q phasors, one step upstream of Measurements
+ * 0x09-0x0C's delta_mm/residual — a consistently-off phasor here (e.g.
+ * the A/B pair not reading ~180 deg apart) points at a wiring or
+ * calibration problem Measurements alone can't distinguish from "device
+ * working, instrument tilted". All float32 LE, IEEE-754, valid only
+ * while Measurements 0x0D (disp_ok) is true:
+ *   float iB, qB     (Exciter B, CH1)
+ *   float iA, qA     (Exciter A, CH2)
+ *   float iS1, qS1   (Sensor 1, CH3)
+ *   float iS2, qS2   (Sensor 2, CH0)
  */
 #define API2_RES_TOPIC_ENV      0x00U
 #define API2_RES_TOPIC_STATUS   0x01U
+#define API2_RES_TOPIC_PHASORS  0x02U
 #define API2_TOPIC_SLOTS        4U          /* direct-indexed by resource id */
 
 /* ---------------- Calibrations (0x2: GET, SET) ----------------
@@ -365,11 +380,16 @@ typedef enum {
 /* 0x02 = WP10 displacement demod diagnostics (split out from 0x00 when
  * bulk-capture's original last_capture fields were restored there
  * 2026-09-25 -- see the "Bulk transfers" comment below). GET, no request
- * payload. Response (7 B, LE):
+ * payload. Response (9 B, LE):
  *   u16 disp_input_drop_count    (svc_displacement_get_input_drop_count())
  *   u16 disp_output_drop_count   (svc_displacement_get_output_drop_count())
  *   u16 disp_degenerate_count    (svc_displacement_get_degenerate_count())
- *   u8  disp_ok                  (svc_displacement_get_ok()) */
+ *   u8  disp_ok                  (svc_displacement_get_ok())
+ *   u16 phasor_log_progress      (svc_displacement_phasor_log_progress() --
+ *                                  entries stored so far in the current/most
+ *                                  recent Bulk 0x8/0x01 capture, 0..
+ *                                  DISPLACEMENT_PHASOR_LOG_DEPTH; lets a host
+ *                                  poll progress instead of guessing) */
 #define API2_RES_RAW_DISPLACEMENT_DIAG  0x02U
 
 #define API2_OP_RAW_ADC_DIAG \
@@ -397,9 +417,30 @@ typedef enum {
  *      separate driver callbacks. */
 #define API2_RES_BULK_RAW_ADC   0x00U
 
+/* 0x01 Phasor log capture. Added 2026-09-25 (Config/config.h's
+ *      "Displacement phasor diagnostics" comment) -- a longer-duration,
+ *      decimated companion to 0x00 above: instead of ~0.3 s of every raw
+ *      ADC sample, this captures Config/config.h DISPLACEMENT_PHASOR_LOG_DEPTH
+ *      entries of the demod's batch-level phasors at every
+ *      DISPLACEMENT_PHASOR_LOG_DECIMATIONth batch (~40.7 Hz effective at
+ *      the defaults), spanning ~12.6 s -- for diagnosing drift,
+ *      degenerate-denominator excursions, or slow mechanical behaviour
+ *      the short raw-ADC window can't reach. Same START_BULK/CANCEL_BULK
+ *      shape and the same exclusivity with the real-time demod as 0x00.
+ *      Chunk payload is [page:1][entry:34]xN, N <=
+ *      DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES; one entry is 8x float32 LE
+ *      (iB,qB,iA,qA,iS1,qS1,iS2,qS2 -- same layout/units as Topic groups
+ *      0x5 resource 0x02) plus a uint16 seq (the last raw cycle folded
+ *      into that stored batch, for gap detection). */
+#define API2_RES_BULK_PHASORS   0x01U
+
 #define API2_OP_BULK_RAW_ADC_START \
     API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
 #define API2_OP_BULK_RAW_ADC_CANCEL \
     API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
+#define API2_OP_BULK_PHASORS_START \
+    API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_PHASORS)
+#define API2_OP_BULK_PHASORS_CANCEL \
+    API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_PHASORS)
 
 #endif /* SVC_API_H */

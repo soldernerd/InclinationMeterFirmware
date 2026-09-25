@@ -127,6 +127,26 @@ static float s_delta2_mm  = 0.0f;
 static float s_residual2  = 0.0f;
 static bool  s_disp_ok    = false;
 
+/* Latest completed batch's raw phasors -- same storage/context reasoning
+ * as the block above, added 2026-09-25 for the API v2 Topic groups (0x5)
+ * real-time diagnostic resource. Written alongside s_delta1_mm etc. in
+ * process_one_batch(). */
+static DisplacementPhasors s_phasors = {0};
+
+/* --- Bulk phasor log capture state (2026-09-25) --- see
+ * svc_displacement.h's comment. Unlike the raw-ADC capture's s_cap_*
+ * flags above (which on_sample(), the ISR-adjacent producer, touches
+ * directly), all of this is written and read only from task context --
+ * svc_displacement_update()'s batch-complete branch (the "producer" here)
+ * and svc_api.c's bulk dispatch (the "consumer") are both called from
+ * App/app_scheduler.c task functions, never from on_sample() -- so no
+ * volatile is needed. */
+static DisplacementPhasorLogEntry s_phasor_log[DISPLACEMENT_PHASOR_LOG_DEPTH];
+static uint16_t s_phasor_log_idx         = 0;
+static bool     s_phasor_log_active      = false;
+static bool     s_phasor_log_done        = false;
+static uint8_t  s_phasor_log_decim_count = 0;
+
 /* Same reasoning as s_sample_idx above -- assigned in on_sample() to
  * every completed 8-sample cycle *before* the input-ring-full check, so
  * a cycle dropped there (consumer not keeping up) still consumes a seq
@@ -326,6 +346,15 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     float iB = (float)s->iB, qB = (float)s->qB;
     float iA = (float)s->iA, qA = (float)s->qA;
 
+    /* Stash the raw phasors before the degenerate-denominator check below
+     * can return early -- a diagnostic host looking at WHY the excitation
+     * phasors are degenerate needs this snapshot precisely when the delta
+     * math itself can't produce one. */
+    s_phasors.iB = iB;  s_phasors.qB = qB;
+    s_phasors.iA = iA;  s_phasors.qA = qA;
+    s_phasors.iS1 = (float)s->iS1;  s_phasors.qS1 = (float)s->qS1;
+    s_phasors.iS2 = (float)s->iS2;  s_phasors.qS2 = (float)s->qS2;
+
     /* 1/(A - B), the shared denominator's reciprocal -- computed once and
      * reused by both sensors below. */
     float inv_den_re, inv_den_im;
@@ -418,6 +447,13 @@ float svc_displacement_get_delta2_mm(void) { return s_delta2_mm; }
 float svc_displacement_get_residual2(void) { return s_residual2; }
 bool  svc_displacement_get_ok(void)        { return s_disp_ok; }
 
+void svc_displacement_get_phasors(DisplacementPhasors *out)
+{
+    if (out != 0) {
+        *out = s_phasors;
+    }
+}
+
 void svc_displacement_stop(void)
 {
     drv_ads131m04_stop();
@@ -440,6 +476,34 @@ void svc_displacement_stop(void)
 bool svc_displacement_is_running(void)
 {
     return drv_ads131m04_is_running();
+}
+
+/* Stores one decimated snapshot for an active phasor-log capture (every
+ * DISPLACEMENT_PHASOR_LOG_DECIMATIONth completed batch only) -- called
+ * from svc_displacement_update() in place of process_one_batch() while
+ * s_phasor_log_active. Task context only, same as everything else here
+ * except on_sample(). */
+static void store_phasor_log_entry(const BatchSums *s, uint16_t seq)
+{
+    if (++s_phasor_log_decim_count < DISPLACEMENT_PHASOR_LOG_DECIMATION) {
+        return;
+    }
+    s_phasor_log_decim_count = 0;
+
+    if (s_phasor_log_idx >= DISPLACEMENT_PHASOR_LOG_DEPTH) {
+        return;   /* already full -- svc_displacement_phasor_log_done() is
+                    * true and the caller will end() the capture shortly */
+    }
+    DisplacementPhasorLogEntry *e = &s_phasor_log[s_phasor_log_idx];
+    e->iB  = (float)s->iB;  e->qB  = (float)s->qB;
+    e->iA  = (float)s->iA;  e->qA  = (float)s->qA;
+    e->iS1 = (float)s->iS1; e->qS1 = (float)s->qS1;
+    e->iS2 = (float)s->iS2; e->qS2 = (float)s->qS2;
+    e->seq = seq;
+
+    if (++s_phasor_log_idx >= DISPLACEMENT_PHASOR_LOG_DEPTH) {
+        s_phasor_log_done = true;
+    }
 }
 
 void svc_displacement_update(void)
@@ -474,7 +538,16 @@ void svc_displacement_update(void)
                 .iB = s_batch_iB, .qB = s_batch_qB, .iA = s_batch_iA, .qA = s_batch_qA,
                 .iS1 = s_batch_iS1, .qS1 = s_batch_qS1, .iS2 = s_batch_iS2, .qS2 = s_batch_qS2,
             };
-            process_one_batch(&sums, s_batch_seq);
+            /* A phasor-log capture (svc_displacement_phasor_log_begin(),
+             * config.h's "Displacement phasor diagnostics" comment) wants
+             * the raw batch sums stored, not demodulated -- same
+             * accumulation/batching pipeline either way, this is the only
+             * fork point. */
+            if (s_phasor_log_active) {
+                store_phasor_log_entry(&sums, s_batch_seq);
+            } else {
+                process_one_batch(&sums, s_batch_seq);
+            }
             batch_reset();
         }
     }
@@ -581,4 +654,52 @@ uint16_t svc_displacement_capture_sample_count(void)
 uint16_t svc_displacement_capture_drops(void)
 {
     return (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
+}
+
+DrvStatus svc_displacement_phasor_log_begin(void)
+{
+    if (s_phasor_log_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    /* Same rationale as svc_displacement_start()'s reset: on_sample()
+     * only runs once the driver's trigger is armed below, so it's safe
+     * to clear the accumulation state here first. */
+    s_sample_idx = 0;
+    s_iB = s_qB = s_iA = s_qA = s_iS1 = s_qS1 = s_iS2 = s_qS2 = 0;
+    s_in_head  = s_in_tail  = 0;
+    s_cycle_seq = 0;
+    batch_reset();
+    s_batch_seq = 0;
+
+    s_phasor_log_idx         = 0;
+    s_phasor_log_done        = false;
+    s_phasor_log_decim_count = 0;
+    s_phasor_log_active      = true;   /* svc_displacement_update() now routes completed batches here */
+    return drv_ads131m04_start();
+}
+
+bool svc_displacement_phasor_log_done(void)
+{
+    return s_phasor_log_done;
+}
+
+void svc_displacement_phasor_log_end(void)
+{
+    s_phasor_log_active = false;
+    drv_ads131m04_stop();
+}
+
+const DisplacementPhasorLogEntry *svc_displacement_phasor_log_buffer(void)
+{
+    return s_phasor_log;
+}
+
+uint16_t svc_displacement_phasor_log_count(void)
+{
+    return DISPLACEMENT_PHASOR_LOG_DEPTH;
+}
+
+uint16_t svc_displacement_phasor_log_progress(void)
+{
+    return s_phasor_log_idx;
 }

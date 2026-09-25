@@ -362,6 +362,52 @@
  * mid-transfer (docs/api-v2-spec.md §4.1). */
 #define ADC_BULK_CHUNKS_PER_TICK      4U
 
+/* --- Displacement phasor diagnostics (2026-09-25) ---
+ * Exposes the demod's intermediate I/Q phasors (Services/svc_displacement.c's
+ * BatchSums -- the batch-summed values feeding process_one_batch()'s
+ * complex division, one step upstream of delta_mm/residual) for bench
+ * diagnosis: a consistently-off phasor points at a calibration or wiring
+ * problem in a way delta_mm alone can't distinguish from "device working,
+ * instrument tilted".
+ *
+ * Real-time: API v2 Topic groups (0x5) resource API2_RES_TOPIC_PHASORS --
+ * the latest completed batch's 8 floats, GET + SUBSCRIBE, same as any
+ * other topic. ~325 updates/s available at the source; a subscriber picks
+ * its own poll interval (API2_MEASUREMENT_MIN_INTERVAL_MS floor, 50 ms) --
+ * genuinely "real time" is fine here specifically BECAUSE phasors are one
+ * bundled 32-byte snapshot, not a per-sample stream like the raw ADC bulk
+ * capture below (32 bytes @ 50 ms = 640 B/s, trivial next to UART's
+ * 115200 baud budget; the raw ADC would be ~230x that).
+ *
+ * Longer time slots: API v2 Bulk (0x8) resource API2_RES_BULK_PHASORS.
+ * Reuses the exact same accumulation/batching pipeline as normal
+ * operation (on_sample() untouched) -- svc_displacement_update()'s
+ * "batch complete" branch stores instead of demodulating while a capture
+ * is armed. Storing every batch would only buy ~8x the raw-ADC capture's
+ * ~295 ms window (batches complete 8x slower than raw ADC samples, per
+ * DISPLACEMENT_BATCH_CYCLES) -- decimating further, storing only every
+ * DISPLACEMENT_PHASOR_LOG_DECIMATIONth batch, trades that resolution for
+ * duration instead: 325.52/8 =~ 40.7 Hz effective, matching the old WP8
+ * signal-analysis module's update rate. */
+#define DISPLACEMENT_PHASOR_LOG_DECIMATION    8U
+
+/* 512 entries x 34 B (8 floats + a u16 seq, packed) = 17408 B (~17 KB) --
+ * at the ~40.7 Hz effective rate above, ~12.6 s of history. Picked to
+ * leave a comfortable RAM margin alongside the raw-ADC capture buffer
+ * (both exist, but the two captures are mutually exclusive at runtime so
+ * only one is ever actively written at a time -- this is a static
+ * allocation trade, not a runtime one). */
+#define DISPLACEMENT_PHASOR_LOG_DEPTH          512U
+
+/* Entries per bulk chunk packet. Payload is [page:1][entry:34]xN; the
+ * whole API2 packet must fit API2_PACKET_MAX_SIZE (128): 4 (frame) + 1
+ * (status) + 1 (page) + 34*N + 2 (crc) <= 128 -> N <= 3. */
+#define DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES  3U
+
+/* Chunks pushed per svc_api_update() tick, upper bound -- same reasoning
+ * as ADC_BULK_CHUNKS_PER_TICK above. */
+#define DISPLACEMENT_PHASOR_LOG_CHUNKS_PER_TICK 4U
+
 /* --- BME280 environmental sensor (WP9) ---
  * Shares I2C1 with the EEPROM (see pin_config.h) — no CubeMX changes
  * needed, only a different 7-bit address per transaction.
