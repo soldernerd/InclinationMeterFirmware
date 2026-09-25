@@ -1304,10 +1304,16 @@ static void dispatch_settings(ApiTransport t, uint16_t opcode, uint8_t verb,
 static const SettingsFieldDesc s_calibration_fields[] = {
     SF(API2_RES_CALIB_DISP_ATTEN_MILLI,       SF_UNSIGNED, disp_atten_milli,           100, 100000),
     SF(API2_RES_CALIB_DISP_S1_GAIN_MILLI,     SF_UNSIGNED, disp_s1_gain_milli,         100, 1000000),
-    SF(API2_RES_CALIB_DISP_S1_D0_UM,          SF_UNSIGNED, disp_s1_d0_um,                1, 10000),
+    /* Max widened 10000 -> 2000000 (10 mm -> 2 m) 2026-09-26 alongside
+     * DEFAULT_DISP_S1/S2_D0_UM's 1000x bump (config.h's comment on that
+     * default has the full reasoning) -- d0 no longer just represents a
+     * literal sensor air gap, it's standing in for the still-missing
+     * gain calibration too, so it needs headroom well past a real
+     * mechanical gap's plausible range. */
+    SF(API2_RES_CALIB_DISP_S1_D0_UM,          SF_UNSIGNED, disp_s1_d0_um,                1, 2000000),
     SF(API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM, SF_SIGNED,   disp_s1_zero_offset_um,   -5000, 5000),
     SF(API2_RES_CALIB_DISP_S2_GAIN_MILLI,     SF_UNSIGNED, disp_s2_gain_milli,         100, 1000000),
-    SF(API2_RES_CALIB_DISP_S2_D0_UM,          SF_UNSIGNED, disp_s2_d0_um,                1, 10000),
+    SF(API2_RES_CALIB_DISP_S2_D0_UM,          SF_UNSIGNED, disp_s2_d0_um,                1, 2000000),
     SF(API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM, SF_SIGNED,   disp_s2_zero_offset_um,   -5000, 5000),
 };
 #define CALIBRATION_FIELD_COUNT (sizeof(s_calibration_fields) / sizeof(s_calibration_fields[0]))

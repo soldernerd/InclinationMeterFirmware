@@ -144,7 +144,18 @@
                                                          rest of the REV A sensor
                                                          stack; first REV B use of
                                                          this freed page. */
-#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0001
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0002  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
+                                                         S2_D0_UM bumped 1000x (sensitivity
+                                                         fix, see that comment) -- learned
+                                                         from the battery-scale bug earlier
+                                                         this session (memory
+                                                         battery-voltage-calibrated) that a
+                                                         DEFAULT_* change alone does NOT
+                                                         reach a board whose EEPROM page was
+                                                         already written under the old
+                                                         version; bumping here so this
+                                                         propagates on next reflash instead
+                                                         of needing a manual SET per board. */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -354,13 +365,33 @@
  * attenuator (bench-confirmed, 2026-09 RC-filter investigation); gain
  * and d0 are un-bench-calibrated starting points, same "unconfirmed
  * against real hardware" caveat as DEFAULT_ENCODER_COUNTS_PER_DETENT
- * above. zero_offset starts at 0 (no bench zero calibration done yet). */
+ * above. zero_offset starts at 0 (no bench zero calibration done yet).
+ *
+ * D0_UM BUMPED 1000x 2026-09-26 (100 -> 100000) as a deliberate, coarse
+ * "get in the right ballpark" sensitivity fix, at the user's request
+ * after confirming the instrument functions but reads roughly 1000x too
+ * insensitive with the nominal constants above. compute_sensor_delta()
+ * (Services/svc_displacement.c) computes delta_mm = 2*d0_mm*(x-0.5) -
+ * zero_offset_mm -- d0 is a pure linear scale factor on the FINAL output
+ * only, with zero effect on x, residual, or the degenerate-denominator
+ * check (unlike gain, which sits inside x's own computation and also
+ * feeds the shared A-B reciprocal), which is exactly why it's the
+ * lever used here: a clean, isolated multiplier, not a hack tangled up
+ * in the demod math. This is NOT a claim that the sensor's real
+ * mechanical air gap is 100 mm -- it's standing in for the still-missing
+ * real gain calibration (the bulk-capture signal-quality pass separately
+ * found the nominal gain=10 doesn't match either board's actual
+ * hardware, real gain closer to ~0.13 -- a ~77x mismatch on its own,
+ * roughly the right order of magnitude for "about 1000x, maybe more"
+ * once you fold in the S-channel's real-vs-assumed attenuation too).
+ * Replace with a proper gain/d0 bench calibration when one is done --
+ * see docs/wp10_displacement.md's "Current status" deferred list. */
 #define DEFAULT_DISP_ATTEN_MILLI            3000    /* atten = 3.000 */
 #define DEFAULT_DISP_S1_GAIN_MILLI         10000    /* gain  = 10.000 */
-#define DEFAULT_DISP_S1_D0_UM                100    /* d0    = 0.100 mm */
+#define DEFAULT_DISP_S1_D0_UM             100000    /* d0    = 100.000 mm (see comment above) */
 #define DEFAULT_DISP_S1_ZERO_OFFSET_UM         0
 #define DEFAULT_DISP_S2_GAIN_MILLI         10000
-#define DEFAULT_DISP_S2_D0_UM                100
+#define DEFAULT_DISP_S2_D0_UM             100000
 #define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
 
 /* --- Displacement zero calibration (180-degree reversal test, 2026-09-25) ---

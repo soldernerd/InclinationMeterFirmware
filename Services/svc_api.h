@@ -321,10 +321,14 @@ typedef enum {
  * the two dimensionless ratios, micrometers for the two lengths, not
  * raw floats (see system_state.h's comment on these DeviceSettings
  * fields for why). All u32 payload (4 bytes), int32 signed for the
- * offsets. */
+ * offsets. D0_UM's default was bumped 1000x 2026-09-26 as a coarse
+ * sensitivity fix standing in for a still-missing gain calibration --
+ * see Config/config.h's DEFAULT_DISP_S1_D0_UM comment; its wire bounds
+ * (Services/svc_api.c's s_calibration_fields[]) widened to match, so it
+ * no longer represents a literal sensor air gap in mm. */
 #define API2_RES_CALIB_DISP_ATTEN_MILLI        0x00U   /* shared A/B attenuator, x1000 */
 #define API2_RES_CALIB_DISP_S1_GAIN_MILLI      0x01U   /* S1 amplifier gain, x1000 */
-#define API2_RES_CALIB_DISP_S1_D0_UM           0x02U   /* S1 neutral air gap, um */
+#define API2_RES_CALIB_DISP_S1_D0_UM           0x02U   /* S1 neutral air gap, um (see 1000x-bump note above) */
 #define API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM  0x03U   /* S1 zero calibration, um, signed */
 #define API2_RES_CALIB_DISP_S2_GAIN_MILLI      0x04U   /* S2 amplifier gain, x1000 */
 #define API2_RES_CALIB_DISP_S2_D0_UM           0x05U   /* S2 neutral air gap, um */

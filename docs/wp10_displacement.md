@@ -337,27 +337,64 @@ displacement in one small line at the bottom.
   confirmed: `vbat_scale_den` 33->100 automatically after reflashing, `battery_mv`
   11792->3884 (a plausible single-cell reading).
 
-## Current status (fw 0.10.32)
+## Sensitivity bumped 1000x, coarse fix (2026-09-26, fw 0.10.33)
+
+User feedback after using the auto-started, redesigned LIVE screen: "the instruments
+function, their sensitivity is way too low. Without even calibrating, it is probably
+1000 times too low, maybe even more. increase sensitivity by 1000x and we can calibrate
+later but this should get us in the right ballpark."
+
+`DEFAULT_DISP_S1_D0_UM`/`DEFAULT_DISP_S2_D0_UM` bumped 100 -> **100000** (0.1 mm -> 100 mm
+nominal). `compute_sensor_delta()`'s `delta_mm = 2*d0_mm*(x-0.5) - zero_offset_mm` makes
+`d0` a **pure linear scale factor on the final output only** -- zero effect on `x`,
+`residual`, or the degenerate-denominator check, unlike `gain` (which sits inside `x`'s
+own computation and also feeds the shared `A-B` reciprocal). That's exactly why `d0`, not
+`gain`, is the lever here: a clean, isolated multiplier, not a change tangled up in the
+demod math. **This is not a claim the sensor's real mechanical air gap is 100 mm** -- `d0`
+is standing in for the still-missing real gain calibration (the bulk-capture
+signal-quality pass separately found the nominal `gain=10` doesn't match either board's
+actual hardware, real gain closer to ~0.13 -- a ~77x mismatch on its own, roughly the
+right order of magnitude once the S-channel's real-vs-assumed attenuation is folded in
+too). `EEPROM_DISPLACEMENT_SETTINGS_VERSION` bumped 0x0001 -> 0x0002 alongside it so this
+actually reaches already-provisioned boards (the exact lesson from the battery-scale bug
+above, applied immediately this time) -- confirmed this also resets `zero_offset_um` back
+to 0 on reflash, which is correct here since the old zero-cal result was fit to the old
+1000x-smaller scale and would otherwise be silently wrong at the new one.
+
+Bench-verified on board 2: `disp_s1/s2_d0_um` read back `100000` after reflashing (no
+manual SET needed), `zero_offset_um` reset to `0`, and `disp1/disp2_delta_mm` jumped from
+sub-micrometer noise-floor values (~0.0007 mm) to clearly-scaled mm-range values
+(~0.21-0.24 mm) for the same physical (unmoved) instrument -- the expected order-of-
+magnitude jump. Exact ratio varies run-to-run (expected, real sensor noise plus the
+zero-offset reset changing the additive term), not a precise 1000.000x -- consistent with
+the user's own framing ("in the right ballpark," not a real calibration).
+
+**Zero calibration should be re-run** after this change -- any previous 180-degree
+reversal result was computed against the old (1000x smaller) scale and no longer applies
+(though the EEPROM version bump above already discarded it automatically).
+
+## Current status (fw 0.10.33)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified. Displacement now auto-starts at boot (see above) instead of requiring
   an API command.
-- Full pipeline verified end-to-end with real data on two boards: `disp_ok=1`, plausible
-  small (sub-millimeter) delta values, residuals near 0 as expected for a working
-  calibration. Board 2 has both S1 and S2 physically connected (board 1 only has S1).
+- Full pipeline verified end-to-end with real data on two boards: `disp_ok=1`. Sensitivity
+  bumped 1000x (see above) -- still a coarse placeholder, not a real calibration.
+  Residuals near 0 as expected for a working calibration. Board 2 has both S1 and S2
+  physically connected (board 1 only has S1).
 - Bulk raw-ADC capture and bulk phasor-log capture both bench-verified, including their
   mutual exclusivity with the real-time demod and with each other.
 - Timing margin hardened (`DISPLACEMENT_BATCH_CYCLES`/`_RING_DEPTH`/
   `_MAX_CYCLES_PER_TICK`, see above) after board 2 exposed the original tuning as too
   thin in general, not board-specific.
 - Zero calibration (180-degree reversal test) implemented and API-accessible, mechanism
-  bench-verified -- see above. Still needs a real physical-flip test.
+  bench-verified -- see above. Needs re-running after the sensitivity bump, and still
+  needs a real physical-flip test.
 - LIVE screen redesigned to show displacement prominently (see above) -- not yet visually
   confirmed on the physical panel.
 - Deferred, not blocking: the high-rate per-cycle stream (nothing drains
-  `svc_displacement_pop()` yet); a fresh bench calibration of `gain`/`d0`/`zero_offset`
-  (currently nominal/un-calibrated defaults — the bulk-capture signal-quality pass found
-  the nominal S-channel gain of 10x doesn't match either board's actual hardware, real
-  gain is closer to ~0.13x); the LIVE-screen readout's own residual, not-fully-root-caused
-  rendering cost noted earlier; a real physical-flip zero-cal test; visual confirmation of
-  the new LIVE screen layout.
+  `svc_displacement_pop()` yet); a proper bench calibration of `gain`/`d0`/`zero_offset`
+  against a real reference (the 1000x `d0` bump above is a coarse stand-in, not that
+  calibration); the LIVE-screen readout's own residual, not-fully-root-caused rendering
+  cost noted earlier; a real physical-flip zero-cal test; visual confirmation of the new
+  LIVE screen layout.
