@@ -78,12 +78,15 @@ typedef struct {
                                      * shape as uptime_s, at
                                      * LIVE_DISPLACEMENT_REFRESH_MS instead
                                      * of 1000 ms. */
-    char displacement_line[48];   /* pre-formatted once per redraw in
-                                     * snapshot_capture() -- see that
-                                     * function's comment for why this
-                                     * can't just be computed inline in
-                                     * draw_live_screen() the way
-                                     * format_temp()/format_volts() are. */
+    char disp1_line[24];   /* pre-formatted once per redraw in
+                              * snapshot_capture() -- see that function's
+                              * comment for why this can't just be
+                              * computed inline in draw_live_screen() the
+                              * way format_temp()/format_volts() are.
+                              * Empty disp2_line means "don't draw a
+                              * second line" (the not-running message
+                              * only needs one line). */
+    char disp2_line[24];
 } DisplaySnapshot;
 
 static DisplaySnapshot s_last = {0};
@@ -199,36 +202,36 @@ static void draw_screen_indicator(UiScreen current)
 
 /* ---- LIVE screen ---- */
 
+/* The two inclination readings are this instrument's whole purpose --
+ * user feedback 2026-09-26: they should be the dominant thing on screen,
+ * with battery/temperature as side info, not the other way around (the
+ * original layout gave temperature and battery the big logisoso24
+ * treatment and buried displacement in a single small line at the
+ * bottom). Reuses this screen's previously-proven Y coordinates (76/148
+ * for a big-font line, 180 for the line after) just with different
+ * content -- same spacing, no new layout risk. */
 static void draw_live_screen(void)
 {
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
+    u8g2_DrawUTF8(&s_u8g2, 8, 38, "Displacement");
+
+    /* s_last.disp1_line/disp2_line are pre-formatted once per redraw in
+     * snapshot_capture(), NOT here -- see that function's comment. */
+    u8g2_SetFont(&s_u8g2, u8g2_font_logisoso24_tr);
+    u8g2_DrawUTF8(&s_u8g2, 8, 76, s_last.disp1_line);
+    if (s_last.disp2_line[0] != '\0') {
+        u8g2_DrawUTF8(&s_u8g2, 8, 148, s_last.disp2_line);
+    }
+
     char temp_str[16];
     format_temp(temp_str, sizeof temp_str, g_system_state.temperature_cdeg);
-
-    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 38, "Temperature");
-
-    char line[48];
-    snprintf(line, sizeof line, "%s C", temp_str);
-    u8g2_SetFont(&s_u8g2, u8g2_font_logisoso24_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 76, line);
-
-    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 110, "Battery");
-
     char volt_str[16];
     format_volts(volt_str, sizeof volt_str, svc_battery_get_vbat_mv());
-    snprintf(line, sizeof line, "%u%%   %s",
-             (unsigned)g_system_state.battery_soc_pct, volt_str);
-    u8g2_SetFont(&s_u8g2, u8g2_font_logisoso24_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 148, line);
-
+    char line[48];
+    snprintf(line, sizeof line, "%s C   %u%%   %s",
+             temp_str, (unsigned)g_system_state.battery_soc_pct, volt_str);
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 180, "Displacement");
-
-    /* s_last.displacement_line is pre-formatted once per redraw in
-     * snapshot_capture(), NOT here -- see that function's comment. */
-    u8g2_SetFont(&s_u8g2, u8g2_font_ncenB14_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 208, s_last.displacement_line);
+    u8g2_DrawUTF8(&s_u8g2, 8, 180, line);
 }
 
 /* ---- STATUS screen ---- */
@@ -447,11 +450,11 @@ static void snapshot_capture(void)
         char d1[16], d2[16];
         format_displacement_mm(d1, sizeof d1, svc_displacement_get_delta1_mm());
         format_displacement_mm(d2, sizeof d2, svc_displacement_get_delta2_mm());
-        snprintf(s_last.displacement_line, sizeof s_last.displacement_line,
-                 "S1 %smm   S2 %smm", d1, d2);
+        snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "S1 %smm", d1);
+        snprintf(s_last.disp2_line, sizeof s_last.disp2_line, "S2 %smm", d2);
     } else {
-        snprintf(s_last.displacement_line, sizeof s_last.displacement_line,
-                 "-- (not running)");
+        snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "-- not running --");
+        s_last.disp2_line[0] = '\0';
     }
 
     s_have_last = true;

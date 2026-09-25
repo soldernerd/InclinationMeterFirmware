@@ -312,10 +312,36 @@ persistence, and math direction correctly, but is NOT a real calibration run --
 performing an actual flip between step 1 and step 2 is the real end-to-end test still
 needed on real hardware.
 
-## Current status (fw 0.10.31)
+## Auto-start + LIVE screen redesign (2026-09-26, fw 0.10.32)
+
+User feedback after physically looking at the instrument's screen: displacement showed
+"(not running)" (it had to be started over the API, with no way to do that locally), and
+the LIVE screen gave temperature/battery the prominent big-font treatment while burying
+displacement in one small line at the bottom.
+
+- **Auto-start**: `svc_displacement_start()` is now called once at the end of
+  `Core/Src/main.c`'s setup (comms/RTC/power/scheduler table all already up), not gated
+  behind an API command anymore. The original "toggle over the API" design predated this
+  session's margin-hardening work; with that headroom restored, and given the instrument's
+  whole point is to show a reading without a host connected, requiring an API call first
+  was the wrong default. Bench-confirmed: `disp_ok=1` immediately after a fresh boot, no
+  start command sent.
+- **LIVE screen**: displacement (S1/S2) now gets the big `logisoso24` font that
+  temperature/battery used to have; temperature/SoC/voltage moved to one small side-info
+  line. Same proven Y coordinates, just swapped content -- not visually confirmed from this
+  session (no way to see the physical panel), verified only via the underlying data path.
+- **Battery voltage** (unrelated bug, same feedback pass): board 2 read an "obviously
+  wrong" 11.80 V. `EEPROM_BATTERY_SETTINGS_VERSION` bumped 0x0004->0x0005 so the R6/R9
+  divider-swap fix from 2026-09-24 (which only ever patched board 1's live EEPROM, never
+  propagated via a version bump) finally reaches every already-provisioned board. Bench-
+  confirmed: `vbat_scale_den` 33->100 automatically after reflashing, `battery_mv`
+  11792->3884 (a plausible single-cell reading).
+
+## Current status (fw 0.10.32)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
-  bench-verified.
+  bench-verified. Displacement now auto-starts at boot (see above) instead of requiring
+  an API command.
 - Full pipeline verified end-to-end with real data on two boards: `disp_ok=1`, plausible
   small (sub-millimeter) delta values, residuals near 0 as expected for a working
   calibration. Board 2 has both S1 and S2 physically connected (board 1 only has S1).
@@ -326,9 +352,12 @@ needed on real hardware.
   thin in general, not board-specific.
 - Zero calibration (180-degree reversal test) implemented and API-accessible, mechanism
   bench-verified -- see above. Still needs a real physical-flip test.
+- LIVE screen redesigned to show displacement prominently (see above) -- not yet visually
+  confirmed on the physical panel.
 - Deferred, not blocking: the high-rate per-cycle stream (nothing drains
   `svc_displacement_pop()` yet); a fresh bench calibration of `gain`/`d0`/`zero_offset`
   (currently nominal/un-calibrated defaults — the bulk-capture signal-quality pass found
   the nominal S-channel gain of 10x doesn't match either board's actual hardware, real
   gain is closer to ~0.13x); the LIVE-screen readout's own residual, not-fully-root-caused
-  rendering cost noted above; a real physical-flip zero-cal test.
+  rendering cost noted earlier; a real physical-flip zero-cal test; visual confirmation of
+  the new LIVE screen layout.

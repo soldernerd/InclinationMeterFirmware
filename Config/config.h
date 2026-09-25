@@ -111,14 +111,26 @@
                                                      fields — a stored 0x0001 page is
                                                      discarded and reseeded from DEFAULT_*. */
 #define EEPROM_BATTERY_SETTINGS_ADDR      0x0100  /* thresholds + ADC divider scale */
-#define EEPROM_BATTERY_SETTINGS_VERSION   0x0004  /* 0x0002: added battery_charge_start_mv
+#define EEPROM_BATTERY_SETTINGS_VERSION   0x0005  /* 0x0002: added battery_charge_start_mv
                                                      and retuned thresholds (WP2 debug).
                                                      0x0003 (WP6): the page's alignment pad
                                                      became auto_poweroff_s.
                                                      0x0004: added vbat_offset_mv (bench
-                                                     calibration). A stored older page is
-                                                     discarded and reseeded from DEFAULT_*
-                                                     (which hold the tuned thresholds). */
+                                                     calibration).
+                                                     0x0005 (2026-09-26): the R6/R9 divider
+                                                     swap (2026-09-24, this file's
+                                                     DEFAULT_VBAT_SCALE_NUM/DEN comment)
+                                                     changed the DEFAULT_* scale values but
+                                                     was never version-bumped, so boards
+                                                     already provisioned before the swap kept
+                                                     the stale pre-swap vbat_scale_den in
+                                                     EEPROM forever -- reported as an
+                                                     obviously-wrong ~11.8V battery reading
+                                                     (real value ~3.9V) on bench board 2.
+                                                     A stored older page is discarded and
+                                                     reseeded from DEFAULT_* (which hold the
+                                                     tuned thresholds and the correct
+                                                     post-swap scale). */
 #define EEPROM_TMP236_SETTINGS_ADDR       0x0200  /* on-board temp sensor piecewise-linear constants */
 #define EEPROM_TMP236_SETTINGS_VERSION    0x0001
 #define EEPROM_LM35_SETTINGS_ADDR         0x0300  /* external temp sensor scale */

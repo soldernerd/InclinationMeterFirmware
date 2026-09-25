@@ -277,11 +277,17 @@ int main(void)
   /* ADS131M04 4-ch ADC (WP8) — SPI1 full-duplex DMA + TIM2 MCLK + TIM7
    * sample trigger (all CubeMX-generated above); WP10's
    * svc_displacement_init() registers its per-sample callback then
-   * configures drv_ads131m04 (but doesn't start the acquisition trigger —
-   * that's toggled at runtime over the API, Commands/API2_RES_CMD_
-   * DISPLACEMENT, same bring-up caution WP8 established). Not
-   * boot-critical — same non-fatal handling as the DAC / internal ADC. */
+   * configures drv_ads131m04. Not boot-critical — same non-fatal
+   * handling as the DAC / internal ADC: ads_ok reflects only whether the
+   * chip/pipeline itself initialized, independent of whether the demod
+   * is currently running (bulk-capture dispatch in svc_api.c checks
+   * ads_ok as a precondition regardless of run state, so this flag must
+   * NOT fold in start()'s result). */
   g_system_state.ads_ok = (svc_displacement_init() == DRV_OK);
+  /* Actually starting the pipeline (svc_displacement_start()) is deferred
+   * to just before app_scheduler_run() below -- see that call site's
+   * comment for why it's no longer gated behind an API command but still
+   * isn't started HERE, this early. */
 
   /* WP4 comms stack. svc_api_init() before the three transport inits:
    * each registers itself via svc_api_register_transport(), which needs
@@ -316,6 +322,28 @@ int main(void)
 
   app_scheduler_init();
   hal_adc_start();             /* kick off the first ADC scan */
+
+  /* Auto-start WP10 displacement (2026-09-26) -- it used to require an
+   * explicit API Commands/API2_RES_CMD_DISPLACEMENT EXECUTE, "same
+   * bring-up caution WP8 established" (running the ADC pipeline
+   * unconditionally at boot starved the cooperative scheduler before the
+   * batching fix existed). That caution predates this project's
+   * margin-hardening work (config.h's DISPLACEMENT_BATCH_CYCLES/
+   * _RING_DEPTH/_MAX_CYCLES_PER_TICK) -- with that headroom restored,
+   * and given the whole point of this instrument is to show an
+   * inclination reading without needing a host connected, requiring an
+   * API call just to see the primary measurement was the wrong default.
+   * Placed here, last in setup (comms/RTC/power/scheduler table all
+   * already up), not back at svc_displacement_init() above -- the
+   * original caution was specifically about starting THIS EARLY in boot,
+   * before the rest of the system has settled; starting once everything
+   * else is ready is the more conservative reading of "the fix removed
+   * the risk," not "the risk never mattered." Return dropped
+   * deliberately: svc_displacement_start() is idempotent and its only
+   * failure mode is the ADS131M04 not having init'd, already reported
+   * via ads_ok above (same reasoning Services/svc_api.c's
+   * cmd_displacement() documents for this exact call). */
+  (void)svc_displacement_start();
   /* USER CODE END 2 */
 
   /* Infinite loop */
