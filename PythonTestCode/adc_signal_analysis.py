@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
 """
-INCOMPATIBLE with fw >= 0.10.0 (2026-09-24) -- depends on bulk_adc_csv.py's
-capture(), retired along with the Bulk raw-ADC-capture API path when
-WP10's displacement demod took over the ADS131M04 sample callback. See
-that file's own note and docs/wp10_displacement.md.
-
 Repeated bulk-ADC captures + FFT-based signal characterization: frequency,
 amplitude, THD, SNR/SINAD/ENOB, ch1-ch2 phase, and run-to-run repeatability.
 

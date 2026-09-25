@@ -155,4 +155,32 @@ uint16_t svc_displacement_get_input_drop_count(void);
 uint16_t svc_displacement_get_output_drop_count(void);
 uint16_t svc_displacement_get_degenerate_count(void);
 
+/* --- Bulk raw-ADC capture (feeds the API v2 category 0x8 bulk transfer) ---
+ * Restored 2026-09-25 -- retiring this alongside the WP8 signal-analysis
+ * module it was ported from was a mistake; it's an important bench
+ * diagnostic tool independent of the demod math. capture_begin() arms a
+ * one-shot fill of an internal Config/config.h ADC_BULK_SAMPLE_COUNT x 4
+ * channel buffer with raw sign-extended 24-bit ADC codes (NOT the
+ * phasor-accumulator inputs the demod uses), and starts the sample
+ * stream. While a capture is armed, on_sample() does only the buffer
+ * store -- the phasor accumulation is skipped, so it stays cheap enough
+ * not to disturb the scheduler for the ~0.3 s the capture lasts.
+ * capture_done() goes true once the buffer is full; capture_end()
+ * disarms and stops the stream. Not for concurrent use with the real-time
+ * _start()/_stop() path -- the caller (svc_api's bulk dispatch) enforces
+ * the exclusivity via svc_displacement_is_running(). Task context only. */
+DrvStatus      svc_displacement_capture_begin(void);
+bool           svc_displacement_capture_done(void);
+void           svc_displacement_capture_end(void);
+const uint8_t *svc_displacement_capture_buffer(void);   /* count * ADC_BULK_BYTES_PER_SAMPLE bytes: per sample, ch0..ch3 as 3-byte LE signed */
+uint16_t       svc_displacement_capture_sample_count(void);
+uint16_t       svc_displacement_capture_drops(void);    /* acquisition ring overflows during the fill (drain fell a ring behind) */
+
+/* Stats of the most recently finished capture, kept past capture_end():
+ * samples actually stored, ring-overflow drops, and wall-clock fill time.
+ * Effective sample rate = samples * 1000 / elapsed_ms. Any arg may be
+ * NULL. All zero until the first capture completes. */
+void svc_displacement_last_capture(uint16_t *samples, uint16_t *drops,
+                                    uint32_t *elapsed_ms);
+
 #endif /* SVC_DISPLACEMENT_H */

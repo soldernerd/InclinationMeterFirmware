@@ -332,6 +332,36 @@
 #define DEFAULT_DISP_S2_D0_UM                100
 #define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
 
+/* --- Bulk raw-ADC capture (API v2 category 0x8: START_BULK/CANCEL_BULK) ---
+ * Restored 2026-09-25 -- an important bench diagnostic tool, mistakenly
+ * retired 2026-09-24 on the theory that WP10's displacement demod owning
+ * the ADS131M04's one sample-callback slot (Services/svc_displacement.c)
+ * meant the two couldn't coexist. They can: svc_displacement.c's
+ * on_sample() now has a capture-mode branch (ported near-verbatim from
+ * the WP8-era Services/svc_signal_analysis.c this replaced) that stores
+ * raw codes into this buffer and skips the phasor math entirely while a
+ * capture is armed -- same mutual-exclusion shape as before, just living
+ * in the new file. Buffer = ADC_BULK_SAMPLE_COUNT samples x 4 channels x
+ * 3 bytes. The ADC codes are 24-bit, stored packed little-endian signed --
+ * the sign-extension byte that int32 storage wasted is dropped. 6144 x 4
+ * x 3 = 73728 bytes ~= 50% of the 144 KB SRAM. At 20833.33 Hz one capture
+ * spans ~295 ms (~768 cycles of the 2604 Hz DAC tone). */
+#define ADC_BULK_SAMPLE_COUNT          6144U
+
+/* 4 channels x 3 bytes -- size of one full sample, in RAM and on the wire. */
+#define ADC_BULK_BYTES_PER_SAMPLE     12U
+
+/* Samples per bulk chunk packet. Each chunk payload is
+ * [page:1][sample:12]xN; the whole API2 packet must fit API2_PACKET_MAX_SIZE
+ * (128): 6 (frame) + 1 (status) + 1 (page) + 12*N <= 128 -> N <= 10. */
+#define ADC_BULK_CHUNK_SAMPLES        10U
+
+/* Chunks pushed per svc_api_update() tick, upper bound — actual pace is
+ * governed by the transport TX-ring headroom (svc_api's ready_fn). Keeps
+ * the pump yielding so command responses / other traffic still get a turn
+ * mid-transfer (docs/api-v2-spec.md §4.1). */
+#define ADC_BULK_CHUNKS_PER_TICK      4U
+
 /* --- BME280 environmental sensor (WP9) ---
  * Shares I2C1 with the EEPROM (see pin_config.h) — no CubeMX changes
  * needed, only a different 7-bit address per transaction.

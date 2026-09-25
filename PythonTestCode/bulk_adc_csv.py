@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """
-INCOMPATIBLE with fw >= 0.10.0 (2026-09-24): WP10's displacement demod
-(Services/svc_displacement.c) took over the ADS131M04's one sample-
-callback slot from svc_signal_analysis.c, which backed the raw-ADC
-capture this script drives (API v2 Bulk category 0x8, retired the same
-day). START_BULK now gets UNKNOWN_CATEGORY. Kept as a reference for the
-technique (and for going back to a pre-0.10.0 build) rather than deleted
--- see docs/wp10_displacement.md.
-
 Pull one bulk raw-ADC capture off the InclinationMeter and write it to CSV.
 
 The device samples all 4 ADS131M04 channels at the full 20833.33 Hz into a
-RAM buffer (Config/config.h ADC_BULK_SAMPLE_COUNT, default 4096 samples =
-~197 ms), then streams the buffer out in chunks over the wire at whatever
-speed the link allows -- transport speed no longer limits sample rate
+RAM buffer (Config/config.h ADC_BULK_SAMPLE_COUNT, 6144 samples = ~295 ms),
+then streams the buffer out in chunks over the wire at whatever speed the
+link allows -- transport speed no longer limits sample rate
 (docs/api-v2-spec.md §4.5).
+
+Exclusive with the real-time displacement demod (WP10, Services/
+svc_displacement.c) -- both want the ADS131M04's one sample-callback slot.
+Stop displacement first (Commands / API2_RES_CMD_DISPLACEMENT) or this
+gets BUSY_EXCLUSIVE.
 
   python bulk_adc_csv.py                       # auto-detect port, -> bulk_adc.csv
   python bulk_adc_csv.py --port COM6 --out cap.csv

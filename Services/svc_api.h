@@ -345,19 +345,16 @@ typedef enum {
 } Api2LogSeverity;
 
 /* ---------------- Raw data (0x7: GET) ----------------
- * Development/debug intermediate values. 0x00 = ADS131M04 + WP10
- * displacement diagnostics, GET only, no request payload. Response
- * payload (24 B, LE):
+ * Development/debug intermediate values. 0x00 = ADS131M04 register
+ * read-back + bulk-capture stats, GET only, no request payload. Response
+ * payload (24 B base + 57 B acquisition-integrity tail, LE):
  *   u16 reg_id, reg_status, reg_mode, reg_clock, reg_gain1, reg_cfg
  *   u16 clock_expected      (what the driver wrote to CLOCK)
  *   u8  regs_read_ok        (all RREG transfers succeeded)
  *   u8  ads_ok              (g_system_state.ads_ok)
- *   u16 disp_input_drop_count    (svc_displacement_get_input_drop_count())
- *   u16 disp_output_drop_count   (svc_displacement_get_output_drop_count())
- *   u16 disp_degenerate_count    (svc_displacement_get_degenerate_count())
- *   u16 reserved0                 (was last_capture_elapsed_ms's low half
- *                                   before the WP8 bulk-capture path was
- *                                   retired 2026-09-24; always 0 now)
+ *   u16 last_capture_samples     (svc_displacement_last_capture())
+ *   u16 last_capture_drops
+ *   u32 last_capture_elapsed_ms
  * CLOCK.OSR is bits [4:2]: 0=128,1=256,2=512,3=1024,4=2048,5=4096,6=8192,7=16256;
  * fDATA = fCLKIN / (2 * OSR), fCLKIN ~= 5.3333 MHz. */
 #define API2_RES_RAW_ADC_DIAG   0x00U
@@ -365,19 +362,44 @@ typedef enum {
  *   u32 mask   — current Commands/0x03 bitmask (svc_powertest.h)
  *   u8  flags  — bit0 3V3 rail on, bit1 5V rail on (read back from the pins) */
 #define API2_RES_RAW_PWRTEST    0x01U
+/* 0x02 = WP10 displacement demod diagnostics (split out from 0x00 when
+ * bulk-capture's original last_capture fields were restored there
+ * 2026-09-25 -- see the "Bulk transfers" comment below). GET, no request
+ * payload. Response (7 B, LE):
+ *   u16 disp_input_drop_count    (svc_displacement_get_input_drop_count())
+ *   u16 disp_output_drop_count   (svc_displacement_get_output_drop_count())
+ *   u16 disp_degenerate_count    (svc_displacement_get_degenerate_count())
+ *   u8  disp_ok                  (svc_displacement_get_ok()) */
+#define API2_RES_RAW_DISPLACEMENT_DIAG  0x02U
 
 #define API2_OP_RAW_ADC_DIAG \
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_ADC_DIAG)
 #define API2_OP_RAW_PWRTEST \
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_PWRTEST)
+#define API2_OP_RAW_DISPLACEMENT_DIAG \
+    API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_DISPLACEMENT_DIAG)
 
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ----------------
- * Category reserved for large RAM-buffered transfers (spec §3.2) — no
- * resource implements it right now. Its one consumer, the raw-ADC-code
- * capture, was retired 2026-09-24 when WP10's displacement demod took
- * over the ADS131M04's single sample-callback slot (Services/
- * svc_displacement.c) — capturing raw codes and running the real-time
- * demod can't coexist. A GET/START_BULK to this category currently gets
- * UNKNOWN_CATEGORY. */
+ * 0x00 Raw ADC capture. START_BULK: no request payload (the transfer size
+ *      is fixed, Config/config.h ADC_BULK_SAMPLE_COUNT). Response is the
+ *      usual [status] ack; the capture then runs in the background and the
+ *      samples stream out asynchronously under the SAME opcode, chunked as
+ *      [status=OK][page:1][sample:12]xN, N <= ADC_BULK_CHUNK_SAMPLES, page
+ *      wrapping 0-255. CANCEL_BULK aborts an active capture/transfer.
+ *      Exclusive with the real-time displacement demod (Commands/
+ *      API2_RES_CMD_DISPLACEMENT) -- both want the ADS131M04's one
+ *      sample-callback slot (Services/svc_displacement.c); START_BULK
+ *      while displacement is running gets BUSY_EXCLUSIVE, and vice versa.
+ *      Retired 2026-09-24 on the mistaken theory that the two could never
+ *      coexist at all; restored 2026-09-25 once svc_displacement.c grew a
+ *      capture-mode branch in its on_sample() that the demod math and the
+ *      raw capture both share (mutually exclusively) instead of needing
+ *      separate driver callbacks. */
+#define API2_RES_BULK_RAW_ADC   0x00U
+
+#define API2_OP_BULK_RAW_ADC_START \
+    API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
+#define API2_OP_BULK_RAW_ADC_CANCEL \
+    API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
 
 #endif /* SVC_API_H */

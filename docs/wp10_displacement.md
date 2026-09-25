@@ -53,10 +53,13 @@ instrument (S1), ch0 stayed flat (S2, unconnected).
   followed verbatim.
 - **`svc_signal_analysis.c` (WP8) retired**, not just "not registered a second callback":
   `drv_ads131m04.c` only supports one sample callback at a time, and WP8's generic
-  4-channel amplitude/phase diagnostic is fully superseded by this module's math. Its API
-  surface (Commands `SIGNAL_ANALYSIS` → repointed to `DISPLACEMENT`, same wire value 0x01;
-  Bulk raw-ADC capture → retired outright, category 0x8 now unimplemented again) went with
-  it.
+  4-channel amplitude/phase diagnostic is fully superseded by this module's math. Its
+  Commands surface repointed (`SIGNAL_ANALYSIS` → `DISPLACEMENT`, same wire value 0x01).
+  Bulk raw-ADC capture was initially retired outright alongside it (2026-09-24) on the
+  theory that it couldn't coexist with the demod owning the one callback slot -- **wrong,
+  and corrected 2026-09-25** (see "Bulk raw-ADC capture restored" below): it's an important
+  bench diagnostic tool independent of the demod math, and the two only need to be
+  mutually exclusive at runtime, not architecturally incompatible.
 - **Measurements (0x4)**: `disp1_delta_mm`/`disp1_residual`/`disp2_delta_mm`/
   `disp2_residual`/`disp_ok`, latest-batch snapshot, float32 LE on the wire (the first
   floats this API has sent). The high-rate per-cycle/per-batch stream
@@ -152,6 +155,36 @@ did hit 65535 over that soak — expected at ~632k cycles produced over 4 minute
 being hammered with a UART poll every 0.5 s; graceful by design, not a failure. Worth
 widening those two counters to `uint32_t` at some point so they're still informative on a
 multi-minute run, not urgent.
+
+## Bulk raw-ADC capture restored (2026-09-25)
+
+Retiring the WP8 Bulk raw-ADC-capture path (API v2 category 0x8) alongside
+`svc_signal_analysis.c` was overreach, not a necessary consequence of the
+port -- it's a used, important bench diagnostic (`PythonTestCode/bulk_adc_csv.py`,
+`adc_diag.py`, `adc_signal_analysis.py`), not dead code. Restored by porting the
+old module's capture mechanism directly into `svc_displacement.c`'s `on_sample()`:
+a `s_cap_active` flag, checked first, makes the callback store raw sign-extended
+24-bit codes into a `Config/config.h` `ADC_BULK_SAMPLE_COUNT × 4` buffer and
+return immediately -- skipping the phasor accumulation entirely -- exactly the
+same "capture mode bypasses the real math" branch the old file had. The two
+paths are still mutually exclusive at runtime (never at compile time): `svc_api.c`'s
+`dispatch_bulk()` refuses `START_BULK` with `BUSY_EXCLUSIVE` while
+`svc_displacement_is_running()`, and refusing to start displacement while a
+bulk capture is active is implicit in `drv_ads131m04_start()`'s own busy check.
+
+API surface: `Bulk` (0x8) `START_BULK`/`CANCEL_BULK` resource `0x00`, same wire
+shape as before (`[status=OK][page:1][sample:12]×10` chunks). `Raw data` (0x7)
+resource `0x00` reverted to its original meaning (register read-back +
+`last_capture` samples/drops/elapsed_ms) so the pre-existing Python tooling's
+wire format didn't need to change; the WP10 displacement drop-counter
+diagnostics that had been squeezed into that same resource moved to their own
+new resource, `0x02` (`API2_RES_RAW_DISPLACEMENT_DIAG`), rather than staying
+double-booked with the restored bulk stats.
+
+RAM cost: the capture buffer is 6144 × 4 × 3 = 73728 bytes (~72 KiB, ~50% of
+the G0B1's 144 KB SRAM) -- same size as before, just living in
+`svc_displacement.c` now. Build after restoring: RAM 74.3% / FLASH 29.4%,
+zero warnings.
 
 ## Current status (fw 0.10.17)
 

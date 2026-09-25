@@ -2,6 +2,7 @@
 #include "drv_ads131m04.h"
 #include "math_phasor.h"
 #include "svc_log.h"
+#include "hal_systick.h"
 #include "config.h"
 #include "system_state.h"
 #include <stddef.h>
@@ -86,6 +87,27 @@ static uint16_t s_degenerate_count  = 0;
  * svc_displacement_check_integrity()) -- no volatile needed. */
 static bool s_fault_reported = false;
 
+/* --- Bulk raw-ADC capture buffer (restored 2026-09-25, see
+ * svc_displacement.h's comment) --- packed 24-bit codes, little-endian
+ * signed, ch0..ch3 interleaved: 12 bytes per sample. Filled from
+ * on_sample() (the same SysTick-frame-drain context, not a raw ISR) while
+ * s_cap_active; drained by svc_api's bulk pump (task) once s_cap_done. */
+static uint8_t           s_cap_buf[ADC_BULK_SAMPLE_COUNT * ADC_BULK_BYTES_PER_SAMPLE];
+static volatile uint16_t s_cap_idx    = 0;
+static volatile bool     s_cap_active = false;
+static volatile bool     s_cap_done   = false;
+static volatile uint32_t s_cap_t0     = 0;   /* tick at capture_begin() */
+static volatile uint32_t s_cap_t1     = 0;   /* tick when the buffer filled */
+
+/* Stats of the most recently completed capture — held past capture_end()
+ * so a host diagnostic can read them back (effective sample rate =
+ * samples / elapsed_ms). s_last_drops is the acquisition ring-overflow
+ * count (drain fell a whole ring behind) accumulated during the fill —
+ * the only lost-sample mechanism a full-rate capture has. */
+static uint16_t s_last_samples    = 0;
+static uint16_t s_last_drops      = 0;
+static uint32_t s_last_elapsed_ms = 0;
+
 /* Latest-batch snapshot for the API v2 Measurements (0x4) GET/SUBSCRIBE
  * resources (Services/svc_api.c) -- kept here, not in g_system_state,
  * same pattern as svc_battery_get_vbat_mv()/svc_powertest_mask() in
@@ -143,6 +165,28 @@ static void note_saturating(volatile uint16_t *counter)
 
 static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
 {
+    /* Bulk-capture mode: just store the raw codes and get out. The phasor
+     * accumulation below is skipped so this stays trivially cheap for the
+     * ~0.3 s a capture runs (see svc_displacement.h). Mutually exclusive
+     * with the demod path by construction -- svc_api's bulk dispatch only
+     * arms this while svc_displacement_is_running() is false. */
+    if (s_cap_active) {
+        if (s_cap_idx < ADC_BULK_SAMPLE_COUNT) {
+            uint8_t *p = &s_cap_buf[(size_t)s_cap_idx * ADC_BULK_BYTES_PER_SAMPLE];
+            const int32_t v[4] = { ch0, ch1, ch2, ch3 };
+            for (uint8_t i = 0; i < 4U; ++i) {
+                p[i * 3 + 0] = (uint8_t)(v[i] & 0xFF);
+                p[i * 3 + 1] = (uint8_t)((v[i] >> 8) & 0xFF);
+                p[i * 3 + 2] = (uint8_t)((v[i] >> 16) & 0xFF);
+            }
+            if (++s_cap_idx >= ADC_BULK_SAMPLE_COUNT) {
+                s_cap_t1   = hal_systick_get_ms();
+                s_cap_done = true;
+            }
+        }
+        return;
+    }
+
     /* ch0=S2, ch1=B, ch2=A, ch3=S1 -- see this file's top comment. */
     math_phasor_accumulate(ch1, s_sample_idx, &s_iB,  &s_qB);
     math_phasor_accumulate(ch2, s_sample_idx, &s_iA,  &s_qA);
@@ -484,4 +528,57 @@ uint16_t svc_displacement_get_output_drop_count(void)
 uint16_t svc_displacement_get_degenerate_count(void)
 {
     return s_degenerate_count;
+}
+
+DrvStatus svc_displacement_capture_begin(void)
+{
+    if (s_cap_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    s_cap_idx    = 0;
+    s_cap_done   = false;
+    s_cap_t1     = 0;
+    s_cap_t0     = hal_systick_get_ms();
+    s_cap_active = true;   /* on_sample() now stores into s_cap_buf */
+    return drv_ads131m04_start();
+}
+
+bool svc_displacement_capture_done(void)
+{
+    return s_cap_done;
+}
+
+void svc_displacement_capture_end(void)
+{
+    if (s_cap_active) {
+        uint32_t t1 = s_cap_t1 ? s_cap_t1 : hal_systick_get_ms();
+        s_last_samples    = s_cap_idx;
+        s_last_drops      = (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
+        s_last_elapsed_ms = t1 - s_cap_t0;
+    }
+    s_cap_active = false;
+    drv_ads131m04_stop();
+}
+
+void svc_displacement_last_capture(uint16_t *samples, uint16_t *drops,
+                                    uint32_t *elapsed_ms)
+{
+    if (samples)    *samples    = s_last_samples;
+    if (drops)      *drops      = s_last_drops;
+    if (elapsed_ms) *elapsed_ms = s_last_elapsed_ms;
+}
+
+const uint8_t *svc_displacement_capture_buffer(void)
+{
+    return s_cap_buf;
+}
+
+uint16_t svc_displacement_capture_sample_count(void)
+{
+    return ADC_BULK_SAMPLE_COUNT;
+}
+
+uint16_t svc_displacement_capture_drops(void)
+{
+    return (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
 }
