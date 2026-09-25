@@ -16,35 +16,33 @@
 #include <string.h>
 
 /* LIVE screen's displacement readout refreshes at a fixed cadence rather
- * than on every completed demod batch (~325 Hz, config.h's
+ * than on every completed demod batch (~81 Hz, config.h's
  * DISPLACEMENT_BATCH_CYCLES) -- same reasoning the STATUS screen's BME280
  * line already relies on (it piggybacks on that screen's once-a-second
  * clock redraw instead of being in snapshot_changed()'s comparison).
  *
- * INVESTIGATED 2026-09-25 on bench board 2: this readout (originally
- * 250 ms) measurably increases svc_displacement.c's input_drop_count
- * (API Raw data 0x7 resource 0x02) -- confirmed with a full bisection
- * against fw predating this readout entirely (git commit 027aff7):
- * that "clean" build ALREADY drops cycles on THIS board in bursts
- * (~400-700/s average over a 10 s window, alternating multi-second
- * plateaus of zero growth with sudden jumps) -- board 2 has a
- * board-specific marginal timing budget for WP10's batching design that
- * board 1's original "300/300 poll, 242 s soak, zero drops" verification
- * never exercised. Adding this readout roughly triples to quadruples
- * that baseline (~1500-2000/s) regardless of refresh interval (250 ms
- * and 1000 ms measured the same) -- the dominant cost turned out to be
- * format_displacement_mm()'s float math running once per rendered BAND
- * (u8g2 page mode calls draw_live_screen() ~15x per redraw, clipping
- * non-visible draws only AFTER formatting the string), not the redraw
- * frequency. Moved that formatting into snapshot_capture() (runs once
- * per redraw, not once per band) below, which measurably helps but does
- * not eliminate the gap back to board 2's own baseline -- see
- * docs/wp10_displacement.md for the full writeup and the still-open
- * board-2-margin follow-up. 1000 ms matches the STATUS screen's already-
- * used once-a-second cadence; slower than this file's original 250 ms,
- * but a readable, non-flickering number that competes less with the ADC
- * pipeline matters more than sub-second refresh here. */
-#define LIVE_DISPLACEMENT_REFRESH_MS  1000U
+ * INVESTIGATED 2026-09-25 on bench board 2 (see config.h's "MARGIN
+ * HARDENED" comment on DISPLACEMENT_BATCH_CYCLES for the primary fix):
+ * this readout (originally 250 ms) measurably increases
+ * svc_displacement.c's input_drop_count (API Raw data 0x7 resource
+ * 0x02). Two contributing costs, found by bisection:
+ *  1. format_displacement_mm()'s float math was running once per
+ *     rendered BAND (u8g2 page mode calls draw_live_screen() ~15x per
+ *     redraw, clipping non-visible draws only AFTER formatting the
+ *     string) instead of once per redraw -- fixed by moving it into
+ *     snapshot_capture() below.
+ *  2. Even with that fixed, the redraw itself (banded rasterization +
+ *     the Sharp LCD DMA blit) still costs measurably more than doing
+ *     nothing, and doesn't scale down linearly with a slower
+ *     LIVE_DISPLACEMENT_REFRESH_MS -- 1000 ms and 2000 ms measured
+ *     within ~12% of each other. Not fully root-caused; the dominant
+ *     fix that actually restored most of the margin was
+ *     DISPLACEMENT_BATCH_CYCLES/_RING_DEPTH in config.h, not this
+ *     constant. 2000 ms is a modest additional improvement over 1000 ms
+ *     with no real freshness cost for a supplementary UI readout (the
+ *     precise values are always available live over the API) -- see
+ *     docs/wp10_displacement.md for the full writeup. */
+#define LIVE_DISPLACEMENT_REFRESH_MS  2000U
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
  * config. At -O0 a full banded render is tens of ms and the per-tick
@@ -439,14 +437,12 @@ static void snapshot_capture(void)
      * calls don't matter, but format_displacement_mm()'s float multiply
      * is a soft-float library call on this FPU-less Cortex-M0+ -- 15x
      * redundant calls (30x counting both sensors) measurably added to
-     * svc_displacement.c's input_drop_count on bench board 2. Computing
-     * the string once here (this function runs once per redraw, not once
-     * per band) measurably reduces that contribution, but does NOT bring
-     * board 2 back to zero drops -- this board has its own pre-existing,
-     * non-zero baseline (confirmed against a build predating this whole
-     * readout) that WP10's original batching design wasn't tuned against.
-     * See docs/wp10_displacement.md for the full writeup and the
-     * still-open board-2-margin follow-up. */
+     * svc_displacement.c's input_drop_count. Computing the string once
+     * here (this function runs once per redraw, not once per band)
+     * measurably reduces that contribution, but the redraw itself still
+     * costs something -- the real fix for the underlying margin is
+     * DISPLACEMENT_BATCH_CYCLES/_RING_DEPTH in config.h, not this file.
+     * See docs/wp10_displacement.md for the full writeup. */
     if (svc_displacement_get_ok()) {
         char d1[16], d2[16];
         format_displacement_mm(d1, sizeof d1, svc_displacement_get_delta1_mm());

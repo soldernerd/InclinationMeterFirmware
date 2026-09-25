@@ -210,7 +210,7 @@ slots via bulk capture"):
 - A new `svc_displacement_phasor_log_progress()` getter (Raw data 0x7/0x02) lets a host
   poll how far a capture has gotten instead of guessing.
 
-### Board 2's timing margin (found while bench-verifying the above)
+### Timing margin was too thin, not board 2 being defective
 
 Testing on a second REV B board (see memory `two-bench-boards`) surfaced something
 board 1 never exposed: **even firmware predating this whole phasor-diagnostics
@@ -220,25 +220,44 @@ zero growth interrupted by sudden jumps, averaging roughly 400-700 cycles/s over
 window. Board 1's original "300/300 poll, 242 s soak, zero drops" verification (the
 livelock fix writeup above) never caught this because it was never run on board 2.
 
+The two boards are the same design, differing only by ordinary component/clock
+tolerance — the user's framing, and the correct one: two identical boards behaving
+differently at a setting this close to its own documented "~18%-marginal" budget (see
+the livelock writeup above) means the budget was too thin in general, not that board 2
+has a defect. **Fix (2026-09-25, fw 0.10.29)**: pushed the same lever that solved the
+original livelock further --
+- `DISPLACEMENT_BATCH_CYCLES` 8 → 32 (quarters the division-heavy math's rate; ~81
+  updates/s instead of ~325, still ample for a mechanical reading),
+- `DISPLACEMENT_RING_DEPTH` 64 → 128 and `DISPLACEMENT_MAX_CYCLES_PER_TICK` 32 → 64
+  (doubles the buffering slack against transient scheduler jitter and keeps
+  backlog-recovery proportionally as fast).
+- `DISPLACEMENT_PHASOR_LOG_DECIMATION` 8 → 2, re-derived to keep the phasor-log
+  capture's effective rate/duration at the same ~40.7 Hz / ~12.6 s target as before the
+  batch-cycle change (decimation is relative to the batch rate, which just quadrupled).
+
+Bench-verified on board 2: a 30 s soak with the LIVE-screen readout active (the worst
+case) dropped ~970 cycles/s, down from ~1500-2000/s pre-hardening — and with the
+readout's periodic redraw disabled entirely, drops fall to ~370/s, in line with board
+2's pre-existing baseline. A bulk phasor-log capture (512 entries) that previously took
+26 s now completes in ~18 s with 0 gap/CRC events, both consistent with meaningfully
+less pressure on the pipeline.
+
 Separately, the LIVE-screen displacement readout added in the prior session turn (fw
-0.10.22) made this measurably worse (roughly 3-4x) regardless of its refresh interval
-(250 ms and 1000 ms measured the same) — traced to `format_displacement_mm()`'s float
-math running once per rendered *band* (u8g2 page mode calls `draw_live_screen()` ~15x
-per redraw) instead of once per redraw. Moved the formatting into `snapshot_capture()`
-(`App/app_display.c`, fw 0.10.27), which measurably reduces the readout's own
-contribution but does not eliminate board 2's pre-existing baseline.
+0.10.22) was ALSO independently making things worse (roughly 3-4x on top of the
+baseline above) regardless of its refresh interval (250 ms, 1000 ms, and 2000 ms all
+measured within roughly the same range of each other) — traced to
+`format_displacement_mm()`'s float math running once per rendered *band* (u8g2 page
+mode calls `draw_live_screen()` ~15x per redraw) instead of once per redraw. Moved the
+formatting into `snapshot_capture()` (`App/app_display.c`, fw 0.10.27) and slowed the
+refresh interval to 2000 ms, which together measurably reduce the readout's own
+contribution but do not eliminate it -- the redraw's banded rasterization + Sharp LCD
+DMA blit still costs something that doesn't scale down linearly with refresh interval,
+and isn't fully root-caused. Not blocking: the margin-hardening above is the change
+that actually restored most of the headroom; the display's residual cost is a smaller,
+secondary effect worth a closer look if the readout's refresh rate ever needs to go
+back up.
 
-**Not yet root-caused or fixed**: why board 2 has less timing margin than board 1 for
-the same `DISPLACEMENT_BATCH_CYCLES`/`DISPLACEMENT_MAX_CYCLES_PER_TICK` tuning that gave
-board 1 zero drops. Candidates for a future session: board-to-board component/clock
-tolerance, a noisier analog front end on board 2 (its sensor-channel SNR was already
-observed to be more capture-to-capture variable than board 1's — see the bulk-capture
-signal-quality analysis), or the batching constants simply needing more headroom than
-board 1's bench-only verification revealed. Does not block ordinary use (the demod still
-produces correct, if occasionally gap-y, results on board 2), but is worth a dedicated
-investigation before treating board 2 as fully characterized.
-
-## Current status (fw 0.10.27)
+## Current status (fw 0.10.29)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified.
@@ -247,8 +266,12 @@ investigation before treating board 2 as fully characterized.
   calibration. Board 2 has both S1 and S2 physically connected (board 1 only has S1).
 - Bulk raw-ADC capture and bulk phasor-log capture both bench-verified, including their
   mutual exclusivity with the real-time demod and with each other.
+- Timing margin hardened (`DISPLACEMENT_BATCH_CYCLES`/`_RING_DEPTH`/
+  `_MAX_CYCLES_PER_TICK`, see above) after board 2 exposed the original tuning as too
+  thin in general, not board-specific.
 - Deferred, not blocking: the high-rate per-cycle stream (nothing drains
   `svc_displacement_pop()` yet); a fresh bench calibration of `gain`/`d0`/`zero_offset`
   (currently nominal/un-calibrated defaults — the bulk-capture signal-quality pass found
   the nominal S-channel gain of 10x doesn't match either board's actual hardware, real
-  gain is closer to ~0.13x); board 2's timing-margin gap above.
+  gain is closer to ~0.13x); the LIVE-screen readout's own residual, not-fully-root-caused
+  rendering cost noted above.

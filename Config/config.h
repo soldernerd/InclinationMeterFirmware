@@ -267,8 +267,10 @@
  * shape/reasoning as ADC_FRAME_RING_FRAMES above, just one layer up the
  * pipeline (cycles, not raw frames) and used for two SPSC rings (raw
  * I/Q in, computed delta out — see svc_displacement.c). Power of two,
- * index math uses & (N-1). 64 cycles ~= 24.6 ms of slack. */
-#define DISPLACEMENT_RING_DEPTH        64U
+ * index math uses & (N-1). Doubled from 64 to 128 (~49.2 ms of slack)
+ * 2026-09-25 as part of the general margin-hardening below -- see that
+ * comment for why. */
+#define DISPLACEMENT_RING_DEPTH        128U
 
 /* ROOT-CAUSED 2026-09-24 with a real debugger session (STM32_Programmer_CLI
  * -halt/-coreReg/-r32 over SWD -- see docs/wp10_displacement.md for the
@@ -301,18 +303,35 @@
  *     before running the expensive per-batch complex division once,
  *     instead of once per single cycle. Cuts the division-heavy work by
  *     this factor (and, as a bonus, is a longer coherent integration --
- *     better SNR, not just a workaround). 8 gives ~325 updates/s, ample
- *     for a mechanical displacement reading with generous headroom
- *     under the ~18%-marginal single-cycle budget.
+ *     better SNR, not just a workaround).
  *  2. DISPLACEMENT_MAX_CYCLES_PER_TICK -- defensive cap on how many raw
  *     cycles svc_displacement_update() will dequeue in one call,
  *     regardless of backlog, so a future transient overload (scheduler
  *     jitter, a slow tick elsewhere) can degrade to dropped cycles
  *     (already-proven-safe, graceful) instead of ever livelocking the
  *     scheduler again -- same bounded-pump shape as
- *     DISPLAY_PAGES_PER_TICK / the retired bulk-chunk pump. */
-#define DISPLACEMENT_BATCH_CYCLES         8U
-#define DISPLACEMENT_MAX_CYCLES_PER_TICK  32U
+ *     DISPLAY_PAGES_PER_TICK / the retired bulk-chunk pump.
+ *
+ * MARGIN HARDENED 2026-09-25: 8/32 gave board 1 a clean 242 s zero-drop
+ * soak, but board 2 -- identical hardware, ordinary component/clock
+ * tolerance, no defect found or expected -- measurably drops cycles in
+ * bursts at the same settings (confirmed even on firmware predating any
+ * of that day's other changes; see docs/wp10_displacement.md's "Board 2's
+ * timing margin" section). Two boards behaving differently at a setting
+ * this close to its own documented ~18%-marginal budget means the
+ * budget was too thin to begin with, not that board 2 is faulty -- the
+ * fix is the same lever that solved the original livelock, pushed
+ * further: quadrupling DISPLACEMENT_BATCH_CYCLES to 32 cuts the
+ * division-heavy work rate to a quarter (~81 updates/s, still ample for
+ * a mechanical displacement reading -- WP8's old signal-analysis module
+ * ran its own per-batch finalize at just 40 Hz), and doubling
+ * DISPLACEMENT_MAX_CYCLES_PER_TICK alongside the doubled
+ * DISPLACEMENT_RING_DEPTH above keeps recovery-from-backlog just as fast
+ * proportionally. Needs the same re-verification the original fix got
+ * (a long soak watching input_drop_count) before being trusted as
+ * "enough" margin, not just "more" margin. */
+#define DISPLACEMENT_BATCH_CYCLES         32U
+#define DISPLACEMENT_MAX_CYCLES_PER_TICK  64U
 
 /* Nominal calibration seeds (DeviceSettings' displacement page, EEPROM-
  * backed past first boot — see system_state.h's comment on those
@@ -372,24 +391,29 @@
  *
  * Real-time: API v2 Topic groups (0x5) resource API2_RES_TOPIC_PHASORS --
  * the latest completed batch's 8 floats, GET + SUBSCRIBE, same as any
- * other topic. ~325 updates/s available at the source; a subscriber picks
- * its own poll interval (API2_MEASUREMENT_MIN_INTERVAL_MS floor, 50 ms) --
- * genuinely "real time" is fine here specifically BECAUSE phasors are one
- * bundled 32-byte snapshot, not a per-sample stream like the raw ADC bulk
- * capture below (32 bytes @ 50 ms = 640 B/s, trivial next to UART's
- * 115200 baud budget; the raw ADC would be ~230x that).
+ * other topic. ~81 updates/s available at the source (DISPLACEMENT_BATCH_CYCLES
+ * below); a subscriber picks its own poll interval
+ * (API2_MEASUREMENT_MIN_INTERVAL_MS floor, 50 ms) -- genuinely "real time"
+ * is fine here specifically BECAUSE phasors are one bundled 32-byte
+ * snapshot, not a per-sample stream like the raw ADC bulk capture below
+ * (32 bytes @ 50 ms = 640 B/s, trivial next to UART's 115200 baud budget;
+ * the raw ADC would be ~230x that).
  *
  * Longer time slots: API v2 Bulk (0x8) resource API2_RES_BULK_PHASORS.
  * Reuses the exact same accumulation/batching pipeline as normal
  * operation (on_sample() untouched) -- svc_displacement_update()'s
  * "batch complete" branch stores instead of demodulating while a capture
- * is armed. Storing every batch would only buy ~8x the raw-ADC capture's
- * ~295 ms window (batches complete 8x slower than raw ADC samples, per
- * DISPLACEMENT_BATCH_CYCLES) -- decimating further, storing only every
+ * is armed. Storing every batch would only buy ~32x the raw-ADC capture's
+ * ~295 ms window (batches complete DISPLACEMENT_BATCH_CYCLES=32x slower
+ * than raw ADC samples) -- decimating further, storing only every
  * DISPLACEMENT_PHASOR_LOG_DECIMATIONth batch, trades that resolution for
- * duration instead: 325.52/8 =~ 40.7 Hz effective, matching the old WP8
- * signal-analysis module's update rate. */
-#define DISPLACEMENT_PHASOR_LOG_DECIMATION    8U
+ * duration instead: (2604.167/32)/2 =~ 40.7 Hz effective, matching the
+ * old WP8 signal-analysis module's update rate (this constant was
+ * re-derived 2026-09-25 when DISPLACEMENT_BATCH_CYCLES quadrupled 8->32
+ * as part of the margin-hardening below it -- decimation dropped
+ * 8->2 to land on the same ~40.7 Hz/~12.6 s target as before, not a
+ * 4x-longer capture by accident). */
+#define DISPLACEMENT_PHASOR_LOG_DECIMATION    2U
 
 /* 512 entries x 34 B (8 floats + a u16 seq, packed) = 17408 B (~17 KB) --
  * at the ~40.7 Hz effective rate above, ~12.6 s of history. Picked to

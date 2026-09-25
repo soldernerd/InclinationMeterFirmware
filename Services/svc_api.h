@@ -218,8 +218,9 @@ typedef enum {
 /* Displacement (WP10), Services/svc_displacement.c. delta_mm/residual
  * are the latest completed batch's values (config.h's
  * DISPLACEMENT_BATCH_CYCLES consecutive carrier cycles, coherently
- * summed before the demod math -- ~325 updates/s at the default batch
- * size, float32 LE, IEEE-754
+ * summed before the demod math -- ~81 updates/s at the default batch
+ * size (2026-09-25 margin-hardening bumped this from 8 to 32 cycles/batch,
+ * see config.h), float32 LE, IEEE-754
  * — the first floats on this wire; MEAS_VALUE_MAX_LEN is 4 bytes, an
  * exact fit). Both only meaningful while disp_ok is true — GET/SUBSCRIBE
  * that first if freshness matters, same pattern as bme280_ok above.
