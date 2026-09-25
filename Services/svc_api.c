@@ -298,13 +298,17 @@ static void dispatch_system_status(ApiTransport t, uint16_t opcode, uint8_t verb
         p.fw_minor = (uint8_t)FW_VERSION_MINOR;
         p.fw_patch = (uint8_t)FW_VERSION_PATCH;
         copy_fixed(p.product_str, USB_PRODUCT_STR, sizeof p.product_str);
-        /* Last 32 bits of the 96-bit factory UID (HAL_App/hal_mcu.c) as 8
-         * hex chars — self-identifying per physical board, unlike the old
-         * hardcoded "001" every board reported. Same value the STATUS
-         * screen shows (app_display.c) and, in full, what the CubeMX USB
-         * descriptor already derives its iSerialNumber string from
-         * (USB_Device/App/usbd_desc.c's Get_SerialNum()) — this is just a
-         * shorter cut of the same identity for the app-layer API. */
+        /* All three words of the 96-bit factory UID, folded into 32 bits
+         * (HAL_App/hal_mcu.c) as 8 hex chars — self-identifying per
+         * physical board, unlike the old hardcoded "001" every board
+         * reported. (An earlier version of this read only the UID's last
+         * word; that word is ST's shared lot-number, identical across
+         * every die from the same batch, so two boards from one lot
+         * reported the same serial here — fixed 2026-09-25.) Same value
+         * the STATUS screen shows (app_display.c) and, in full, what the
+         * CubeMX USB descriptor already derives its iSerialNumber string
+         * from (USB_Device/App/usbd_desc.c's Get_SerialNum()) — this is
+         * just a shorter cut of the same identity for the app-layer API. */
         format_hex32(p.serial_str, hal_mcu_uid_low());
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
     } else {
