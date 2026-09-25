@@ -373,15 +373,38 @@ the user's own framing ("in the right ballpark," not a real calibration).
 reversal result was computed against the old (1000x smaller) scale and no longer applies
 (though the EEPROM version bump above already discarded it automatically).
 
-## Current status (fw 0.10.33)
+## A further 7x, from a real physical check (2026-09-26, fw 0.10.34)
+
+Same day: the user ran an actual physical check against the 1000x-sensitivity build --
+a single 80 g/m^2 paper sheet (~100 um caliper, per its grammage/density) as a known shim
+under one end of the instrument over a known baseline, comparing the resulting reading
+against the expected displacement -- and reported "you can multiply sensitivity by 7x
+from here and it's about right."
+
+`DEFAULT_DISP_S1_D0_UM`/`DEFAULT_DISP_S2_D0_UM` bumped again, 100000 -> **700000**
+(~7000x total from the original 100/0.1 mm). `EEPROM_DISPLACEMENT_SETTINGS_VERSION`
+bumped again too, 0x0002 -> 0x0003 -- same propagation reasoning as before, applied on
+every default change, not just the first one. This is a more trustworthy number than the
+initial 1000x guess (an actual physical measurement, not a component-tolerance estimate),
+but it's still a coarse per-board sanity check, not a real multi-point calibration against
+a certified reference.
+
+Bench-verified on board 2: `d0` read back `700000` after reflashing, offsets reset to `0`
+again, `disp1/disp2_delta_mm` reads ~1.29-1.70 mm for the same physical (unmoved)
+instrument -- roughly 7x the previous (~0.21-0.24 mm) reading, consistent with the change
+(exact ratio varies run-to-run for the same real-noise reasons as the first bump).
+
+## Current status (fw 0.10.34)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified. Displacement now auto-starts at boot (see above) instead of requiring
   an API command.
 - Full pipeline verified end-to-end with real data on two boards: `disp_ok=1`. Sensitivity
-  bumped 1000x (see above) -- still a coarse placeholder, not a real calibration.
-  Residuals near 0 as expected for a working calibration. Board 2 has both S1 and S2
-  physically connected (board 1 only has S1).
+  bumped ~7000x total from the original nominal (1000x initial guess + a 7x correction
+  from a real paper-shim check, see above) -- still a coarse per-board sanity check, not a
+  real multi-point calibration against a certified reference. Residuals near 0 as expected
+  for a working calibration. Board 2 has both S1 and S2 physically connected (board 1 only
+  has S1).
 - Bulk raw-ADC capture and bulk phasor-log capture both bench-verified, including their
   mutual exclusivity with the real-time demod and with each other.
 - Timing margin hardened (`DISPLACEMENT_BATCH_CYCLES`/`_RING_DEPTH`/
@@ -390,11 +413,10 @@ reversal result was computed against the old (1000x smaller) scale and no longer
 - Zero calibration (180-degree reversal test) implemented and API-accessible, mechanism
   bench-verified -- see above. Needs re-running after the sensitivity bump, and still
   needs a real physical-flip test.
-- LIVE screen redesigned to show displacement prominently (see above) -- not yet visually
-  confirmed on the physical panel.
+- LIVE screen redesigned to show displacement prominently (see above) -- visually
+  confirmed working by the user on the physical panel.
 - Deferred, not blocking: the high-rate per-cycle stream (nothing drains
   `svc_displacement_pop()` yet); a proper bench calibration of `gain`/`d0`/`zero_offset`
-  against a real reference (the 1000x `d0` bump above is a coarse stand-in, not that
-  calibration); the LIVE-screen readout's own residual, not-fully-root-caused rendering
-  cost noted earlier; a real physical-flip zero-cal test; visual confirmation of the new
-  LIVE screen layout.
+  against a certified reference (the ~7000x `d0` bump above is a coarse per-board sanity
+  check, not that calibration); the LIVE-screen readout's own residual, not-fully-
+  root-caused rendering cost noted earlier; a real physical-flip zero-cal test.
