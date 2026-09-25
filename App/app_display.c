@@ -6,6 +6,7 @@
 #include "system_state.h"
 #include "svc_battery.h"
 #include "svc_api.h"
+#include "svc_displacement.h"
 #include "hal_rtc.h"
 #include "hal_systick.h"
 #include "hal_mcu.h"
@@ -13,6 +14,16 @@
 #include "u8g2.h"
 #include <stdio.h>
 #include <string.h>
+
+/* LIVE screen's displacement readout refreshes at a fixed cadence rather
+ * than on every completed demod batch (~40 Hz, config.h's
+ * DISPLACEMENT_BATCH_CYCLES) -- same reasoning the STATUS screen's BME280
+ * line already relies on (it piggybacks on that screen's once-a-second
+ * clock redraw instead of being in snapshot_changed()'s comparison):
+ * forcing a full-frame redraw at batch rate would flicker the display and
+ * defeat app_display's whole change-detection design. 4 Hz is fast
+ * enough to read as "live" without being distracting. */
+#define LIVE_DISPLACEMENT_REFRESH_MS  250U
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
  * config. At -O0 a full banded render is tens of ms and the per-tick
@@ -42,6 +53,12 @@ typedef struct {
                               * the only thing that changes purely from
                               * time passing, with nothing else in this
                               * struct tracking it otherwise. */
+    uint32_t displacement_tick;   /* only checked while UI_SCREEN_LIVE is
+                                     * shown — same "redraw on a clock
+                                     * tick, not on the underlying value"
+                                     * shape as uptime_s, at
+                                     * LIVE_DISPLACEMENT_REFRESH_MS instead
+                                     * of 1000 ms. */
 } DisplaySnapshot;
 
 static DisplaySnapshot s_last = {0};
@@ -79,6 +96,21 @@ static void format_uptime(char *buf, size_t bufsz, uint32_t ms)
     uint32_t ss = s % 60U;
     snprintf(buf, bufsz, "%02lu:%02lu:%02lu",
              (unsigned long)hh, (unsigned long)mn, (unsigned long)ss);
+}
+
+/* One-time float->fixed-point conversion (WP10's svc_displacement.c is a
+ * Services-layer float result, not a HAL/driver one -- CLAUDE.md 7.1's
+ * float ban is HAL/driver-only), then formatted the same manual
+ * integer-divmod way as format_temp()/format_volts() above -- this
+ * codebase's UI layer doesn't use snprintf's %f (CLAUDE.md 7.5). Rounds
+ * to the nearest micrometer, explicit sign so a near-zero reading doesn't
+ * silently read as "0.000" with no indication which side of zero it's on. */
+static void format_displacement_mm(char *buf, size_t bufsz, float mm)
+{
+    int32_t um = (int32_t)(mm * 1000.0f + (mm >= 0.0f ? 0.5f : -0.5f));
+    int sign = (um < 0) ? -1 : 1;
+    int32_t a = um * sign;
+    snprintf(buf, bufsz, "%s%ld.%03ld", sign < 0 ? "-" : "+", (long)(a / 1000), (long)(a % 1000));
 }
 
 /* ---- top bar ---- */
@@ -150,7 +182,7 @@ static void draw_live_screen(void)
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 38, "Temperature");
 
-    char line[32];
+    char line[48];
     snprintf(line, sizeof line, "%s C", temp_str);
     u8g2_SetFont(&s_u8g2, u8g2_font_logisoso24_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 76, line);
@@ -166,7 +198,18 @@ static void draw_live_screen(void)
     u8g2_DrawUTF8(&s_u8g2, 8, 148, line);
 
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 200, "Sensors: offline");
+    u8g2_DrawUTF8(&s_u8g2, 8, 180, "Displacement");
+
+    if (svc_displacement_get_ok()) {
+        char d1[16], d2[16];
+        format_displacement_mm(d1, sizeof d1, svc_displacement_get_delta1_mm());
+        format_displacement_mm(d2, sizeof d2, svc_displacement_get_delta2_mm());
+        snprintf(line, sizeof line, "S1 %smm   S2 %smm", d1, d2);
+    } else {
+        snprintf(line, sizeof line, "-- (not running)");
+    }
+    u8g2_SetFont(&s_u8g2, u8g2_font_ncenB14_tr);
+    u8g2_DrawUTF8(&s_u8g2, 8, 208, line);
 }
 
 /* ---- STATUS screen ---- */
@@ -346,7 +389,9 @@ static bool snapshot_changed(void)
         || s_last.settings_editing != g_ui_state.settings_editing
         || s_last.edit_value       != g_ui_state.edit_value
         || (g_ui_state.current_screen == UI_SCREEN_STATUS
-            && s_last.uptime_s != hal_systick_get_ms() / 1000U);
+            && s_last.uptime_s != hal_systick_get_ms() / 1000U)
+        || (g_ui_state.current_screen == UI_SCREEN_LIVE
+            && s_last.displacement_tick != hal_systick_get_ms() / LIVE_DISPLACEMENT_REFRESH_MS);
 }
 
 static void snapshot_capture(void)
@@ -362,6 +407,7 @@ static void snapshot_capture(void)
     s_last.settings_editing = g_ui_state.settings_editing;
     s_last.edit_value       = g_ui_state.edit_value;
     s_last.uptime_s         = s_render_ms / 1000U;
+    s_last.displacement_tick = s_render_ms / LIVE_DISPLACEMENT_REFRESH_MS;
     s_have_last = true;
 }
 
