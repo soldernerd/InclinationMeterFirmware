@@ -88,12 +88,27 @@ typedef struct {
     float iS2, qS2;
 } __attribute__((packed)) Api2TopicPhasorsPayload;
 
+/* Pre-moving-average per-batch displacement (2026-09-26, at the user's
+ * request -- see svc_api.h's Topic groups 0x03 doc comment). Mirrors
+ * Measurements 0x09-0x0C's field order/types exactly, just sourced from
+ * svc_displacement_get_delta1/2_mm_raw() instead of the post-MA
+ * get_delta1/2_mm(). */
+typedef struct {
+    float   delta1_mm_raw;
+    float   residual1;
+    float   delta2_mm_raw;
+    float   residual2;
+    uint8_t quality1_ok;   /* added 2026-09-26 -- see svc_api.h's doc comment */
+    uint8_t quality2_ok;
+} __attribute__((packed)) Api2TopicRawDisplacementPayload;
+
 _Static_assert(sizeof(Api2IdentityPayload)    + 1U <= MAX_PAYLOAD, "IDENTITY response too large");
 _Static_assert(sizeof(Api2DeviceStatePayload) + 1U <= MAX_PAYLOAD, "DEVICE_STATE response too large");
 /* +3: stream pushes prefix [status][issue_seq][page] */
 _Static_assert(sizeof(Api2TopicEnvPayload)    + 3U <= MAX_PAYLOAD, "TOPIC env push too large");
 _Static_assert(sizeof(Api2TopicStatusPayload) + 3U <= MAX_PAYLOAD, "TOPIC status push too large");
 _Static_assert(sizeof(Api2TopicPhasorsPayload) + 3U <= MAX_PAYLOAD, "TOPIC phasors push too large");
+_Static_assert(sizeof(Api2TopicRawDisplacementPayload) + 3U <= MAX_PAYLOAD, "TOPIC raw displacement push too large");
 
 /* ---------------- per-transport state ---------------- */
 
@@ -480,6 +495,39 @@ static void cmd_zero_cal(ApiTransport t, uint16_t opcode,
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
+/* Triggered precision measurement -- see svc_api.h's API2_RES_CMD_PRECISION_MEASURE
+ * comment. Just arms/cancels the run and acks immediately; a host polls
+ * Raw data (0x7) resource 0x04 for progress and the final averaged result. */
+static void cmd_precision_measure(ApiTransport t, uint16_t opcode,
+                                   const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    uint8_t action = pl[0];
+    switch (action) {
+        case 0U: {
+            DrvStatus rc = svc_displacement_precision_begin();
+            if (rc != DRV_OK) {
+                /* Not running yet, or a zero-cal is currently using the
+                 * batch stream -- same BUSY_RESOURCE mapping zero-cal's
+                 * own begin() failures use. */
+                send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+                return;
+            }
+            svc_log(API2_LOG_INFO, "cmd: precision measurement started");
+            send_response(t, opcode, API2_STATUS_OK, 0, 0);
+            return;
+        }
+        case 1U:
+            svc_displacement_precision_cancel();
+            svc_log(API2_LOG_INFO, "cmd: precision measurement cancelled");
+            send_response(t, opcode, API2_STATUS_OK, 0, 0);
+            return;
+        default:
+            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+            return;
+    }
+}
+
 static const CommandDesc s_commands[] = {
     { API2_RES_CMD_TEST_BEEP,       0U, cmd_test_beep       },
     { API2_RES_CMD_DISPLACEMENT,    1U, cmd_displacement    },
@@ -488,6 +536,7 @@ static const CommandDesc s_commands[] = {
     { API2_RES_CMD_PIN_TEST,        1U, cmd_pin_test        },
     { API2_RES_CMD_ZERO_CAL,        1U, cmd_zero_cal        },
     { API2_RES_CMD_REBOOT_DFU,      0U, cmd_reboot_dfu      },
+    { API2_RES_CMD_PRECISION_MEASURE, 1U, cmd_precision_measure },
 };
 #define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
 
@@ -702,7 +751,8 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         return;
     }
     if (res != API2_RES_RAW_ADC_DIAG && res != API2_RES_RAW_PWRTEST
-        && res != API2_RES_RAW_DISPLACEMENT_DIAG && res != API2_RES_RAW_ZERO_CAL_STATUS) {
+        && res != API2_RES_RAW_DISPLACEMENT_DIAG && res != API2_RES_RAW_ZERO_CAL_STATUS
+        && res != API2_RES_RAW_PRECISION_STATUS) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
@@ -728,12 +778,15 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
             uint16_t input_drop, output_drop, degenerate;
             uint8_t  disp_ok;
             uint16_t phasor_log_progress;
+            uint16_t clip_count, amplitude_fault_count;
         } p;
         p.input_drop  = svc_displacement_get_input_drop_count();
         p.output_drop = svc_displacement_get_output_drop_count();
         p.degenerate  = svc_displacement_get_degenerate_count();
         p.disp_ok     = svc_displacement_get_ok() ? 1U : 0U;
         p.phasor_log_progress = svc_displacement_phasor_log_progress();
+        p.clip_count            = svc_displacement_get_clip_count();
+        p.amplitude_fault_count = svc_displacement_get_amplitude_fault_count();
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }
@@ -748,6 +801,35 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         svc_displacement_zero_cal_progress(&progress, &target);
         p.progress = progress;
         p.target   = target;
+        send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
+        return;
+    }
+
+    if (res == API2_RES_RAW_PRECISION_STATUS) {
+        struct __attribute__((packed)) {
+            uint8_t  phase;
+            uint16_t target, count1, count2;
+            uint32_t elapsed_ms;
+            uint8_t  timed_out;
+            float    delta1_mm, delta2_mm;
+        } p;
+        /* Local (non-packed) temporaries -- svc_displacement_precision_progress()
+         * takes pointers, and taking the address of a packed struct's
+         * members directly is a real -Werror=address-of-packed-member
+         * hazard on this Cortex-M0+ build (bitten by this exact issue
+         * with zero-cal's progress earlier -- see that history). */
+        uint16_t target, count1, count2;
+        uint32_t elapsed_ms;
+        p.phase = (uint8_t)svc_displacement_precision_get_phase();
+        svc_displacement_precision_progress(&count1, &count2, &target, &elapsed_ms);
+        p.target = target;  p.count1 = count1;  p.count2 = count2;
+        p.elapsed_ms = elapsed_ms;
+        bool timed_out = false;
+        float d1 = 0.0f, d2 = 0.0f;
+        (void)svc_displacement_precision_get_result(&d1, &d2, &timed_out);
+        p.timed_out = timed_out ? 1U : 0U;
+        p.delta1_mm = d1;
+        p.delta2_mm = d2;
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }
@@ -1063,15 +1145,29 @@ static uint16_t build_topic_phasors(uint8_t *buf)
     return sizeof p;
 }
 
+static uint16_t build_topic_raw_displacement(uint8_t *buf)
+{
+    Api2TopicRawDisplacementPayload p;
+    p.delta1_mm_raw = svc_displacement_get_delta1_mm_raw();
+    p.residual1     = svc_displacement_get_residual1();
+    p.delta2_mm_raw = svc_displacement_get_delta2_mm_raw();
+    p.residual2     = svc_displacement_get_residual2();
+    p.quality1_ok   = svc_displacement_get_quality1_ok() ? 1U : 0U;
+    p.quality2_ok   = svc_displacement_get_quality2_ok() ? 1U : 0U;
+    memcpy(buf, &p, sizeof p);
+    return sizeof p;
+}
+
 typedef struct {
     uint8_t      resource;
     TopicBuildFn build;
 } TopicResourceDesc;
 
 static const TopicResourceDesc s_topic_resources[] = {
-    { API2_RES_TOPIC_ENV,     build_topic_env },
-    { API2_RES_TOPIC_STATUS,  build_topic_status },
-    { API2_RES_TOPIC_PHASORS, build_topic_phasors },
+    { API2_RES_TOPIC_ENV,              build_topic_env },
+    { API2_RES_TOPIC_STATUS,           build_topic_status },
+    { API2_RES_TOPIC_PHASORS,          build_topic_phasors },
+    { API2_RES_TOPIC_RAW_DISPLACEMENT, build_topic_raw_displacement },
 };
 #define TOPIC_RESOURCE_COUNT (sizeof(s_topic_resources) / sizeof(s_topic_resources[0]))
 

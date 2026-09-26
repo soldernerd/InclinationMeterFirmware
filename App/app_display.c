@@ -38,10 +38,34 @@
  *     within ~12% of each other. Not fully root-caused; the dominant
  *     fix that actually restored most of the margin was
  *     DISPLACEMENT_BATCH_CYCLES/_RING_DEPTH in config.h, not this
- *     constant. 2000 ms is a modest additional improvement over 1000 ms
- *     with no real freshness cost for a supplementary UI readout (the
- *     precise values are always available live over the API) -- see
- *     docs/wp10_displacement.md for the full writeup. */
+ *     constant.
+ *
+ * RE-INVESTIGATED 2026-09-26, at the user's request (the LIVE screen felt
+ * laggy) -- tried bumping DISPLACEMENT_BATCH_CYCLES 32->128 (cutting the
+ * division-heavy per-batch cost 4x) on the theory that cost, not the
+ * redraw, was the dominant remaining consumer, then tried this constant
+ * at 250 ms, 1000 ms, and 30000 ms, bench-soaking each with a fine-grained
+ * (200 ms) sampler on Raw data 0x7 resource 0x02's input_drop_count
+ * instead of the previous investigation's coarse before/after snapshots.
+ * Result: DISPLACEMENT_BATCH_CYCLES=128 made no measurable difference
+ * (confirms the redraw itself, not division cost, dominates here, as
+ * suspected but not proven in 2026-09-25's writeup) -- AND at 250 ms,
+ * 1000 ms, AND even 2000 ms (this constant's own long-standing value,
+ * never actually re-verified since the 2026-09-25 investigation moved on
+ * once DISPLACEMENT_BATCH_CYCLES/_RING_DEPTH "restored most of the
+ * margin"), the fine-grained sampler caught a real, regular ~500-cycle
+ * (~190 ms) input_drop_count burst every single LIVE_DISPLACEMENT_REFRESH_MS
+ * period, board-2-with-BLE/LEDs-off isolating it cleanly from separate,
+ * less regular jitter (BLE and/or LEDs contribute their own, smaller,
+ * irregular losses -- a second, still-open question). 190 ms per redraw
+ * is roughly 5x DISPLAY_PAGES_PER_TICK's assumed sub-ms-per-3-bands cost
+ * (docs/display_page_render.md's bench predates WP10's ADS131M04
+ * pipeline and the LIVE screen's large logisoso24 S1/S2 glyphs) -- NOT
+ * root-caused this session. Left at the original 2000 ms rather than
+ * lowered: every interval tested drops roughly the same ~500 cycles per
+ * redraw regardless of period, so a shorter period only means MORE such
+ * bursts per second, strictly worse, not better, until the actual
+ * per-redraw cost is fixed. See docs/wp10_displacement.md. */
 #define LIVE_DISPLACEMENT_REFRESH_MS  2000U
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
@@ -63,6 +87,11 @@ typedef struct {
     bool     battery_charging;
     bool     usb_connected;
     bool     battery_critical;
+    bool     battery_low;   /* frozen alongside the rest -- see
+                              * draw_active_screen()'s comment on why this
+                              * (a branch/layout selector, not just a
+                              * displayed value) has to come from here
+                              * rather than a live g_system_state read */
     UiScreen screen;
     uint8_t  settings_cursor;
     bool     settings_editing;
@@ -309,10 +338,13 @@ static int32_t setting_value_for_display(UiSettingIndex i)
 {
     /* If editing the row at cursor, show the working edit_value;
      * otherwise show the live setting via app_ui.c's own read function —
-     * not a re-implemented switch, so the two can't desync. */
-    if (g_ui_state.settings_editing
-        && (UiSettingIndex)g_ui_state.settings_cursor == i) {
-        return g_ui_state.edit_value;
+     * not a re-implemented switch, so the two can't desync. Reads
+     * settings_editing/settings_cursor/edit_value from the frozen s_last
+     * snapshot, not live g_ui_state, for the same tear reason
+     * draw_active_screen() does (2026-09-26). */
+    if (s_last.settings_editing
+        && (UiSettingIndex)s_last.settings_cursor == i) {
+        return s_last.edit_value;
     }
     return app_ui_setting_read(i);
 }
@@ -325,9 +357,9 @@ static void draw_settings_screen(void)
     int y = 56;
     for (uint8_t i = 0; i < UI_SETTING_COUNT; ++i) {
         char line[64];
-        const char *cursor = (i == g_ui_state.settings_cursor) ? ">" : " ";
+        const char *cursor = (i == s_last.settings_cursor) ? ">" : " ";
         const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)i);
-        bool is_selected_and_editing = (i == g_ui_state.settings_cursor) && g_ui_state.settings_editing;
+        bool is_selected_and_editing = (i == s_last.settings_cursor) && s_last.settings_editing;
         if (m->step != 0) {
             snprintf(line, sizeof line, "%s %-18s %ld %s",
                      cursor,
@@ -436,6 +468,7 @@ static bool snapshot_changed(void)
         || s_last.battery_charging != g_system_state.battery_charging
         || s_last.usb_connected    != g_system_state.usb_connected
         || s_last.battery_critical != g_system_state.battery_critical
+        || s_last.battery_low      != g_system_state.battery_low
         || s_last.screen           != g_ui_state.current_screen
         || s_last.settings_cursor  != g_ui_state.settings_cursor
         || s_last.settings_editing != g_ui_state.settings_editing
@@ -454,6 +487,7 @@ static void snapshot_capture(void)
     s_last.battery_charging = g_system_state.battery_charging;
     s_last.usb_connected    = g_system_state.usb_connected;
     s_last.battery_critical = g_system_state.battery_critical;
+    s_last.battery_low      = g_system_state.battery_low;
     s_last.screen           = g_ui_state.current_screen;
     s_last.settings_cursor  = g_ui_state.settings_cursor;
     s_last.settings_editing = g_ui_state.settings_editing;
@@ -507,26 +541,37 @@ void app_display_init(void)
 /* Full-screen compositor. In page mode this runs once per band (15x per
  * frame); u8g2 clips each draw op to the current band, and a glyph
  * outside it early-returns before rasterizing, so the redundant calls
- * are cheap. The structural selectors below (battery_low /
- * current_screen) are still read live each band — a change mid-render
- * tears one frame, then snapshot_changed() forces a clean redraw next
- * pass. Fast-updating value screens (a future live-angle readout) would
- * need their inputs frozen into the snapshot like s_render_ms is. */
+ * are cheap.
+ *
+ * FIXED 2026-09-26 (user-reported "screen sometimes updates in halves"):
+ * the structural selectors here (battery_low / current_screen) used to be
+ * read live from g_system_state/g_ui_state each band instead of from the
+ * s_last snapshot the rest of this file already freezes at render start.
+ * A frame is 15 bands spread over several scheduler ticks, all
+ * accumulating into one off-screen framebuffer that's only blitted to the
+ * panel once, atomically, at the end (docs/display_page_render.md) --
+ * that DMA blit was never torn, but if the live selector changed
+ * mid-render (a screen-nav press, or battery_low flipping), different
+ * bands got drawn from different states INTO that same buffer before the
+ * one flush, so the single atomic update the panel received visibly
+ * mixed two screens. Reading from s_last (captured once, at the top of
+ * the render) instead makes the whole multi-tick render coherent
+ * regardless of how long it takes or what changes mid-flight. */
 static void draw_active_screen(void)
 {
     u8g2_SetDrawColor(&s_u8g2, 1);
 
-    if (g_system_state.battery_low) {
+    if (s_last.battery_low) {
         draw_low_battery_screen(svc_battery_get_vbat_mv());
     } else {
         draw_top_bar();
-        switch (g_ui_state.current_screen) {
+        switch (s_last.screen) {
             case UI_SCREEN_LIVE:     draw_live_screen();     break;
             case UI_SCREEN_STATUS:   draw_status_screen();   break;
             case UI_SCREEN_SETTINGS: draw_settings_screen(); break;
             default:                                          break;
         }
-        draw_screen_indicator(g_ui_state.current_screen);
+        draw_screen_indicator(s_last.screen);
     }
 }
 

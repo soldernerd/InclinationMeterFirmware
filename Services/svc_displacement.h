@@ -19,7 +19,12 @@
  * hardware doc states this otherwise):
  *   CH0 = Sensor 2 (S2)      CH1 = Exciter B
  *   CH2 = Exciter A          CH3 = Sensor 1 (S1)
- * S1 is connected via an external cable on this bench; S2 is not.
+ * CORRECTED 2026-09-26 (was wrong): both S1 and S2 are connected via an
+ * identical 2 m cable and are physically interchangeable -- there is no
+ * cabling asymmetry between them. (The two are NOT necessarily in the
+ * same rigid housing either -- confirmed 2026-09-26 when the user flipped
+ * one 180 degrees independently of the other while investigating a
+ * shared drift; see docs/wp10_displacement.md.)
  *
  * Physical model: two sensor heads share a common antiphase excitation
  * pair (A, B ~= -A) driving the outer plates of a differential
@@ -132,12 +137,27 @@ void svc_displacement_update(void);
  * why these live here rather than in g_system_state. Valid only while
  * svc_displacement_get_ok() is true (mirrors g_system_state.ads_ok:
  * acquisition running + at least one cycle processed); all return 0.0f
- * (false, for _ok) before that. Task context only. */
+ * (false, for _ok) before that. Task context only. delta1/2_mm are the
+ * POST-moving-average value (config.h's DISPLACEMENT_MA_SAMPLES, added
+ * 2026-09-26) -- see svc_displacement_get_delta1_mm_raw()/
+ * get_delta2_mm_raw() below for the pre-MA value. residual1/2 were never
+ * run through the MA (zero-cal's own comment explains why) so there is
+ * only one version of each. */
 float svc_displacement_get_delta1_mm(void);
 float svc_displacement_get_residual1(void);
 float svc_displacement_get_delta2_mm(void);
 float svc_displacement_get_residual2(void);
 bool  svc_displacement_get_ok(void);
+
+/* Pre-moving-average delta_mm -- the value computed directly from one
+ * DISPLACEMENT_BATCH_CYCLES batch, before DISPLACEMENT_MA_SAMPLES'
+ * boxcar smoothing is applied (added 2026-09-26, at the user's request,
+ * for granular analysis of the raw ~20.3 updates/s batch stream --
+ * Services/svc_api.c's Topic groups (0x5) API2_RES_TOPIC_RAW_DISPLACEMENT
+ * exposes this as a subscribable stream). Same validity contract as
+ * svc_displacement_get_delta1_mm() above. */
+float svc_displacement_get_delta1_mm_raw(void);
+float svc_displacement_get_delta2_mm_raw(void);
 
 /* Latest completed batch's raw phasors -- same validity contract as the
  * getters above (all-zero before the first batch / while !get_ok()).
@@ -178,6 +198,36 @@ bool svc_displacement_pop(DisplacementCycle *out);
 uint16_t svc_displacement_get_input_drop_count(void);
 uint16_t svc_displacement_get_output_drop_count(void);
 uint16_t svc_displacement_get_degenerate_count(void);
+
+/* --- Clip / amplitude-integrity checks (2026-09-26, added alongside the
+ * S1/S2 PGA=16 bump) --- two DIFFERENT things, despite both sounding like
+ * "clipping":
+ *   clip: a raw ADC code (any of the 4 channels) sits within
+ *     ADS131M04_CLIP_THRESHOLD of the ADS131M04's own digital rail
+ *     (Drivers_App/drv_ads131m04.h's ADS131M04_CODE_MAX) -- the actual,
+ *     direct clipping/saturation detector, checked per raw sample in
+ *     on_sample().
+ *   amplitude_fault: a completed batch's raw phasor magnitude
+ *     (sqrt(i^2+q^2)) exceeds the highest value a genuinely full-scale,
+ *     UNDISTORTED sinusoid at the matched carrier frequency could ever
+ *     produce over DISPLACEMENT_BATCH_CYCLES cycles (see
+ *     process_one_batch()'s comment for the derivation). This is NOT a
+ *     second clipping detector -- real analog/ADC clipping flattens the
+ *     waveform and only ever REDUCES this value relative to a clean
+ *     sinusoid (harmonic energy leaks out of the fundamental bin), so it
+ *     can never be triggered by clipping itself. It catches a different
+ *     class of problem: a gain/scale mismatch (e.g. the ADC's PGA and the
+ *     software `gain` calibration constant disagreeing), corrupted data,
+ *     or an accumulation bug -- something that made the computed number
+ *     exceed a value that should be mathematically impossible.
+ * Both are saturating counts (CLAUDE.md 7.6), reset at start()/init(),
+ * logged once (edge-triggered, not every occurrence) via
+ * svc_displacement_check_integrity(), and surfaced over the API on Raw
+ * data (0x7) GET API2_RES_RAW_DISPLACEMENT_DIAG. Neither stops
+ * acquisition -- a signal-quality warning, not an acquisition fault like
+ * drv_ads131m04's own integrity checks. */
+uint16_t svc_displacement_get_clip_count(void);
+uint16_t svc_displacement_get_amplitude_fault_count(void);
 
 /* --- Bulk raw-ADC capture (feeds the API v2 category 0x8 bulk transfer) ---
  * Restored 2026-09-25 -- retiring this alongside the WP8 signal-analysis
@@ -297,5 +347,68 @@ void svc_displacement_zero_cal_progress(uint16_t *count_out, uint16_t *target_ou
  * caller still has to convert to micrometers and persist them; this
  * module never touches g_device_settings or EEPROM itself. */
 bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out);
+
+/* --- Per-batch quality flag (2026-09-26) --- see Config/config.h's
+ * DISPLACEMENT_QUALITY_BAD_MULTIPLE comment for the derivation (bench-
+ * validated: a batch's residual step runs ~4-4.6x its typical size at
+ * the exact same batches delta_mm has one of the discrete "jumps" this
+ * session's noise investigation found). true = this latest batch's
+ * delta_mm is trustworthy; false = its residual moved anomalously and
+ * the delta_mm from that specific batch should be treated with
+ * suspicion. Same validity contract as svc_displacement_get_delta1_mm()
+ * (meaningless before the first batch / while !get_ok()). Surfaced over
+ * the API on Topic groups (0x5) API2_RES_TOPIC_RAW_DISPLACEMENT, and
+ * used internally to gate which batches the precision-measurement
+ * feature below averages. */
+bool svc_displacement_get_quality1_ok(void);
+bool svc_displacement_get_quality2_ok(void);
+
+/* --- Triggered precision measurement (2026-09-26) --- see Config/config.h's
+ * DISPLACEMENT_PRECISION_TARGET_SAMPLES comment for the ~2s-vs-64-samples
+ * timing tradeoff. API-driven (Commands API2_RES_CMD_PRECISION_MEASURE,
+ * Services/svc_api.c): begin() arms averaging of up to
+ * DISPLACEMENT_PRECISION_TARGET_SAMPLES quality-good batches PER SENSOR
+ * (svc_displacement_get_quality1/2_ok() above), stopping once BOTH
+ * sensors reach the target or DISPLACEMENT_PRECISION_TIMEOUT_MS elapses,
+ * whichever comes first. Requires the demod already running and no
+ * zero-cal in progress (DRV_ERR_NOT_READY otherwise -- the two averaging
+ * consumers of the batch stream are mutually exclusive by design, same
+ * reasoning as bulk capture vs. real-time demod). A fresh begin() while
+ * already running restarts it; svc_displacement_stop() cancels it (same
+ * "stale mid-run state is worse than starting over" reasoning zero-cal
+ * uses). Unlike zero-cal, the result never touches EEPROM/settings --
+ * it's a pure read-back, so there is no separate "consume" step: once
+ * DISP_PRECISION_DONE, get_result() can be read repeatedly and stays
+ * valid until the next begin(). */
+typedef enum {
+    DISP_PRECISION_IDLE = 0,
+    DISP_PRECISION_RUNNING,
+    DISP_PRECISION_DONE,
+} DisplacementPrecisionPhase;
+
+DrvStatus svc_displacement_precision_begin(void);    /* DRV_ERR_NOT_READY if not running or zero-cal in progress */
+void      svc_displacement_precision_cancel(void);   /* back to IDLE from any phase; harmless if already idle */
+
+DisplacementPrecisionPhase svc_displacement_precision_get_phase(void);
+
+/* All four out-params may be NULL. count1/2_out are batches averaged so
+ * far per sensor (0..DISPLACEMENT_PRECISION_TARGET_SAMPLES); target_out
+ * is always DISPLACEMENT_PRECISION_TARGET_SAMPLES (so a host doesn't need
+ * to hardcode it); elapsed_ms_out is wall-clock time since begin(), 0
+ * while idle. */
+void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_out,
+                                          uint16_t *target_out, uint32_t *elapsed_ms_out);
+
+/* Only succeeds (returns true) while phase == DISP_PRECISION_DONE --
+ * false (outputs untouched) otherwise. delta1/2_mm_out are the mean of
+ * whatever quality-good batches were actually collected per sensor
+ * (count may be less than the target if timed_out_out is true, or even
+ * 0 in a pathological case -- a caller should check
+ * svc_displacement_precision_progress()'s counts alongside this to judge
+ * confidence, not just trust that the target was met). timed_out_out is
+ * true if DISPLACEMENT_PRECISION_TIMEOUT_MS was hit before both sensors
+ * reached the target sample count. */
+bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,
+                                            bool *timed_out_out);
 
 #endif /* SVC_DISPLACEMENT_H */

@@ -411,7 +411,230 @@ averaging runs in the background over the following ~1-2 s independent of what t
 doing. Shares the exact same `svc_displacement_zero_cal_*()` calls the API path already
 used and bench-verified -- confirmed no regression there after adding the UI code.
 
-## Current status (fw 0.10.35)
+## Higher sensitivity/SNR via batch size + moving average, and a display tear fix (2026-09-26, fw 0.10.40)
+
+Two independent, user-requested changes, plus a third finding surfaced by bench-testing them:
+
+**1. `DISPLACEMENT_BATCH_CYCLES` 32 -> 128 + a new post-division moving average
+(`DISPLACEMENT_MA_SAMPLES = 4`, `Services/svc_displacement.c`'s `ma_apply()`).**
+User's own math: at 32 cycles/batch the division rate was ~81.4 Hz
+(2604.167/32); at 128 it's ~20.3 Hz -- still "20 samples" as the user put it,
+and correct. This cuts the division-heavy per-batch work another 4x (on top
+of the 2026-09-25 hardening) and is a real SNR win on its own: √4 = 2x
+(~6 dB) from the longer coherent integration, stacking with the new moving
+average's own √4 = 2x (~6 dB) for roughly 4x (~12 dB) total. The MA is a
+cheap boxcar over the last 4 batches' already-divided `delta_mm`, applied
+inside `process_one_batch()` before `s_delta1_mm`/`s_delta2_mm` are updated
+-- transparent to every consumer (LIVE screen, API Measurements) via the
+existing getters. Zero-cal deliberately bypasses it (fed the pre-MA raw
+value) since it already does its own, much longer, independent averaging.
+`DISPLACEMENT_ZERO_CAL_SAMPLES` was rescaled 128 -> 32 alongside the batch
+bump so its wall-clock duration per step (~1.6 s) and total raw-cycle
+integration depth (4096) are unchanged, not re-tuned.
+
+**2. LIVE screen tear fix ("screen sometimes updates in halves").** Not a
+framebuffer/double-buffering problem -- the frame was already effectively
+double-buffered (15 u8g2 page-mode bands accumulate into one off-screen RAM
+buffer across several scheduler ticks, then one atomic DMA blit at the end,
+`docs/display_page_render.md`). The real bug: `draw_active_screen()` read
+`g_system_state.battery_low` and `g_ui_state.current_screen` LIVE, fresh
+every band, instead of from the `s_last` snapshot the numeric fields already
+freeze at render start -- exactly the gap that doc's own "Not done" section
+flagged. If the screen selection (or low-battery overlay) changed mid-render,
+different bands landed in the same buffer from different states before the
+one flush, so the single atomic panel update visibly mixed two screens. Fixed
+by adding `battery_low` to `DisplaySnapshot` and routing `draw_active_screen()`
+and the SETTINGS screen's cursor/edit-highlight (`settings_cursor`/
+`settings_editing`/`edit_value`) through `s_last` instead of the live globals.
+Contained to `App/app_display.c`.
+
+**3. A third, pre-existing, unrelated bug found while bench-verifying #1: see
+[[wp10-redraw-cost-bug]] (memory) / `App/app_display.c`'s
+`LIVE_DISPLACEMENT_REFRESH_MS` comment.** The user also asked to bring the
+LIVE-screen refresh rate back down (250 ms, from 2000 ms) now that #1 frees
+CPU margin. A fine-grained (200 ms) drop-count sampler -- finer than the
+coarse before/after snapshots the 2026-09-25 investigation used -- found a
+real ~500-cycle (~190 ms) `input_drop_count` burst every single
+`LIVE_DISPLACEMENT_REFRESH_MS` period, present even at the ORIGINAL 2000 ms /
+32-cycle settings (i.e. this was never actually fixed, just not measured
+finely enough to see). `DISPLACEMENT_BATCH_CYCLES=128` made no difference to
+burst size, ruling out division cost and pointing at the banded redraw itself
+(likely the LIVE screen's large `logisoso24` S1/S2 glyphs, not root-caused
+further this session). Refresh rate was therefore left at 2000 ms rather than
+lowered -- every interval tested (250/1000/2000/30000 ms) drops the same
+~500 cycles per redraw, so a shorter period is strictly worse, not better,
+until the real per-redraw cost is found and fixed. This is an open item, not
+resolved by this session's work.
+
+Bench method note: isolated the redraw's contribution from separate BLE/LED
+jitter by disabling those via the `powertest` (Commands 0x03) mask -- but
+that mask only cuts physical `DISP_ON`/`VCOM` pins for `PWR_DISPLAY`, NOT the
+render pipeline itself (`task_display` still fully renders + blits every
+tick regardless), so it's useless for isolating rendering cost specifically.
+
+## PGA gain on S1/S2, and clip/amplitude-fault detection (2026-09-26, fw 0.10.41)
+
+**PGA gain.** User's question: "we need a measurement range of ±1mm/m, what gain
+setting can we afford?" A fresh bulk capture (not the stale WP8-era doc numbers, which
+turned out to be superseded -- the ~170mV "not ground-referenced" DC offset noted there
+is now only ~7mV, whatever changed since) gave the real answer: at the ADS131M04's
+default PGA=1 (full scale 2.4V), S1/S2 sit at only ~52-58mV peak (+~7mV DC offset) --
+~2.5% of full scale -- while A/B sit at ~1250mV (~52% of full scale, already near their
+own ceiling, so left untouched). Gain=16 (full scale 150mV) uses ~43% of the new,
+smaller full scale -- comfortable margin, and a real 16x resolution improvement.
+Gain=32 was rejected: ~87% of a 75mV full scale at the same measured signal, too tight
+given that measurement was taken at whatever tilt the bench happened to be at, not a
+certified ±1mm/m reference.
+
+Set via `Drivers_App/drv_ads131m04.c`'s `GAIN1_REG_VALUE = 0x4004` (PGAGAIN0=PGAGAIN3=4
+i.e. gain=16 on ch0=S2/ch3=S1; PGAGAIN1/2=0 i.e. gain=1 on ch1=B/ch2=A, unchanged).
+Bench-confirmed with a before/after bulk capture: S1/S2 peak-to-peak scaled by almost
+exactly 16.00x (114.96mV->1842.28mV on S2, 104.66mV->1673.27mV on S1), A/B unchanged
+(2510.70mV/2484.47mV -> 2509.93mV/2484.71mV, within capture-to-capture noise) -- the
+gain change landed exactly as intended, on exactly the two channels intended.
+
+**Software gain compensation.** The ADC's own PGA is a SEPARATE, independent gain stage
+from `disp_s1/s2_gain_milli` (an external analog pre-amp calibration constant used in
+`compute_sensor_delta()`'s `x=(S/k-B)/(A-B)`, `k=atten*gain`). Since A/B stay unscaled
+while S1/S2 now read back 16x larger raw codes, `DEFAULT_DISP_S1/S2_GAIN_MILLI` were
+bumped 16x too (10000 -> 160000, `Config/config.h`) to cancel the ADC's own amplification
+back out of the ratio math -- otherwise `x` (and `delta_mm`) would silently read 16x too
+small. `EEPROM_DISPLACEMENT_SETTINGS_VERSION` bumped again (0x0003 -> 0x0004) so this
+propagates to board 2's already-provisioned EEPROM, same reasoning as every earlier
+bump this session.
+
+**Clip / amplitude-fault detection**, added at the user's request ("clipped readings or
+calculated amplitude>theoretical maximum should generate an error") specifically because
+raising PGA gain is exactly the kind of change that could introduce clipping. Two
+DIFFERENT checks, despite sounding similar -- see `Services/svc_displacement.h`'s getter
+comment for the full reasoning:
+- **`clip_count`** (`svc_displacement_get_clip_count()`) -- a real clipping detector: any
+  raw ADC code (any of the 4 channels) within ~99% of the ADS131M04's own digital rail
+  (`ADS131M04_CLIP_THRESHOLD`, `Drivers_App/drv_ads131m04.h`'s `ADS131M04_CODE_MAX`),
+  checked per raw sample in `on_sample()`.
+- **`amplitude_fault_count`** (`svc_displacement_get_amplitude_fault_count()`) -- NOT a
+  second clipping detector. A completed batch's raw phasor magnitude
+  (`sqrt(i^2+q^2)`) exceeding the highest value a genuinely full-scale, UNDISTORTED
+  sinusoid at the matched carrier frequency could ever produce
+  (`DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG = DISPLACEMENT_BATCH_CYCLES * 65536 *
+  ADS131M04_CODE_MAX`, derived from `math_phasor.c`'s 8-point matched-filter sum). Real
+  clipping flattens the waveform and can only ever REDUCE this value relative to a clean
+  sinusoid (harmonic energy leaks out of the fundamental bin) -- so exceeding this ceiling
+  means something else: a gain/scale mismatch (exactly the software-compensation step
+  above, if it were wrong), corrupted data, or an accumulation bug. Both are saturating
+  counts, reset at start()/init(), logged once (edge-triggered) via
+  `svc_displacement_check_integrity()`, and surfaced over the API on Raw data (0x7) GET
+  `API2_RES_RAW_DISPLACEMENT_DIAG` (extended from 9 to 13 bytes).
+
+Bench-confirmed: `amplitude_fault_count` stayed 0 throughout (as expected -- the check
+is a sanity assertion that should never fire under normal operation, not a tuned
+threshold). `clip_count` caught a real, one-time event: 291 clipped samples right at one
+particular `svc_displacement_start()`, static (non-growing) afterward and disp_ok=true
+throughout -- almost certainly a startup transient (analogous to WP7's documented
+`fOUT/8` startup glitch) before the signal chain settled, not a steady-state margin
+problem. A second restart produced clip_count=0, confirming it's transient/probabilistic
+rather than deterministic. Steady-state signal sits at ~36-40% of the ADC's raw code full
+scale on S1/S2 (measured directly from the bulk capture's raw min/max, gain-independent)
+-- comfortably not clipping, consistent with the ~43%-of-FSR estimate above.
+
+**Still open:** this is a proxy measurement (whatever tilt the bench happens to be at),
+not a calibrated ±1mm/m reference -- a real answer to "does ±1mm/m specifically fit"
+needs either the sensor's true mechanical sensitivity or a controlled reference tilt.
+
+## Raw (pre-moving-average) displacement stream (2026-09-26, fw 0.10.42)
+
+The 10-minute unattended monitor above was done by *polling* Measurements
+(0x4) GET repeatedly -- ~1.6s/sample in practice (UART round-trip overhead
+per request, not the 0.4s intended), badly undersampling a ~20.3 Hz source
+(config.h's `DISPLACEMENT_BATCH_CYCLES`/complex division rate) and, worse,
+reading `svc_displacement_get_delta1/2_mm()`'s POST-moving-average value
+(`DISPLACEMENT_MA_SAMPLES`), not the raw per-batch number. User correctly
+pointed out both problems: this needs a real subscribable stream of the
+pre-MA value, and the API v2 architecture already has exactly the
+mechanism for it (Topic groups, category 0x5 -- the phasors topic already
+does this for the raw I/Q phasors).
+
+Added Topic groups resource **0x03 "Raw displacement"**
+(`API2_RES_TOPIC_RAW_DISPLACEMENT`, `svc_api.h`/`.c`): 16 bytes --
+`delta1_mm_raw`, `residual1`, `delta2_mm_raw`, `residual2` -- built from
+two new getters, `svc_displacement_get_delta1/2_mm_raw()`
+(`Services/svc_displacement.c`), populated in `process_one_batch()`
+*before* `ma_apply()` runs. Subscribe at the
+`API2_MEASUREMENT_MIN_INTERVAL_MS` floor (50 ms) to track the ~49.2 ms
+batch period essentially 1:1 -- this is the existing polled-push
+subscription model (`svc_api_topic_subscriptions_update()`, called every
+scheduler tick), not a new streaming mechanism; it just needed a topic
+that exposes the pre-MA value, which didn't exist before.
+
+Fits directly into the existing `API2_TOPIC_SLOTS = 4` array (3 topics
+were already defined, one free slot) -- no slot-table resize needed.
+
+**Bench-confirmed, fw 0.10.42:** a 15s smoke test before the full 10-minute
+run got 260 samples (~17.3 Hz effective, host-loop-limited, not
+device-limited) with **zero sequence gaps** (`issue_seq`, the push
+counter, incremented by exactly 1 every time) -- the transport isn't
+dropping frames at this rate. Pre-MA noise (raw std ~0.008mm) is visibly
+higher than the post-MA figure from the earlier polled measurement
+(~0.0022mm) as expected from a 4-sample boxcar's ~2x noise reduction.
+
+`PythonTestCode/apiv2.py` got `TOPIC_RAW_DISPLACEMENT` + `decode_topic_raw_displacement()`.
+
+## Per-batch quality flag and triggered precision measurement (2026-09-26, fw 0.10.43)
+
+Two related, user-requested features, both directly built on this session's noise
+investigation and the raw streaming capability that made it possible to verify them.
+
+**Quality flag.** User asked whether the discrete "jumps" found in the noise
+investigation correlate with the residual (Im(x)) enough to distinguish good readings
+from bad ones. Checked directly against the two already-collected 10-minute streaming
+datasets (no new capture needed): residual steps run **~4-4.6x bigger** at the exact
+same batches where delta_mm jumps, consistently across the noisy channel, the quiet
+channel, both before and after the sensor swap. Implemented as
+`svc_displacement_get_quality1/2_ok()` (`Services/svc_displacement.c`): a per-channel
+EWMA baseline of `|residual step|` (`DISPLACEMENT_QUALITY_EWMA_SAMPLES = 32` batches,
+~1.6s), updated only on already-good batches (so a sustained noisy patch can't inflate
+its own bar), flagging a batch bad when its residual step exceeds
+`DISPLACEMENT_QUALITY_BAD_MULTIPLE = 3` times that baseline -- real margin below the
+observed ~4x ratio. Surfaced on Topic groups `0x03` (extended 16 -> 18 bytes:
+`quality1_ok`, `quality2_ok`).
+
+**Triggered precision measurement.** User's actual use case: not the continuous live
+readout, but "trigger via the API, device takes the time it needs, reports one reliable
+value," suggesting averaging 64 known-good divisions, "ideally" completing in ~2s.
+Pointed out the tension in that framing directly: at the current ~20.3 Hz batch rate, 64
+samples takes **~3.15s minimum even with zero discards** -- already past "~2s" before
+any bad-batch filtering. Resolved as bounded best-effort:
+`DISPLACEMENT_PRECISION_TARGET_SAMPLES = 64` (a real sqrt(64)=8x SNR improvement) with a
+hard `DISPLACEMENT_PRECISION_TIMEOUT_MS = 4000` ceiling, so a triggered measurement can
+never block indefinitely -- the result always reports how many quality-good batches were
+actually averaged per sensor, so a caller knows the achieved confidence rather than a
+silent shortfall.
+
+New API: Commands `0x07` (`API2_RES_CMD_PRECISION_MEASURE`, 1-byte payload: 0=start,
+1=cancel) arms/cancels a run; Raw data `0x04` (`API2_RES_RAW_PRECISION_STATUS`, 20 bytes:
+phase, target, per-sensor counts, elapsed_ms, timed_out, the two averaged results) polls
+progress and reads the result once done. Unlike zero-cal, there's no EEPROM write and
+therefore no "consume" step -- the result is a plain re-readable GET once `DONE`.
+Mutually exclusive with an in-progress zero-cal (both are one-shot consumers of the same
+batch stream); `svc_displacement_stop()`/a fresh `start()` cancel an in-progress run, same
+reasoning as zero-cal's own cancel-on-stop.
+
+**Bench-verified, fw 0.10.43, board 2:** a real triggered run took **4.73s wall-clock**
+(not the ~3.15s "clean-channel" estimate) and finished via the timeout path (60/64 and
+58/64 samples, `timed_out=true`) rather than reaching the full target. Both channels'
+counts climbed in near-lockstep (2,14,23,30,36,42,51,58,60 vs 2,14,23,29,35,40,49,56,58)
+-- similarly low discard rates on both, not a quality-flag problem. The slower-than-
+predicted throughput and the `elapsed_ms=4390` (390ms past the nominal 4000ms timeout)
+both point at the still-open [[wp10-redraw-cost-bug]]: the LIVE screen's periodic ~190ms
+scheduler stall (every `LIVE_DISPLACEMENT_REFRESH_MS`) eats into batch-processing time
+and delays the timeout check itself when one lands nearby -- another concrete reason
+that bug is worth fixing eventually, not just a display cosmetic issue. The final
+averaged result (2.7545mm / 2.9891mm) matched the live post-MA readings taken just
+before triggering (2.7530mm / 2.9932mm) closely, a good sanity check that the averaging
+itself is correct. Cancel verified separately: mid-run cancel returns cleanly to
+`IDLE`/`count=0`.
+
+## Current status (fw 0.10.43)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified. Displacement now auto-starts at boot (see above) instead of requiring
@@ -422,6 +645,10 @@ used and bench-verified -- confirmed no regression there after adding the UI cod
   real multi-point calibration against a certified reference. Residuals near 0 as expected
   for a working calibration. Board 2 has both S1 and S2 physically connected (board 1 only
   has S1).
+- S1/S2 ADC PGA now 16 (was 1), with the matching 16x software `gain` compensation
+  (see above) -- a real ~16x resolution improvement, bench-confirmed exact. Clip and
+  amplitude-fault detection added alongside it; both bench-verified (a real transient
+  clip caught once, zero false-positive amplitude faults).
 - Bulk raw-ADC capture and bulk phasor-log capture both bench-verified, including their
   mutual exclusivity with the real-time demod and with each other.
 - Timing margin hardened (`DISPLACEMENT_BATCH_CYCLES`/`_RING_DEPTH`/
@@ -436,6 +663,11 @@ used and bench-verified -- confirmed no regression there after adding the UI cod
 - Deferred, not blocking: the high-rate per-cycle stream (nothing drains
   `svc_displacement_pop()` yet); a proper bench calibration of `gain`/`d0`/`zero_offset`
   against a certified reference (the ~7000x `d0` bump above is a coarse per-board sanity
-  check, not that calibration); the LIVE-screen readout's own residual, not-fully-
-  root-caused rendering cost noted earlier; a real physical-flip zero-cal test; visual/
+  check, not that calibration); a real physical-flip zero-cal test; visual/
   hands-on confirmation of the new SETTINGS menu entry.
+- **Open bug, not fixed by this session:** the LIVE screen's redraw cost drops a real
+  ~500-cycle burst every `LIVE_DISPLACEMENT_REFRESH_MS` period, present even at the
+  original 2000 ms/32-cycle settings -- see the section above and [[wp10-redraw-cost-bug]].
+  `DISPLACEMENT_BATCH_CYCLES` (now 128) + a 4-sample moving average are in, giving a real
+  ~12 dB SNR improvement independent of this bug, but the refresh rate itself is
+  deliberately still at 2000 ms pending that bug's fix.

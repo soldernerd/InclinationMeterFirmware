@@ -5,10 +5,19 @@
 #include <stdbool.h>
 #include "drv_common.h"
 
+/* Full-scale 24-bit signed ADC code (datasheet "ADC Conversion Data",
+ * 1 LSB = 2.4 V / Gain / 2^24 -- this is the raw-code ceiling that LSB
+ * formula is relative to, independent of Gain since Gain only changes
+ * what analog voltage maps to it, never the digital code range itself).
+ * Used by Services/svc_displacement.c for its clip/theoretical-max-
+ * amplitude checks. */
+#define ADS131M04_CODE_MAX  8388607L   /* 2^23 - 1 */
+
 /* Configures the ADS131M04 for continuous 4-channel simultaneous
  * sampling at a fixed ~20833.33 Hz (see Config/config.h's
- * ADS131M04_OSR_FIELD), PGA gain = 1 on all channels, and starts its
- * MCLK feed. Does NOT start the acquisition trigger — call
+ * ADS131M04_OSR_FIELD) and starts its MCLK feed. PGA gain is per-channel
+ * (drv_ads131m04.c's GAIN1_REG_VALUE — REV B: S1/S2 at 16, A/B at 1, see
+ * that constant's comment). Does NOT start the acquisition trigger — call
  * drv_ads131m04_start() for that once a consumer is ready. Resets the
  * per-sample callback to none; call drv_ads131m04_set_on_sample() AFTER
  * this (and before drv_ads131m04_start()) so samples aren't silently
@@ -34,7 +43,8 @@ bool      drv_ads131m04_is_running(void);
  * (docs/adc_acquisition_redesign.md). Still keep the callback short — no
  * blocking calls. Values are raw two's-
  * complement 24-bit ADC codes, sign-extended to int32_t (datasheet "ADC
- * Conversion Data" — 1 LSB = 2.4 V / Gain / 2^24, Gain = 1). Channel-to-
+ * Conversion Data" — 1 LSB = 2.4 V / Gain / 2^24, Gain is per-channel,
+ * see GAIN1_REG_VALUE in drv_ads131m04.c). Channel-to-
  * voltage and further analysis belong above this driver (CLAUDE.md 8.1) —
  * see Services/svc_displacement.c. */
 typedef void (*Ads131m04SampleCb)(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3);

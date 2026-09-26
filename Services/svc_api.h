@@ -207,6 +207,25 @@ typedef enum {
  * this physical instrument: reads/writes only this device's own
  * g_device_settings and EEPROM, never anything shared across units. */
 #define API2_RES_CMD_ZERO_CAL         0x06U
+/* 0x07 Triggered precision measurement (2026-09-26) -- the "user
+ * triggers it, device takes the time it needs, reports one reliable
+ * value" mode, as opposed to the continuous live/streaming readout
+ * (Topic groups 0x3). 1-byte payload:
+ *   0x00 start  -- begin averaging quality-good batches per sensor
+ *        (Config/config.h's DISPLACEMENT_QUALITY_BAD_MULTIPLE) up to
+ *        DISPLACEMENT_PRECISION_TARGET_SAMPLES each, stopping once BOTH
+ *        sensors reach the target or DISPLACEMENT_PRECISION_TIMEOUT_MS
+ *        elapses (~3.2 s typical/clean, 4 s worst case -- see that
+ *        constant's comment for the full ~2s-vs-64-samples tradeoff).
+ *        Restarts a fresh run if one was already in progress. Requires
+ *        the demod already running (Commands 0x01) and no zero-cal (0x06)
+ *        in progress -- BUSY_RESOURCE otherwise.
+ *   0x01 cancel -- abort an in-progress run, no-op if already idle/done.
+ * EXECUTE acks immediately; poll progress/result via Raw data (0x7)
+ * resource 0x04. Unlike zero-cal, the result never touches EEPROM/
+ * settings -- it's a pure read-back, re-readable any number of times
+ * once done, no separate "consume" step. */
+#define API2_RES_CMD_PRECISION_MEASURE 0x07U
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
@@ -220,6 +239,8 @@ typedef enum {
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_ZERO_CAL)
 #define API2_OP_CMD_REBOOT_DFU \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_REBOOT_DFU)
+#define API2_OP_CMD_PRECISION_MEASURE \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_PRECISION_MEASURE)
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
  * Only what REV B actually reads today. All are subscribable. */
@@ -237,17 +258,21 @@ typedef enum {
 /* LM35 external temperature (WP11), TEMP_SENSE_EXT / PB11. */
 #define API2_RES_MEAS_EXT_TEMP       0x07U   /* int16 centi-degC */
 #define API2_RES_MEAS_EXT_TEMP_OK    0x08U   /* uint8 0/1 — in-range reading present */
-/* Displacement (WP10), Services/svc_displacement.c. delta_mm/residual
- * are the latest completed batch's values (config.h's
- * DISPLACEMENT_BATCH_CYCLES consecutive carrier cycles, coherently
- * summed before the demod math -- ~81 updates/s at the default batch
- * size (2026-09-25 margin-hardening bumped this from 8 to 32 cycles/batch,
- * see config.h), float32 LE, IEEE-754
- * — the first floats on this wire; MEAS_VALUE_MAX_LEN is 4 bytes, an
- * exact fit). Both only meaningful while disp_ok is true — GET/SUBSCRIBE
- * that first if freshness matters, same pattern as bme280_ok above.
- * residual is Im(x) — should sit near 0 if the Calibrations (0x2) page
- * below holds up; a consistently nonzero residual usually means a
+/* Displacement (WP10), Services/svc_displacement.c. delta_mm is the
+ * POST-moving-average value (config.h's DISPLACEMENT_MA_SAMPLES, added
+ * 2026-09-26 -- a boxcar smoothing stage over the last few completed
+ * batches, applied on top of the coherent per-batch sum config.h's
+ * DISPLACEMENT_BATCH_CYCLES already does; ~20.3 raw batches/s at the
+ * default batch size, but the smoothed value here updates no faster than
+ * that regardless). Want the raw, pre-MA per-batch value instead (e.g.
+ * for granular noise analysis)? Subscribe to Topic groups (0x5)
+ * API2_RES_TOPIC_RAW_DISPLACEMENT below instead of polling this.
+ * float32 LE, IEEE-754 — the first floats on this wire; MEAS_VALUE_MAX_LEN
+ * is 4 bytes, an exact fit. Both only meaningful while disp_ok is true —
+ * GET/SUBSCRIBE that first if freshness matters, same pattern as
+ * bme280_ok above. residual is Im(x) — never had the MA applied (it
+ * already averages near 0) — should sit near 0 if the Calibrations (0x2)
+ * page below holds up; a consistently nonzero residual usually means a
  * calibration constant is off, not a faulty sensor. */
 #define API2_RES_MEAS_DISP1_DELTA_MM 0x09U   /* float32 mm, Sensor 1 (CH3) */
 #define API2_RES_MEAS_DISP1_RESIDUAL 0x0AU   /* float32, Im(x1) diagnostic */
@@ -302,10 +327,35 @@ typedef enum {
  *   float iA, qA     (Exciter A, CH2)
  *   float iS1, qS1   (Sensor 1, CH3)
  *   float iS2, qS2   (Sensor 2, CH0)
+ *
+ * 0x03 Raw displacement -- PRE-moving-average per-batch delta/residual
+ * (18 B, added 2026-09-26 at the user's request for granular analysis of
+ * the demod's raw output, before config.h's DISPLACEMENT_MA_SAMPLES
+ * boxcar smoothing that Measurements 0x09/0x0B apply). Same ~20.3
+ * updates/s source rate as the phasors topic above (both come from
+ * process_one_batch(), config.h's DISPLACEMENT_BATCH_CYCLES); subscribe
+ * at the API2_MEASUREMENT_MIN_INTERVAL_MS floor (50 ms) to track it
+ * essentially 1:1 (batch period ~49.2 ms). Valid only while Measurements
+ * 0x0D (disp_ok) is true:
+ *   float delta1_mm_raw   (Sensor 1, pre-MA)
+ *   float residual1       (Im(x1) -- identical to Measurements 0x0A,
+ *                           never had MA applied to begin with)
+ *   float delta2_mm_raw   (Sensor 2, pre-MA)
+ *   float residual2       (identical to Measurements 0x0C)
+ *   u8    quality1_ok      (svc_displacement_get_quality1_ok(), added
+ *                            2026-09-26 -- bench-validated: this batch's
+ *                            residual moved anomalously vs. its own
+ *                            recent baseline, correlated with delta1
+ *                            having one of the discrete "jumps" the
+ *                            2026-09-26 noise investigation found. 0 =
+ *                            treat this batch's delta1_mm_raw with
+ *                            suspicion, not a hard guarantee of error)
+ *   u8    quality2_ok      (same, for Sensor 2)
  */
-#define API2_RES_TOPIC_ENV      0x00U
-#define API2_RES_TOPIC_STATUS   0x01U
-#define API2_RES_TOPIC_PHASORS  0x02U
+#define API2_RES_TOPIC_ENV              0x00U
+#define API2_RES_TOPIC_STATUS           0x01U
+#define API2_RES_TOPIC_PHASORS          0x02U
+#define API2_RES_TOPIC_RAW_DISPLACEMENT 0x03U
 #define API2_TOPIC_SLOTS        4U          /* direct-indexed by resource id */
 
 /* ---------------- Calibrations (0x2: GET, SET) ----------------
@@ -407,7 +457,7 @@ typedef enum {
 /* 0x02 = WP10 displacement demod diagnostics (split out from 0x00 when
  * bulk-capture's original last_capture fields were restored there
  * 2026-09-25 -- see the "Bulk transfers" comment below). GET, no request
- * payload. Response (9 B, LE):
+ * payload. Response (13 B, LE):
  *   u16 disp_input_drop_count    (svc_displacement_get_input_drop_count())
  *   u16 disp_output_drop_count   (svc_displacement_get_output_drop_count())
  *   u16 disp_degenerate_count    (svc_displacement_get_degenerate_count())
@@ -416,7 +466,15 @@ typedef enum {
  *                                  entries stored so far in the current/most
  *                                  recent Bulk 0x8/0x01 capture, 0..
  *                                  DISPLACEMENT_PHASOR_LOG_DEPTH; lets a host
- *                                  poll progress instead of guessing) */
+ *                                  poll progress instead of guessing)
+ *   u16 clip_count                (svc_displacement_get_clip_count() -- a raw
+ *                                  ADC code rode near a rail; added 2026-09-26
+ *                                  alongside the S1/S2 PGA=16 bump)
+ *   u16 amplitude_fault_count     (svc_displacement_get_amplitude_fault_count() --
+ *                                  a batch's phasor exceeded what a full-scale,
+ *                                  undistorted signal could produce; NOT a
+ *                                  clipping indicator -- see
+ *                                  Services/svc_displacement.h's getter comment) */
 #define API2_RES_RAW_DISPLACEMENT_DIAG  0x02U
 /* 0x03 = zero-calibration progress (Commands 0x06, see its comment for
  * the full procedure). GET, no request payload. Response (5 B, LE):
@@ -431,6 +489,24 @@ typedef enum {
  *   u16 target    (DISPLACEMENT_ZERO_CAL_SAMPLES, so a host doesn't need
  *                   to hardcode it) */
 #define API2_RES_RAW_ZERO_CAL_STATUS    0x03U
+/* 0x04 = triggered precision-measurement progress/result (Commands 0x07,
+ * see its comment for the full procedure). GET, no request payload.
+ * Response (20 B, LE):
+ *   u8    phase       (DisplacementPrecisionPhase: 0 idle, 1 running, 2 done)
+ *   u16   target       (DISPLACEMENT_PRECISION_TARGET_SAMPLES, so a host
+ *                        doesn't need to hardcode it)
+ *   u16   count1       (quality-good batches averaged so far for Sensor 1,
+ *                        0..target)
+ *   u16   count2       (same, for Sensor 2)
+ *   u32   elapsed_ms   (wall-clock time since the EXECUTE that started
+ *                        this run, 0 while idle)
+ *   u8    timed_out     (1 if DISPLACEMENT_PRECISION_TIMEOUT_MS was hit
+ *                        before both sensors reached target -- only
+ *                        meaningful once phase == done)
+ *   float delta1_mm    (mean of the count1 batches actually collected --
+ *                        valid once phase == done; 0 before that)
+ *   float delta2_mm    (same, for Sensor 2) */
+#define API2_RES_RAW_PRECISION_STATUS   0x04U
 
 #define API2_OP_RAW_ADC_DIAG \
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_ADC_DIAG)
@@ -440,6 +516,8 @@ typedef enum {
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_DISPLACEMENT_DIAG)
 #define API2_OP_RAW_ZERO_CAL_STATUS \
     API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_ZERO_CAL_STATUS)
+#define API2_OP_RAW_PRECISION_STATUS \
+    API2_OPCODE(API2_VERB_GET, API2_CAT_RAW_DATA, API2_RES_RAW_PRECISION_STATUS)
 
 /* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ----------------
  * 0x00 Raw ADC capture. START_BULK: no request payload (the transfer size

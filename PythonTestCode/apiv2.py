@@ -30,6 +30,7 @@ OP_RAW_PWRTEST         = opcode(GET, CAT_RAW, 0x01)           # -> u32 mask + u8
 OP_CMD_PIN_TEST        = opcode(EXECUTE, CAT_COMMANDS, 0x04)  # 1B: [5:0]=SCK,MOSI,CS,DISP_ON,VCOM,BUZZER  bit6=allow DISP_ON  bit7=reboot
 OP_CMD_ZERO_CAL        = opcode(EXECUTE, CAT_COMMANDS, 0x06)  # 1B: 0=cancel 1=step1 2=step2 (180-degree reversal test)
 OP_CMD_REBOOT_DFU      = opcode(EXECUTE, CAT_COMMANDS, 0x05)  # no payload — reset into the ROM bootloader (one-shot; see HAL_App/hal_dfu.h)
+OP_CMD_PRECISION_MEASURE = opcode(EXECUTE, CAT_COMMANDS, 0x07)  # 1B: 0=start 1=cancel (2026-09-26)
 
 # Zero-cal status (Raw data 0x7/0x03). GET -> u8 phase, u16 progress, u16 target.
 OP_RAW_ZERO_CAL_STATUS = opcode(GET, CAT_RAW, 0x03)
@@ -43,6 +44,37 @@ def decode_zero_cal_status(d: bytes):
     phase, progress, target = struct.unpack("<BHH", d[:5])
     return dict(phase=phase, phase_name=ZERO_CAL_PHASE_NAMES.get(phase, f"?{phase}"),
                 progress=progress, target=target)
+
+# Precision-measurement status (Raw data 0x7/0x04, 2026-09-26). GET ->
+# u8 phase, u16 target, u16 count1, u16 count2, u32 elapsed_ms, u8 timed_out,
+# float delta1_mm, float delta2_mm. See svc_api.h's API2_RES_RAW_PRECISION_STATUS.
+OP_RAW_PRECISION_STATUS = opcode(GET, CAT_RAW, 0x04)
+PRECISION_PHASE_NAMES = {0: "IDLE", 1: "RUNNING", 2: "DONE"}
+
+
+def decode_precision_status(d: bytes):
+    if len(d) < 20:
+        return None
+    phase, target, count1, count2, elapsed_ms, timed_out, d1, d2 = struct.unpack("<BHHHIBff", d[:20])
+    return dict(phase=phase, phase_name=PRECISION_PHASE_NAMES.get(phase, f"?{phase}"),
+                target=target, count1=count1, count2=count2, elapsed_ms=elapsed_ms,
+                timed_out=bool(timed_out), delta1_mm=d1, delta2_mm=d2)
+
+# Displacement diagnostics (Raw data 0x7/0x02, OP_RAW_DISPLACEMENT_DIAG
+# below). See svc_api.h's API2_RES_RAW_DISPLACEMENT_DIAG comment.
+# clip_count/amplitude_fault_count added 2026-09-26 alongside the S1/S2
+# PGA=16 bump -- they are NOT the same thing (amplitude_fault is a
+# data-integrity/gain-mismatch assertion, not a second clipping detector --
+# see Services/svc_displacement.h).
+def decode_displacement_diag(d: bytes):
+    if len(d) < 13:
+        return None
+    input_drop, output_drop, degenerate, disp_ok, phasor_log_progress, \
+        clip_count, amplitude_fault_count = struct.unpack("<HHHBHHH", d[:13])
+    return dict(input_drop=input_drop, output_drop=output_drop,
+                degenerate=degenerate, disp_ok=bool(disp_ok),
+                phasor_log_progress=phasor_log_progress,
+                clip_count=clip_count, amplitude_fault_count=amplitude_fault_count)
 
 # svc_powertest.h bit map — set bit = subsystem ON
 PWR_5V_RAIL   = 1 << 0
@@ -110,6 +142,7 @@ DBG_LOG_STREAM = 0x00
 TOPIC_ENV     = 0x00   # BME280 + onboard + external temp
 TOPIC_STATUS  = 0x01   # battery / connections / charging / rails / RTC
 TOPIC_PHASORS = 0x02   # WP10 displacement demod's raw batch phasors
+TOPIC_RAW_DISPLACEMENT = 0x03   # pre-moving-average delta/residual, ~20.3 Hz (2026-09-26)
 
 
 def build_interval(ms: int) -> bytes:
@@ -147,6 +180,19 @@ def decode_topic_phasors(d: bytes):
         return None
     iB, qB, iA, qA, iS1, qS1, iS2, qS2 = struct.unpack("<8f", d[:32])
     return dict(iB=iB, qB=qB, iA=iA, qA=qA, iS1=iS1, qS1=qS1, iS2=iS2, qS2=qS2)
+
+
+def decode_topic_raw_displacement(d: bytes):
+    """Topic groups 0x03: pre-moving-average delta_mm/residual, one
+    DISPLACEMENT_BATCH_CYCLES batch, ~20.3 Hz (2026-09-26). Valid only
+    while MEAS_DISP_OK is true. quality1/2_ok added 2026-09-26 -- see
+    svc_api.h's doc comment (0 = this batch's residual moved anomalously,
+    treat delta_mm_raw with suspicion)."""
+    if len(d) < 18:
+        return None
+    d1, r1, d2, r2, q1, q2 = struct.unpack("<4fBB", d[:18])
+    return dict(delta1_mm_raw=d1, residual1=r1, delta2_mm_raw=d2, residual2=r2,
+                quality1_ok=bool(q1), quality2_ok=bool(q2))
 
 
 def decode_phasor_log_entry(d: bytes):

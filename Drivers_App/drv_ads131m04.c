@@ -41,11 +41,34 @@
  * 0.3-8.4 MHz). Reset default is 0F0Eh; this changes only the OSR field. */
 #define CLOCK_REG_VALUE  (uint16_t)(0x0F00U | (ADS131M04_OSR_FIELD << 2) | 0x2U)
 
-/* GAIN1 register (datasheet Table 8-18): PGAGAIN0..3[2:0] = 000b (gain
- * = 1) for all four channels -- this is already the POR/reset default
- * (0000h), written explicitly anyway for clarity and to not silently
- * depend on the reset value never changing. */
-#define GAIN1_REG_VALUE  0x0000U
+/* GAIN1 register (datasheet Table 8-18): PGAGAIN0..3[2:0], one 3-bit
+ * field per channel (000=1, 001=2, 010=4, 011=8, 100=16, ...), channels
+ * packed as [PGAGAIN3 PGAGAIN2 PGAGAIN1 PGAGAIN0] at bits [14:12] [10:8]
+ * [6:4] [2:0]. REV B channel mapping (svc_displacement.c's top comment):
+ * ch0=S2, ch1=B, ch2=A, ch3=S1.
+ *
+ * BUMPED 2026-09-26, at the user's request: S1/S2 (ch3, ch0) to gain=16
+ * (field value 100b=4) -- PGAGAIN3=4, PGAGAIN0=4 -- while A/B (ch2, ch1)
+ * stay at gain=1 (already ~52% of the 2.4V/gain=1 full scale; any PGA
+ * gain there would clip almost immediately). A fresh bulk capture the
+ * same day measured S1/S2 at only ~55-60mV peak (+ ~7mV DC offset) at
+ * gain=1 -- ~2.5% of the 2.4V full scale -- so gain=16 (FSR 150mV) uses
+ * ~43% of the new, smaller full scale: a real 16x resolution
+ * improvement with still-comfortable margin. gain=32 was considered and
+ * rejected: at the same measured signal it would already use ~87% of a
+ * 75mV full scale, too tight given that measurement was taken at
+ * whatever tilt the bench happened to be at, not a certified ±1mm/m
+ * reference. See docs/wp10_displacement.md's "PGA gain" section.
+ *
+ * IMPORTANT: this is an INDEPENDENT gain stage from the software
+ * `disp_s1/s2_gain_milli` calibration constant in
+ * Config/config.h/Services/svc_displacement.c (that one models an
+ * external analog pre-amp ahead of this ADC) -- bumping ADC PGA gain
+ * without also scaling that software constant by the same factor breaks
+ * the x=(S/k-B)/(A-B) ratio math, since A/B are read back unscaled.
+ * DEFAULT_DISP_S1/S2_GAIN_MILLI were bumped 16x alongside this change --
+ * see Config/config.h. */
+#define GAIN1_REG_VALUE  0x4004U
 
 /* MODE register (datasheet Table 8-16): same as the 0510h reset default
  * except RESET (bit 10) cleared to 0 -- our own SYNC_RESET pulse below

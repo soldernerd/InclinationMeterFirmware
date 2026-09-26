@@ -144,7 +144,7 @@
                                                          rest of the REV A sensor
                                                          stack; first REV B use of
                                                          this freed page. */
-#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0003  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0004  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
                                                          S2_D0_UM bumped 1000x (sensitivity
                                                          fix, see that comment) -- learned
                                                          from the battery-scale bug earlier
@@ -162,7 +162,13 @@
                                                          default) -- same propagation
                                                          reasoning, bump every time the
                                                          default changes, not just the
-                                                         first time. */
+                                                         first time.
+                                                         0x0004 (same day): DEFAULT_DISP_S1/
+                                                         S2_GAIN_MILLI bumped 16x (10000 ->
+                                                         160000) to compensate for the
+                                                         ADS131M04's own PGA going to 16 on
+                                                         S1/S2 (Drivers_App/drv_ads131m04.c) --
+                                                         same propagation reasoning again. */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -359,9 +365,61 @@
  * DISPLACEMENT_RING_DEPTH above keeps recovery-from-backlog just as fast
  * proportionally. Needs the same re-verification the original fix got
  * (a long soak watching input_drop_count) before being trusted as
- * "enough" margin, not just "more" margin. */
-#define DISPLACEMENT_BATCH_CYCLES         32U
+ * "enough" margin, not just "more" margin.
+ *
+ * RE-VERIFIED 2026-09-26: NOT enough on its own. A fine-grained
+ * (200 ms) sampler on input_drop_count (rather than the coarse
+ * before/after snapshots used previously) found board 2 still drops a
+ * real, regular ~500-cycle burst every LIVE_DISPLACEMENT_REFRESH_MS
+ * period (App/app_display.c) -- present at BOTH 32 and 128 cycles/batch
+ * (see that constant's bump comment below), so the LIVE screen's redraw
+ * cost, not the division rate this constant controls, is what's actually
+ * eating the margin at rest. This constant's own fix (cutting division
+ * work) is real and unregressed; it just isn't the dominant term here.
+ * See App/app_display.c's LIVE_DISPLACEMENT_REFRESH_MS comment for the
+ * full writeup -- the redraw-cost bug itself is still open. */
+/* BUMPED 32 -> 128 2026-09-26, at the user's request, after the noise
+ * investigation (bulk-capture spectral analysis, see docs/wp10_displacement.md)
+ * found the sensor channels' noise floor -- not harmonics, not digital
+ * coupling -- to be the dominant limit on measurement quality. Same lever
+ * as the earlier margin-hardening above, pushed further for two stacked
+ * benefits instead of just headroom:
+ *  1. Cuts the division-heavy per-batch work another 4x (~20.3 batches/s
+ *     now, 2604.167/128 -- still the userspace-visible getters, nothing
+ *     needs faster than that), freeing CPU margin -- though bench-testing
+ *     the same day found this specific margin isn't what was gating
+ *     LIVE_DISPLACEMENT_REFRESH_MS (App/app_display.c); see the
+ *     "RE-VERIFIED 2026-09-26" paragraph above and that constant's own
+ *     comment for the actual (still open) bottleneck.
+ *  2. A longer coherent (pre-division) integration window is a real SNR
+ *     gain on its own: sqrt(128/32) = 2x (~6 dB) over the previous
+ *     setting, stacking with the post-division moving average below
+ *     (DISPLACEMENT_MA_SAMPLES) for roughly sqrt(4)*sqrt(4) = 4x (~12 dB)
+ *     total over the pre-2026-09-26 setup.
+ * DISPLACEMENT_ZERO_CAL_SAMPLES below was rescaled 128->32 alongside this
+ * so its total raw-cycle integration depth (samples * batch cycles) and
+ * wall-clock duration per step are unchanged -- see its comment. */
+#define DISPLACEMENT_BATCH_CYCLES         128U
 #define DISPLACEMENT_MAX_CYCLES_PER_TICK  64U
+
+/* --- Post-division moving average (2026-09-26) --- a second, independent
+ * smoothing stage on top of DISPLACEMENT_BATCH_CYCLES' pre-division
+ * coherent averaging, applied in Services/svc_displacement.c's
+ * process_one_batch() to the already-divided delta_mm before it's exposed
+ * via svc_displacement_get_delta1/2_mm() (so it's transparent to every
+ * consumer -- the LIVE screen, the API Measurements resources, and any
+ * future consumer alike). A plain boxcar over the last N batches: cheap
+ * (one add/subtract per batch, no division-heavy complex math -- doesn't
+ * touch the CPU-margin problem DISPLACEMENT_BATCH_CYCLES solves), buys a
+ * further sqrt(N) SNR improvement at the cost of roughly
+ * N/(2*batch_rate) added lag. At the default 4 and the ~20.3 Hz batch
+ * rate above, that's sqrt(4)=2x (~6 dB) for about 100 ms of lag --
+ * imperceptible for a mechanical displacement reading. zero-cal
+ * deliberately bypasses this (svc_displacement.c's zero_cal_accumulate()
+ * is fed the pre-MA raw batch delta) -- it already does its own much
+ * longer, independent averaging over DISPLACEMENT_ZERO_CAL_SAMPLES
+ * batches and doesn't need a second smoothing stage stacked on top. */
+#define DISPLACEMENT_MA_SAMPLES            4U
 
 /* Nominal calibration seeds (DeviceSettings' displacement page, EEPROM-
  * backed past first boot — see system_state.h's comment on those
@@ -399,12 +457,26 @@
  * it's an actual physical measurement, not a component-tolerance
  * estimate). Replace with a proper gain/d0 bench calibration against a
  * real reference when one is done -- see docs/wp10_displacement.md's
- * "Current status" deferred list. */
+ * "Current status" deferred list.
+ *
+ * GAIN_MILLI BUMPED 16x 2026-09-26 (10000 -> 160000), alongside setting
+ * the ADS131M04's own PGA to 16 on the S1/S2 channels only
+ * (Drivers_App/drv_ads131m04.c's GAIN1_REG_VALUE). This `gain` constant
+ * models an analog stage AHEAD of the ADC (external pre-amp); the ADC's
+ * PGA is a SEPARATE, independent gain stage after it. Since A/B stay at
+ * PGA=1 (unscaled) while S1/S2 now read back 16x larger raw codes for
+ * the same physical signal, compute_sensor_delta()'s x=(S/k-B)/(A-B)
+ * (k=atten*gain) needs `gain` scaled by that same 16x to cancel the ADC's
+ * own amplification back out -- otherwise x (and therefore delta_mm)
+ * would silently read 16x too small. This is NOT a re-calibration of the
+ * real analog gain (still ~0.13 per the bulk-capture signal-quality
+ * pass referenced above) -- it's compensating for a hardware change,
+ * same shape as D0_UM's bumps above but for a different reason. */
 #define DEFAULT_DISP_ATTEN_MILLI            3000    /* atten = 3.000 */
-#define DEFAULT_DISP_S1_GAIN_MILLI         10000    /* gain  = 10.000 */
+#define DEFAULT_DISP_S1_GAIN_MILLI        160000    /* gain  = 160.000 (10.000 x 16, see comment above) */
 #define DEFAULT_DISP_S1_D0_UM             700000    /* d0    = 700.000 mm (see comment above) */
 #define DEFAULT_DISP_S1_ZERO_OFFSET_UM         0
-#define DEFAULT_DISP_S2_GAIN_MILLI         10000
+#define DEFAULT_DISP_S2_GAIN_MILLI        160000
 #define DEFAULT_DISP_S2_D0_UM             700000
 #define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
 
@@ -425,11 +497,58 @@
  * reads/writes THIS device's own g_device_settings and its own EEPROM --
  * nothing here is shared across physical units.
  *
- * Samples averaged per step. At the default DISPLACEMENT_BATCH_CYCLES
+ * Samples averaged per step. At the original DISPLACEMENT_BATCH_CYCLES
  * (32, ~81 batches/s), 128 samples =~ 1.6 s per step -- enough averaging
  * to ride out ordinary sensor noise (see the bulk-capture signal-quality
- * analysis) without making the user hold the instrument still for long. */
-#define DISPLACEMENT_ZERO_CAL_SAMPLES        128U
+ * analysis) without making the user hold the instrument still for long.
+ *
+ * RESCALED 128 -> 32 2026-09-26 alongside DISPLACEMENT_BATCH_CYCLES'
+ * 32->128 bump: the batch rate dropped 4x (81 -> 20.3 Hz), so this is
+ * divided by the same 4x to keep both the wall-clock duration per step
+ * (~1.6 s, unchanged) AND the total raw-cycle integration depth (samples
+ * * batch cycles = 32*128 = 4096, identical to the old 128*32) exactly
+ * where they were -- not a re-tuning, just following the batch size. */
+#define DISPLACEMENT_ZERO_CAL_SAMPLES        32U
+
+/* --- Per-batch quality flag (2026-09-26) --- bench-validated on real data
+ * (a 10-minute streaming capture, see docs/wp10_displacement.md): a
+ * batch's residual (Im(x), Services/svc_displacement.c's compute_sensor_delta())
+ * steps by ~4-4.6x its typical (non-jump) size at the exact same moment
+ * delta_mm has one of the discrete "jumps" this session's noise
+ * investigation found -- residual quality-gates delta quality. Tracked as
+ * a per-channel EWMA baseline of |residual step|, updated ONLY on batches
+ * already judged good (so a sustained noisy patch can't inflate the
+ * baseline and silently raise its own bar); a batch is flagged bad when
+ * its residual step exceeds DISPLACEMENT_QUALITY_BAD_MULTIPLE times that
+ * baseline. Chosen with real margin below the observed ~4x ratio so
+ * ordinary noise doesn't false-positive. EWMA window in batches, not ms --
+ * ~1.6 s at the current ~20.3 Hz batch rate, long enough to average out
+ * ordinary noise, short enough to track real drift in the baseline noise
+ * level itself (e.g. after a gain/calibration change). */
+#define DISPLACEMENT_QUALITY_BAD_MULTIPLE     3U
+#define DISPLACEMENT_QUALITY_EWMA_SAMPLES     32U
+
+/* --- Triggered precision measurement (2026-09-26) --- the API-triggered
+ * "take the time you need, then report one reliable number" mode
+ * (Services/svc_api.c's Commands API2_RES_CMD_PRECISION_MEASURE), as
+ * opposed to the continuous live/streaming readout. Averages only
+ * quality-good batches (above) per sensor, up to this many, with a hard
+ * time ceiling so a host call can never block indefinitely.
+ *
+ * The two numbers below are in tension at the current ~20.3 Hz batch
+ * rate: 64 samples takes ~3.15 s minimum even with ZERO discards
+ * (64/20.3), already past a strict "~2 s" target before accounting for
+ * any bad batches at all. Resolved as bounded best-effort: target 64
+ * (a real sqrt(64)=8x SNR improvement over one batch) but never wait
+ * past DISPLACEMENT_PRECISION_TIMEOUT_MS -- typical (clean-channel)
+ * completion is ~3.2 s, a bit over the user's "ideally ~2 s" but not
+ * dramatically so, and the timeout guarantees a bounded worst case (the
+ * result reports how many samples were actually averaged, so a caller
+ * always knows the achieved confidence rather than a silent shortfall).
+ * Want a firmer ~2 s ceiling instead? Drop DISPLACEMENT_PRECISION_TARGET_SAMPLES
+ * to ~40 (40/20.3 =~ 1.97 s clean-channel), trading sqrt(40)=6.3x for it. */
+#define DISPLACEMENT_PRECISION_TARGET_SAMPLES 64U
+#define DISPLACEMENT_PRECISION_TIMEOUT_MS     4000U
 
 /* --- Bulk raw-ADC capture (API v2 category 0x8: START_BULK/CANCEL_BULK) ---
  * Restored 2026-09-25 -- an important bench diagnostic tool, mistakenly
