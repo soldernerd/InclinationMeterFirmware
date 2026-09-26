@@ -67,14 +67,18 @@ def decode_precision_status(d: bytes):
 # data-integrity/gain-mismatch assertion, not a second clipping detector --
 # see Services/svc_displacement.h).
 def decode_displacement_diag(d: bytes):
-    if len(d) < 13:
+    if len(d) < 21:
         return None
     input_drop, output_drop, degenerate, disp_ok, phasor_log_progress, \
-        clip_count, amplitude_fault_count = struct.unpack("<HHHBHHH", d[:13])
+        clip_count, amplitude_fault_count, max_update_gap_ms, max_gap_at_uptime_ms, \
+        gap_over_threshold_count = struct.unpack("<HHHBHHHHIH", d[:21])
     return dict(input_drop=input_drop, output_drop=output_drop,
                 degenerate=degenerate, disp_ok=bool(disp_ok),
                 phasor_log_progress=phasor_log_progress,
-                clip_count=clip_count, amplitude_fault_count=amplitude_fault_count)
+                clip_count=clip_count, amplitude_fault_count=amplitude_fault_count,
+                max_update_gap_ms=max_update_gap_ms,
+                max_gap_at_uptime_ms=max_gap_at_uptime_ms,
+                gap_over_threshold_count=gap_over_threshold_count)
 
 # svc_powertest.h bit map — set bit = subsystem ON
 PWR_5V_RAIL   = 1 << 0

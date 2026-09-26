@@ -457,7 +457,7 @@ typedef enum {
 /* 0x02 = WP10 displacement demod diagnostics (split out from 0x00 when
  * bulk-capture's original last_capture fields were restored there
  * 2026-09-25 -- see the "Bulk transfers" comment below). GET, no request
- * payload. Response (13 B, LE):
+ * payload. Response (21 B, LE):
  *   u16 disp_input_drop_count    (svc_displacement_get_input_drop_count())
  *   u16 disp_output_drop_count   (svc_displacement_get_output_drop_count())
  *   u16 disp_degenerate_count    (svc_displacement_get_degenerate_count())
@@ -474,7 +474,22 @@ typedef enum {
  *                                  a batch's phasor exceeded what a full-scale,
  *                                  undistorted signal could produce; NOT a
  *                                  clipping indicator -- see
- *                                  Services/svc_displacement.h's getter comment) */
+ *                                  Services/svc_displacement.h's getter comment)
+ *   u16 max_update_gap_ms         (svc_displacement_get_max_update_gap() --
+ *                                  longest gap between consecutive
+ *                                  svc_displacement_update() calls since
+ *                                  start(); scheduler-latency diagnostic,
+ *                                  added 2026-09-26 to investigate observed
+ *                                  batch-throughput shortfalls)
+ *   u32 max_gap_at_uptime_ms      (hal_systick_get_ms() when that max was seen)
+ *   u16 gap_over_threshold_count  (svc_displacement_get_max_update_gap()'s
+ *                                  3rd output -- count of update() calls
+ *                                  since start() that saw a gap >=
+ *                                  DISPLACEMENT_GAP_WARN_THRESHOLD_MS,
+ *                                  config.h; the frequency companion to
+ *                                  max_update_gap_ms -- a rare huge gap and
+ *                                  frequent small ones can produce the same
+ *                                  input_drop_count) */
 #define API2_RES_RAW_DISPLACEMENT_DIAG  0x02U
 /* 0x03 = zero-calibration progress (Commands 0x06, see its comment for
  * the full procedure). GET, no request payload. Response (5 B, LE):

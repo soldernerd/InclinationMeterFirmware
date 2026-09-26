@@ -65,7 +65,43 @@
  * lowered: every interval tested drops roughly the same ~500 cycles per
  * redraw regardless of period, so a shorter period only means MORE such
  * bursts per second, strictly worse, not better, until the actual
- * per-redraw cost is fixed. See docs/wp10_displacement.md. */
+ * per-redraw cost is fixed. See docs/wp10_displacement.md.
+ *
+ * ROOT-CAUSE PROGRESS 2026-09-26 (later the same day), with real
+ * instrumentation this time -- Services/svc_displacement.c gained
+ * svc_displacement_get_max_update_gap(), the longest gap and a frequency
+ * count of gaps >= DISPLACEMENT_GAP_WARN_THRESHOLD_MS between consecutive
+ * svc_displacement_update() calls (Raw data 0x7/0x02). Findings:
+ *  - Max gap observed at the default 2000 ms was only ~76 ms, not the
+ *    ~190 ms the earlier indirect (drop-count-delta) measurement implied
+ *    -- but ~69 such gaps happened in 15 s (~4.6/s), far more often than
+ *    "once per redraw". Consistent explanation: a redraw is 15 bands /
+ *    DISPLAY_PAGES_PER_TICK=3 = 5 ticks, and each tick's 3-band chunk
+ *    itself costs ~40-76 ms -- 5 such ticks per redraw is what the
+ *    earlier ~190 ms figure was actually made of, not one monolithic
+ *    stall.
+ *  - Ruled out as the (sole) trigger: ordinary battery-ADC noise
+ *    (observed 3754-3758 mV at rest, all rounding to the same displayed
+ *    "3.75V") was retriggering a full redraw roughly once/second via
+ *    snapshot_changed()'s bare `!=` comparison having no deadband --
+ *    fixed (DisplaySnapshot.battery_mv_bucket, quantized to the ~10 mV
+ *    format_volts() actually displays), but bench-verified NOT to be the
+ *    dominant driver (gap frequency unchanged after the fix).
+ *  - Confirmed dominant: rebuilding with this constant at 300000 ms
+ *    (redraws effectively never fire) cut the gap count ~62% (69->26 per
+ *    15 s) and the drop rate ~64% (522->188/s) -- the redraw itself, not
+ *    any particular trigger, really is the majority contributor.
+ *  - Secondary, smaller contributor identified: BLE+LEDs off (on top of
+ *    the disabled redraw) cut the remainder a further ~33% (188->126/s).
+ *  - ~126/s still unattributed -- task_uart/task_api (every tick,
+ *    unconditionally) and BME280's disconnected-retry cost (1 Hz,
+ *    Services/App/app_scheduler.c's task_bme280) are the next suspects,
+ *    not yet individually isolated.
+ * Left at 2000 ms (restored after this bisection) -- the fix is in the
+ * per-band render cost itself (still not found -- prime suspect remains
+ * the LIVE screen's large logisoso24 S1/S2 glyphs), not this interval;
+ * see the RE-INVESTIGATED paragraph above for why a shorter interval
+ * would only make things worse until that's found. */
 #define LIVE_DISPLACEMENT_REFRESH_MS  2000U
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
@@ -82,7 +118,20 @@ static u8g2_t s_u8g2;
  * nothing visible has changed. */
 typedef struct {
     int16_t  temperature_cdeg;
-    uint16_t battery_mv;
+    uint16_t battery_mv_bucket;   /* svc_battery_get_vbat_mv()/10 -- quantized
+                                     to the ~10mV resolution format_volts()
+                                     actually displays (mv/1000 "." (mv%1000)/10),
+                                     not the raw 1mV ADC reading. Found
+                                     2026-09-26 investigating a scheduler-
+                                     throughput shortfall: comparing the raw
+                                     mV let ordinary ADC noise (a few mV,
+                                     observed 3754-3758 at rest) trigger a
+                                     full 15-band redraw roughly once/second
+                                     (task_battery_ms's 1 Hz update rate) for
+                                     a change that never altered a single
+                                     displayed digit -- see
+                                     docs/wp10_displacement.md's scheduler-
+                                     gap investigation. */
     uint8_t  battery_soc_pct;
     bool     battery_charging;
     bool     usb_connected;
@@ -463,7 +512,7 @@ static bool snapshot_changed(void)
 {
     if (!s_have_last) return true;
     return s_last.temperature_cdeg != g_system_state.temperature_cdeg
-        || s_last.battery_mv       != svc_battery_get_vbat_mv()
+        || s_last.battery_mv_bucket != (svc_battery_get_vbat_mv() / 10U)
         || s_last.battery_soc_pct  != g_system_state.battery_soc_pct
         || s_last.battery_charging != g_system_state.battery_charging
         || s_last.usb_connected    != g_system_state.usb_connected
@@ -482,7 +531,7 @@ static bool snapshot_changed(void)
 static void snapshot_capture(void)
 {
     s_last.temperature_cdeg = g_system_state.temperature_cdeg;
-    s_last.battery_mv       = svc_battery_get_vbat_mv();
+    s_last.battery_mv_bucket = svc_battery_get_vbat_mv() / 10U;
     s_last.battery_soc_pct  = g_system_state.battery_soc_pct;
     s_last.battery_charging = g_system_state.battery_charging;
     s_last.usb_connected    = g_system_state.usb_connected;

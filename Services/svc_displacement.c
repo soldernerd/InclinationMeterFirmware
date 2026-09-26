@@ -240,6 +240,30 @@ static float    s_precision_result2_mm = 0.0f;
 static uint32_t s_precision_start_ms  = 0;
 static bool     s_precision_timed_out = false;
 
+/* --- Scheduler-gap diagnostic (2026-09-26) --- added specifically to
+ * investigate why observed batch throughput and input_drop_count run
+ * worse than DISPLACEMENT_BATCH_CYCLES/production-rate math alone
+ * predicts. Tracks the longest gap between consecutive
+ * svc_displacement_update() calls -- since the driver-level acquisition
+ * (drv_ads131m04's own frame_deficit/ring_overflow) has repeatedly
+ * measured perfectly healthy while svc_displacement's OWN input ring
+ * still drops, the drops must come from this task not being re-entered
+ * promptly by the scheduler, not from the ADC/DMA layer -- this
+ * quantifies exactly how large that gap gets and, via
+ * s_max_gap_at_uptime_ms, roughly when, so it can be correlated against
+ * known periodic costs (the LIVE screen's ~2 s redraw cycle, BME280's
+ * ~1 s poll, etc). Saturating like the other counters; reset at
+ * start(). */
+static uint32_t s_last_update_call_ms   = 0;
+static bool     s_last_update_call_set  = false;
+static uint16_t s_max_update_gap_ms     = 0;
+static uint32_t s_max_gap_at_uptime_ms  = 0;
+
+/* Frequency companion to the max above -- see config.h's
+ * DISPLACEMENT_GAP_WARN_THRESHOLD_MS comment. Saturating like the other
+ * counters; reset at start(). */
+static uint16_t s_gap_over_threshold_count = 0;
+
 /* Same reasoning as s_sample_idx above -- assigned in on_sample() to
  * every completed 8-sample cycle *before* the input-ring-full check, so
  * a cycle dropped there (consumer not keeping up) still consumes a seq
@@ -736,6 +760,10 @@ DrvStatus svc_displacement_start(void)
     s_amplitude_fault_count  = 0;
     s_clip_logged            = false;
     s_amplitude_fault_logged = false;
+    s_last_update_call_set   = false;
+    s_max_update_gap_ms      = 0;
+    s_max_gap_at_uptime_ms   = 0;
+    s_gap_over_threshold_count = 0;
     s_disp_ok = false;
     batch_reset();
     ma_reset();
@@ -830,6 +858,24 @@ static void store_phasor_log_entry(const BatchSums *s, uint16_t seq)
 
 void svc_displacement_update(void)
 {
+    /* Scheduler-gap diagnostic -- see s_max_update_gap_ms's comment.
+     * Measured before anything else in this function so the recorded gap
+     * is purely "how long since the scheduler last reached this task",
+     * not inflated by this call's own work. */
+    uint32_t now_ms = hal_systick_get_ms();
+    if (s_last_update_call_set) {
+        uint32_t gap = now_ms - s_last_update_call_ms;
+        if (gap > (uint32_t)s_max_update_gap_ms) {
+            s_max_update_gap_ms    = (gap > 0xFFFFU) ? 0xFFFFU : (uint16_t)gap;
+            s_max_gap_at_uptime_ms = now_ms;
+        }
+        if (gap >= (uint32_t)DISPLACEMENT_GAP_WARN_THRESHOLD_MS) {
+            note_saturating(&s_gap_over_threshold_count);
+        }
+    }
+    s_last_update_call_ms  = now_ms;
+    s_last_update_call_set = true;
+
     /* Drain what's queued since the last call, folding
      * DISPLACEMENT_BATCH_CYCLES raw cycles into one coherent sum before
      * running process_one_batch()'s division-heavy math once per batch
@@ -961,6 +1007,14 @@ uint16_t svc_displacement_get_degenerate_count(void)
 uint16_t svc_displacement_get_clip_count(void)
 {
     return s_clip_count;
+}
+
+void svc_displacement_get_max_update_gap(uint16_t *gap_ms_out, uint32_t *at_uptime_ms_out,
+                                          uint16_t *over_threshold_count_out)
+{
+    if (gap_ms_out)             *gap_ms_out             = s_max_update_gap_ms;
+    if (at_uptime_ms_out)       *at_uptime_ms_out        = s_max_gap_at_uptime_ms;
+    if (over_threshold_count_out) *over_threshold_count_out = s_gap_over_threshold_count;
 }
 
 uint16_t svc_displacement_get_amplitude_fault_count(void)

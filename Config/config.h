@@ -308,6 +308,18 @@
  * comment for why. */
 #define DISPLACEMENT_RING_DEPTH        128U
 
+/* Scheduler-gap diagnostic threshold (2026-09-26, added to investigate an
+ * observed batch-throughput shortfall -- docs/wp10_displacement.md has
+ * the full writeup). svc_displacement_update()'s "how many calls saw a
+ * gap this big since the last one" counter, Services/svc_displacement.c's
+ * s_gap_over_threshold_count. Set just under DISPLACEMENT_RING_DEPTH's
+ * ~49.2 ms buffering margin (128 cycles / ~2.604 kHz) -- "close enough to
+ * start threatening the ring, whether or not it actually overflowed this
+ * specific time." Purely a diagnostic knob, not a behavioral one --
+ * changing it doesn't affect drops themselves, only how the counter
+ * buckets them. */
+#define DISPLACEMENT_GAP_WARN_THRESHOLD_MS  40U
+
 /* ROOT-CAUSED 2026-09-24 with a real debugger session (STM32_Programmer_CLI
  * -halt/-coreReg/-r32 over SWD -- see docs/wp10_displacement.md for the
  * full walkthrough), after the earlier "known open issue" writeup that

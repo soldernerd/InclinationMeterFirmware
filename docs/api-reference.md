@@ -515,7 +515,7 @@ Request payload: none. Response (5 B):
 | 4 | u8 | flags — bit0 3V3 rail on, bit1 5V rail on (read back from the pins) |
 
 ### `GET 0x7/0x02` — Displacement diagnostics  → opcode `0x0702`
-Request payload: none. Response (13 B, LE):
+Request payload: none. Response (21 B, LE):
 
 | off | type | field |
 |---|---|---|
@@ -526,9 +526,15 @@ Request payload: none. Response (13 B, LE):
 | 7 | u16 | phasor_log_progress — entries stored so far in the current/most recent Bulk 0x8/0x01 capture |
 | 9 | u16 | clip_count — a raw ADC code rode near a rail (real clipping) |
 | 11 | u16 | amplitude_fault_count — a batch's phasor exceeded what a full-scale, undistorted signal could produce (a data-integrity/gain-mismatch assertion, **not** a clipping indicator — real clipping can only reduce this value, never increase it) |
+| 13 | u16 | max_update_gap_ms — longest gap seen between consecutive internal scheduler passes of the displacement task since the last start; a scheduler-latency diagnostic, not something to build app logic on |
+| 15 | u32 | max_gap_at_uptime_ms — device uptime (ms) when that max was recorded |
+| 19 | u16 | gap_over_threshold_count — count of scheduler passes since start that came in unusually late (bench/diagnostic use) |
 
-`clip_count`/`amplitude_fault_count` are both saturating (stick at 65535)
-and reset only on a fresh `EXECUTE 0x1/0x01` start.
+`clip_count`/`amplitude_fault_count`/`gap_over_threshold_count` are all
+saturating (stick at 65535) and reset only on a fresh `EXECUTE 0x1/0x01`
+start. The last three fields (`max_update_gap_ms` onward) are bench/
+diagnostic instrumentation for investigating scheduler timing — not
+meant for the mobile app to act on, included here only for completeness.
 
 ### `GET 0x7/0x03` — Zero-calibration status  → opcode `0x0703`
 Request payload: none. Response (5 B, LE):

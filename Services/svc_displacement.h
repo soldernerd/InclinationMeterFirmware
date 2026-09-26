@@ -229,6 +229,28 @@ uint16_t svc_displacement_get_degenerate_count(void);
 uint16_t svc_displacement_get_clip_count(void);
 uint16_t svc_displacement_get_amplitude_fault_count(void);
 
+/* --- Scheduler-gap diagnostic (2026-09-26) --- longest gap observed
+ * between consecutive svc_displacement_update() calls, i.e. how long the
+ * scheduler took to come back around to this task, since the last
+ * start(). Added specifically to investigate why observed batch
+ * throughput runs below what DISPLACEMENT_BATCH_CYCLES/the ~2.6 kHz
+ * production rate alone predicts -- the driver-level acquisition
+ * (drv_ads131m04's frame_deficit/ring_overflow) measures perfectly
+ * healthy even while this module's own input ring drops, which localizes
+ * the cause to scheduler latency, not the ADC/DMA layer; this quantifies
+ * it. gap_ms_out saturates at 65535 (any real gap is expected far below
+ * that). at_uptime_ms_out is hal_systick_get_ms() at the moment the max
+ * was recorded -- lets a host correlate it against a known periodic cost
+ * (e.g. does it land near a multiple of the LIVE screen's
+ * LIVE_DISPLACEMENT_REFRESH_MS?). over_threshold_count_out is the
+ * frequency companion: how many update() calls saw a gap >=
+ * DISPLACEMENT_GAP_WARN_THRESHOLD_MS (config.h) since start() -- a rare
+ * single huge gap and frequent small-ish ones can produce the same
+ * input_drop_count but need completely different fixes, so the max alone
+ * doesn't distinguish them. Any output may be NULL. */
+void svc_displacement_get_max_update_gap(uint16_t *gap_ms_out, uint32_t *at_uptime_ms_out,
+                                          uint16_t *over_threshold_count_out);
+
 /* --- Bulk raw-ADC capture (feeds the API v2 category 0x8 bulk transfer) ---
  * Restored 2026-09-25 -- retiring this alongside the WP8 signal-analysis
  * module it was ported from was a mistake; it's an important bench

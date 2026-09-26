@@ -634,7 +634,63 @@ before triggering (2.7530mm / 2.9932mm) closely, a good sanity check that the av
 itself is correct. Cancel verified separately: mid-run cancel returns cleanly to
 `IDLE`/`count=0`.
 
-## Current status (fw 0.10.43)
+## Scheduler-gap investigation: the redraw-cost bug, quantified (2026-09-26, fw 0.10.45-48)
+
+Follow-up to the precision-measurement timing anomaly (4.73s wall-clock instead of the
+~3.15s clean-channel estimate, and a 390ms timeout overshoot) -- the user asked for the
+underlying timing/slowdown issue to be properly investigated, not just flagged again.
+
+**New instrumentation** (fw 0.10.45-46): `svc_displacement_get_max_update_gap()`
+(`Services/svc_displacement.c`) tracks the longest gap between consecutive
+`svc_displacement_update()` calls since the last start, plus a frequency count of gaps
+`>= DISPLACEMENT_GAP_WARN_THRESHOLD_MS` (40ms, config.h). Rationale: the driver-level
+acquisition (`drv_ads131m04`'s own `frame_deficit`/`ring_overflow`) has repeatedly
+measured perfectly healthy while `svc_displacement`'s own input ring still drops --
+this localizes the cause to scheduler latency, not the ADC/DMA layer, and this
+instrumentation quantifies exactly how bad that latency gets. Surfaced on Raw data
+`0x7/0x02` (extended 13 -> 19 -> 21 bytes across the two additions).
+
+**First surprise:** the max gap at the default 2000ms/32-cycle-vs-128-cycle settings was
+only ~76ms, not the ~190ms the ORIGINAL (2026-09-25/26 earlier) indirect measurement
+(drop-count deltas around a redraw) implied. But ~69 such gaps happened in 15 seconds
+(~4.6/s) -- far more often than "once per redraw" if redraws only fire every 2000ms.
+Resolved: a redraw is 15 bands / `DISPLAY_PAGES_PER_TICK`=3 = 5 ticks, and each tick's
+3-band chunk itself costs ~40-76ms -- 5 such ticks per redraw reproduces the earlier
+~190-380ms figure; it was never one monolithic stall, it's 5 smaller ones.
+
+**Hypothesis 1, tested and NOT the dominant cause:** ordinary battery-ADC noise (observed
+3754-3758mV at rest -- all four values round to the identical displayed "3.75V") was
+retriggering a full redraw via `snapshot_changed()`'s bare `!=` comparison on
+`battery_mv`, no deadband, roughly once/second (`task_battery_ms`'s 1Hz update rate).
+Fixed anyway (real, if smaller, waste): `App/app_display.c`'s `DisplaySnapshot` now
+stores `battery_mv_bucket` (quantized to the ~10mV `format_volts()` actually displays)
+instead of the raw 1mV value. Bench-verified this fix alone did NOT reduce gap
+frequency (86 gaps/15s after the fix vs 69 before, within run-to-run noise) -- ruled out
+as the dominant trigger, though the fix is still correct and kept (redraws for an
+invisible sub-10mV change were always pure waste regardless of their share of the total).
+
+**Hypothesis 2, confirmed dominant:** temporarily rebuilding with
+`LIVE_DISPLACEMENT_REFRESH_MS` at 300000ms (redraws effectively never fire) cut the gap
+count ~62% (69->26 per 15s) and the drop rate ~64% (522->188/s). The redraw itself --
+regardless of exactly what triggers it -- really is the majority contributor, confirming
+(with real instrumentation this time, not indirect inference) what the 2026-09-25/26
+investigations suspected but couldn't fully prove.
+
+**Secondary contributor found:** BLE+LEDs off (via the `powertest` mask, stacked on top
+of the disabled redraw) cut the remainder a further ~33% (188->126/s).
+
+**Still open:** ~126/s of drops remain unattributed even with the redraw disabled and
+BLE/LEDs off. `task_uart`/`task_api` (both run every scheduler tick, unconditionally)
+and BME280's disconnected-retry cost (`task_bme280`, 1Hz, the sensor isn't connected on
+this bench) are the next suspects -- not yet individually isolated. The actual fix for
+the redraw's own per-band cost is also still not found; the LIVE screen's large
+`logisoso24` S1/S2 glyphs remain the prime suspect (unchanged from the earlier
+writeup), but this session didn't get as far as per-glyph profiling.
+`LIVE_DISPLACEMENT_REFRESH_MS` stays at 2000ms (restored after the bisection) -- see
+that constant's own comment for why a shorter interval would make things worse, not
+better, until the per-band cost itself is fixed.
+
+## Current status (fw 0.10.48)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified. Displacement now auto-starts at boot (see above) instead of requiring

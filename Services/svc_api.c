@@ -779,6 +779,9 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
             uint8_t  disp_ok;
             uint16_t phasor_log_progress;
             uint16_t clip_count, amplitude_fault_count;
+            uint16_t max_update_gap_ms;
+            uint32_t max_gap_at_uptime_ms;
+            uint16_t gap_over_threshold_count;
         } p;
         p.input_drop  = svc_displacement_get_input_drop_count();
         p.output_drop = svc_displacement_get_output_drop_count();
@@ -787,6 +790,15 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         p.phasor_log_progress = svc_displacement_phasor_log_progress();
         p.clip_count            = svc_displacement_get_clip_count();
         p.amplitude_fault_count = svc_displacement_get_amplitude_fault_count();
+        /* Local temporaries -- see the zero-cal/precision-status blocks
+         * above for why taking the address of a packed struct's members
+         * directly is a real -Werror hazard on this build. */
+        uint16_t gap_ms, over_count;
+        uint32_t gap_at_ms;
+        svc_displacement_get_max_update_gap(&gap_ms, &gap_at_ms, &over_count);
+        p.max_update_gap_ms         = gap_ms;
+        p.max_gap_at_uptime_ms      = gap_at_ms;
+        p.gap_over_threshold_count  = over_count;
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }
