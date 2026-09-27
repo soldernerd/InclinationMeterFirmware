@@ -690,7 +690,83 @@ writeup), but this session didn't get as far as per-glyph profiling.
 that constant's own comment for why a shorter interval would make things worse, not
 better, until the per-band cost itself is fixed.
 
-## Current status (fw 0.10.48)
+## 2-hour drift + charging comparison, and an "End charging" command (2026-09-27, fw 0.10.49)
+
+User request: a long (1-2h) unattended drift measurement once self-heating stabilizes,
+plus a comparison of noise with USB charging on vs off, plus a challenge to the earlier
+"shared electronics drift" explanation -- the ratiometric math should cancel any shared
+amplitude/reference drift, so what temperature-dependent term could survive that?
+
+**Theoretical point conceded and refined:** the analytical cancellation
+(`x = (S/k-B)/(A-B)`, any common multiplicative factor on A/B/S cancels exactly) is
+correct. What does NOT cancel: `k = atten*gain` is a fixed SOFTWARE constant, not
+measured in real time -- a real, asymmetric drift specific to the S-channel's own gain
+path (external amp, the sensor's internal electronics, or the ADC's per-channel PGA),
+not shared with the A/B path (only a passive attenuator), would show up uncancelled.
+This is consistent with "45-year-old sensor electronics only powered when the sine
+excitation is on."
+
+**Added `EXECUTE 0x1/0x08` "End charging"** (`svc_battery_cancel_force_charge()`) --
+force-charge previously had no way back off except reaching full or physically removing
+USB, a real gap hit while setting up this exact test (a smoke-test force-charge trigger
+left the board charging with no way to stop it short of unplugging the cable).
+
+**2-hour run** (`Topic 0x5/0x03` streamed continuously at ~18 Hz, 129151 samples, ZERO
+sequence gaps over the full 2 hours): 60 min natural (not charging) baseline, then
+`EXECUTE 0x1/0x02` (force charge) for the remaining 60 min, USB already connected
+throughout (battery was at 98% SoC, charged overnight -- a caveat: forced charging on a
+near-full battery draws less current/heat than mid-charge would).
+
+**Noise while charging -- clear, actionable answer:**
+
+| | baseline (not charging) | charging (forced) | change |
+|---|---|---|---|
+| S1 step std | 0.00293mm | 0.00387mm | +32% |
+| S2 step std | 0.00526mm | 0.00729mm | +39% |
+| S1 jumps >0.02mm | 0.028% | 0.269% | ~9.6x |
+| S2 jumps >0.02mm | 0.813% | 2.370% | ~2.9x |
+| quality1/2_ok=0 rate | 2.79% / 3.22% | 3.18% / 4.13% | modestly higher |
+
+Charging measurably and substantially increases noise on both channels, at every
+threshold checked. **Recommendation: avoid taking precision measurements while
+charging** -- a real, simple, actionable finding independent of the drift question below.
+
+**Drift is real, but does NOT reduce to a simple temperature-proportional model** --
+this is where the picture gets more complicated than the earlier 10-minute session
+suggested:
+- Net drift over each 60-min phase: baseline S1 +6.8um / S2 +5.1um; charging S1 -22.6um
+  / S2 -25.1um -- charging shows ~3-4x more total drift, AND in the opposite direction
+  from the baseline phase's trend.
+- Live monitoring during the first ~30 min of charging showed a genuine non-monotonic
+  wobble (down ~6um, up ~6um, up ~3um, down ~5um, down ~7um) while temperature was
+  still gently rising then plateauing -- not a clean single-time-constant settling curve.
+- **Correlation with the onboard temperature sensor FLIPS SIGN between phases**:
+  baseline S1/S2 vs temp r=-0.63/-0.55; charging r=+0.43/+0.42. A real, simple thermal
+  coefficient should keep the same sign regardless of phase -- this rules out the
+  earlier session's clean single linear "14-15um/degC" story as the whole picture; that
+  finding likely captured one particular monotonic segment of a more complex process,
+  not a universal coefficient.
+- **S1 and S2 stay extremely tightly correlated in BOTH phases** (r=0.985 baseline,
+  r=0.999 charging) -- if anything, TIGHTER than the earlier 10-minute session's 0.997.
+  This is itself informative: two independently-aging 45-year-old sensors, each with
+  their own internal electronics drifting for their own reasons, would not be expected
+  to correlate this tightly by coincidence. This tilts AWAY from "each sensor's own old
+  electronics, coincidentally similar" and toward something genuinely SHARED -- either
+  the asymmetric-gain-path mechanism above, or a shared MECHANICAL effect (e.g. a common
+  mounting bracket/plate flexing with temperature, physically tilting both sensor zero
+  points together) that would explain the correlation without violating the
+  amplitude-cancellation argument at all, since it's a real physical effect, not an
+  electrical artifact that should have cancelled.
+
+**Still unresolved:** which of (asymmetric S-channel gain drift) vs (shared mechanical
+mounting flex) vs (something else) is the actual mechanism -- this session couldn't
+distinguish them. A follow-up that would help: watch the raw A/B exciter phasor
+amplitude (Topic 0x5/0x02) during a similar thermal transient -- a shared mechanical
+tilt would show up as a real x/delta change (indistinguishable from tilt, by
+construction), while an asymmetric S-channel gain drift would show up as S's phasor
+magnitude changing without a matching change in the physical setup.
+
+## Current status (fw 0.10.49)
 
 - Channel mapping, calibration store, Commands start/stop, acquisition pipeline: all
   bench-verified. Displacement now auto-starts at boot (see above) instead of requiring
