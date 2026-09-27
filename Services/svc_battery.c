@@ -37,6 +37,30 @@ static bool             s_force_charge    = false;
 static bool         s_shutdown_armed   = false;
 static uint32_t     s_shutdown_start_ms = 0;
 
+/* VBUS_SENSE debounce, falling edge only (2026-09-27) -- user-reported: the
+ * device sometimes enters Standby (auto-poweroff or critical-battery) despite
+ * USB genuinely being connected the whole time. The known ~70mA excess draw
+ * on the 5V rail (memory current-consumption-investigation) is enough that a
+ * marginal cable/port could sag VBUS momentarily under a load transient (the
+ * AFE/display drawing a spike) and have the raw VBUS_SENSE GPIO -- a plain
+ * digital read with zero debounce -- misread "unplugged" for a moment. With
+ * NO grace period, that single bad tick was enough to un-suppress both
+ * auto-poweroff (Services/svc_power.c) and the critical-battery shutdown
+ * timer below, even though USB never actually disconnected.
+ *
+ * Debounced on the WAY AWAY only, not on arrival: a fresh connection should
+ * register immediately (so charging starts promptly, matches
+ * BATTERY_CHARGE_MIN_SAMPLES' own "don't delay charge start" reasoning) --
+ * it's specifically "USB was here and just blinked" that needs forgiveness.
+ * s_usb_connected (used everywhere below, including the shutdown-suppression
+ * checks) is what gets the grace period; the RAW reading below still gates
+ * whether CHARGE_SENSE/STANDBY_SENSE are trusted, since those really are
+ * undriven garbage without real VBUS regardless of how recently it was
+ * present (see read_charger_inputs()'s comment). */
+#define VBUS_DISCONNECT_GRACE_MS  10000U
+static uint32_t s_vbus_absent_since_ms;
+static bool     s_vbus_absent_pending;
+
 /* Below this, a 1S-LiPo-powered device would already be in hardware UVLO —
  * a reading this low is an ADC/VREF fault (e.g. the 3V3/VREF rail drooping
  * as an external bench supply is dragged down), not the real pack voltage.
@@ -123,6 +147,8 @@ void svc_battery_init(void)
     s_shutdown_armed     = false;
     s_critical_streak    = 0;
     s_valid_sample_count = 0;
+    s_vbus_absent_since_ms = 0;
+    s_vbus_absent_pending  = false;
 }
 
 void svc_battery_enter_low_power(void)
@@ -163,14 +189,30 @@ void svc_battery_enter_low_power(void)
 
 static void read_charger_inputs(void)
 {
-    s_usb_connected = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN);   /* active HIGH */
+    bool vbus_raw = hal_gpio_get(VBUS_SENSE_PORT, VBUS_SENSE_PIN);   /* active HIGH */
 
-    if (s_usb_connected) {
+    /* s_usb_connected gets VBUS_DISCONNECT_GRACE_MS of forgiveness on the
+     * way down (see that constant's comment) -- registers a new connection
+     * immediately, but only commits to "gone" after it's stayed away
+     * continuously for the full grace window. */
+    if (vbus_raw) {
+        s_usb_connected       = true;
+        s_vbus_absent_pending = false;
+    } else if (!s_vbus_absent_pending) {
+        s_vbus_absent_pending  = true;
+        s_vbus_absent_since_ms = hal_systick_get_ms();
+    } else if (hal_systick_elapsed_ms(s_vbus_absent_since_ms) >= VBUS_DISCONNECT_GRACE_MS) {
+        s_usb_connected = false;
+    }
+
+    if (vbus_raw) {
         s_charging        = !hal_gpio_get(CHARGE_SENSE_PORT, CHARGE_SENSE_PIN);   /* TP4056 CHRG, active LOW */
         s_charge_complete = !hal_gpio_get(STANDBY_SENSE_PORT, STANDBY_SENSE_PIN); /* TP4056 STANDBY, active LOW */
     } else {
         /* TP4056 is powered from VBUS — without it these outputs are
-         * undriven/meaningless, don't trust whatever they float to. */
+         * undriven/meaningless, don't trust whatever they float to. Uses the
+         * RAW reading, not the debounced s_usb_connected -- these really are
+         * garbage without real VBUS regardless of how recently it was seen. */
         s_charging        = false;
         s_charge_complete = false;
     }

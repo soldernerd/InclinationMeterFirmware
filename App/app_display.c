@@ -171,6 +171,11 @@ typedef struct {
                                   * absolute channel, is the dominant
                                   * measurement strategy. Same "empty means
                                   * don't draw" convention as disp2_line. */
+    char precision_line[40];   /* Triggered precision measurement status
+                                  * (2026-09-27, right-knob press on LIVE --
+                                  * see app_ui.c). Empty means "nothing to
+                                  * show, draw the temp/battery line
+                                  * instead" -- see draw_live_screen(). */
 } DisplaySnapshot;
 
 static DisplaySnapshot s_last = {0};
@@ -183,6 +188,18 @@ static bool            s_have_last = false;
 typedef enum { DISP_IDLE, DISP_RENDER } DisplayPhase;
 static DisplayPhase s_phase     = DISP_IDLE;
 static uint32_t     s_render_ms = 0;
+
+/* Triggered precision measurement (2026-09-27) -- see app_ui.c's LIVE-screen
+ * right-knob-press handler. svc_displacement's own DISP_PRECISION_DONE phase
+ * persists indefinitely (by design -- "the result stays readable until the
+ * next begin()"), so showing it on the LIVE screen needs its OWN bounded
+ * display window here, or a months-old result would silently keep replacing
+ * the temp/battery line forever. Tracks the uptime at which DONE was first
+ * observed; PRECISION_RESULT_DISPLAY_MS after that, snapshot_capture() stops
+ * populating precision_line and the temp/battery line resumes. */
+#define PRECISION_RESULT_DISPLAY_MS  15000U
+static bool     s_precision_was_done = false;
+static uint32_t s_precision_done_at_ms = 0;
 
 /* ---- format helpers ---- */
 
@@ -337,15 +354,23 @@ static void draw_live_screen(void)
         u8g2_DrawUTF8(&s_u8g2, 8, 172, s_last.disp_diff_line);
     }
 
-    char temp_str[16];
-    format_temp(temp_str, sizeof temp_str, g_system_state.temperature_cdeg);
-    char volt_str[16];
-    format_volts(volt_str, sizeof volt_str, svc_battery_get_vbat_mv());
-    char line[48];
-    snprintf(line, sizeof line, "%s C   %u%%   %s",
-             temp_str, (unsigned)g_system_state.battery_soc_pct, volt_str);
+    /* Triggered precision measurement (2026-09-27, right-knob press -- see
+     * app_ui.c) temporarily takes over this line instead of the usual
+     * temp/battery status -- see PRECISION_RESULT_DISPLAY_MS's comment for
+     * how long the result stays up before this line reverts. */
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 204, line);
+    if (s_last.precision_line[0] != '\0') {
+        u8g2_DrawUTF8(&s_u8g2, 8, 204, s_last.precision_line);
+    } else {
+        char temp_str[16];
+        format_temp(temp_str, sizeof temp_str, g_system_state.temperature_cdeg);
+        char volt_str[16];
+        format_volts(volt_str, sizeof volt_str, svc_battery_get_vbat_mv());
+        char line[48];
+        snprintf(line, sizeof line, "%s C   %u%%   %s",
+                 temp_str, (unsigned)g_system_state.battery_soc_pct, volt_str);
+        u8g2_DrawUTF8(&s_u8g2, 8, 204, line);
+    }
 }
 
 /* ---- STATUS screen ---- */
@@ -607,6 +632,40 @@ static void snapshot_capture(void)
         snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "-- not running --");
         s_last.disp2_line[0] = '\0';
         s_last.disp_diff_line[0] = '\0';
+    }
+
+    /* Triggered precision measurement status (2026-09-27) -- see app_ui.c's
+     * LIVE-screen right-knob-press handler and this file's
+     * PRECISION_RESULT_DISPLAY_MS comment. Empty precision_line means
+     * draw_live_screen() falls back to the temp/battery line. */
+    DisplacementPrecisionPhase pphase = svc_displacement_precision_get_phase();
+    if (pphase == DISP_PRECISION_RUNNING) {
+        s_precision_was_done = false;
+        uint16_t c1 = 0, c2 = 0, cdiff = 0, target = 0;
+        svc_displacement_precision_progress(&c1, &c2, &cdiff, &target, NULL);
+        uint16_t done = (c1 < c2) ? c1 : c2;
+        if (cdiff < done) { done = cdiff; }
+        snprintf(s_last.precision_line, sizeof s_last.precision_line,
+                 "Precision %u/%u...", (unsigned)done, (unsigned)target);
+    } else if (pphase == DISP_PRECISION_DONE) {
+        if (!s_precision_was_done) {
+            s_precision_was_done   = true;
+            s_precision_done_at_ms = s_render_ms;
+        }
+        if ((uint32_t)(s_render_ms - s_precision_done_at_ms) < PRECISION_RESULT_DISPLAY_MS) {
+            float ddiff = 0.0f;
+            bool  timed_out = false;
+            (void)svc_displacement_precision_get_result(NULL, NULL, &ddiff, &timed_out);
+            char v[16];
+            format_displacement_mm_4dp(v, sizeof v, ddiff);
+            snprintf(s_last.precision_line, sizeof s_last.precision_line,
+                     "Precision %smm%s", v, timed_out ? " (partial)" : "");
+        } else {
+            s_last.precision_line[0] = '\0';
+        }
+    } else {
+        s_precision_was_done = false;
+        s_last.precision_line[0] = '\0';
     }
 
     s_have_last = true;

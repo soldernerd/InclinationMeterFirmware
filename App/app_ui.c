@@ -323,6 +323,21 @@ void app_ui_update(void)
             enter_edit_mode();
             beep_confirm();
         }
+    } else if (g_ui_state.current_screen == UI_SCREEN_LIVE) {
+        /* RIGHT knob press on LIVE = trigger a triggered precision
+         * measurement (2026-09-27, user request: no way to run one from the
+         * physical device). svc_displacement_precision_begin() restarts a
+         * fresh run if one is already in progress (its own doc comment), so
+         * a repeated press can't get stuck; DRV_ERR_NOT_READY (demod not
+         * running, or a zero-cal in progress) is silently ignored here, same
+         * "no error channel beyond the row's own state" reasoning
+         * UI_SETTING_ZERO_CAL's handler above already documents -- the
+         * result/progress readout on this screen (App/app_display.c) simply
+         * won't advance if the begin() didn't actually take. */
+        if (e1_press) {
+            beep_confirm();
+            (void)svc_displacement_precision_begin();
+        }
     }
-    /* LIVE / STATUS: RIGHT encoder rotate/push do nothing in WP3. */
+    /* STATUS: RIGHT encoder rotate/push do nothing. */
 }

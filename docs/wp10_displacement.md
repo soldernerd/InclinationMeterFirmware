@@ -921,3 +921,64 @@ division rate (64 vs 128 cycles) could be a secondary contributor but no control
 (same screen state, same duration, old vs new firmware) has been run to isolate it.
 **Open follow-up if a firm answer is wanted:** reflash the 128-cycle build and repeat
 the identical 20s soak for a real before/after comparison.
+
+## VBUS-disconnect grace period + LIVE-screen precision-measurement trigger (2026-09-27, fw 0.10.52)
+
+Two independent user reports, addressed together.
+
+**1. "With USB connected, the sensors at some point enter standby mode and there is no
+way of waking them up other than power-off and restart."** Code review confirmed both
+existing Standby-entry paths (`Services/svc_power.c`'s idle-timeout auto-poweroff and
+`Services/svc_battery.c`'s critical-battery shutdown) already correctly gate on
+`usb_connected` -- so this isn't a missing check. Most likely explanation: `VBUS_SENSE`
+is a plain digital GPIO read with **zero debounce**, and this project's own known ~70mA
+excess draw on the 5V rail (`current-consumption-investigation`) is plausibly enough to
+sag VBUS momentarily on a marginal cable/port under a load transient (the AFE/display
+drawing a spike) -- a single bad `svc_battery_update()` tick reading "unplugged" was
+enough to un-suppress both shutdown paths even though USB never actually disconnected.
+
+Fixed with a 10-second grace period on the **disconnect** direction only
+(`Services/svc_battery.c`'s `VBUS_DISCONNECT_GRACE_MS`) -- a fresh connection still
+registers immediately (charging starts promptly, unchanged), but `s_usb_connected`
+(and therefore `g_system_state.usb_connected`, which both shutdown paths read) only
+commits to "gone" after the raw GPIO has read low continuously for the full 10s. The
+raw (undebounced) reading still gates whether `CHARGE_SENSE`/`STANDBY_SENSE` are trusted,
+since those genuinely are undriven garbage without real VBUS regardless of how recently
+it was present. Not bench-validated against a real VBUS glitch (would need the device's
+own USB-C cable and a way to induce/observe a sag, not just the ST-Link's separate debug
+power this session's own bench testing used) -- this is a reasoned fix for a plausible
+mechanism, not a confirmed root-cause fix.
+
+**Also clarified, not changed:** wake-from-Standby sources are exactly three
+high-level-triggered pins -- `ENC_1SW` (WKUP1), `VBUS_SENSE` (WKUP4), `ENC_2SW` (WKUP5),
+`HAL_App/hal_power.c`'s `hal_power_configure_wakeup_pins()`. Pressing either encoder
+switch already wakes the device today (with a full reboot -- Standby always resets on
+wake, all RAM lost, by STM32 design, not something firmware can avoid). **Encoder
+*rotation* (A/B lines) cannot wake the device** -- those GPIOs simply aren't among the
+STM32G0B1's WKUP-capable pins, a hardware pin-mapping constraint from the schematic, not
+a firmware gap. Nothing implemented here; documented so a future hardware rev knows this
+if "wake on any input including rotation" is wanted.
+
+**2. "No way to trigger precision measurement from the physical device."** Implemented
+exactly as suggested: right-knob (encoder 1) press on the LIVE screen now calls
+`svc_displacement_precision_begin()` (`App/app_ui.c`) -- previously a no-op there ("RIGHT
+encoder rotate/push do nothing" on LIVE/STATUS). A repeated press restarts a fresh run
+(`precision_begin()`'s own documented behavior), so it can't get stuck. `DRV_ERR_NOT_READY`
+(demod not running, or a zero-cal in progress) is silently ignored, same "no error
+channel beyond the row's own state" reasoning `UI_SETTING_ZERO_CAL`'s handler already
+uses.
+
+Added on-screen feedback so triggering it isn't a black box: the LIVE screen's
+temp/battery line temporarily shows precision-measurement progress (`Precision N/64...`)
+while running, then the result (`Precision +0.1120mm`, 4-decimal like the Diff line, plus
+`(partial)` if it timed out) for 15 seconds after completion
+(`PRECISION_RESULT_DISPLAY_MS`, `App/app_display.c`), before reverting to the normal
+temp/battery display. `svc_displacement`'s own `DISP_PRECISION_DONE` phase persists
+indefinitely by design ("stays readable until the next begin()"), so the 15s window is
+tracked locally in the display module, not sourced from the phase itself.
+
+**Bench-verified (fw 0.10.52):** build clean (zero warnings), precision measurement via
+the API unaffected (64/64/64 target reached, zero timeout, ~2.7s). The LIVE-screen
+button binding and its on-screen feedback are code-reviewed but **not yet visually
+confirmed on the physical panel** (needs the user's own eyes on the display + a real
+knob press) -- same caveat this project routinely carries for display-only changes.
