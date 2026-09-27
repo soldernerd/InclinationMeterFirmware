@@ -410,8 +410,28 @@
  *     total over the pre-2026-09-26 setup.
  * DISPLACEMENT_ZERO_CAL_SAMPLES below was rescaled 128->32 alongside this
  * so its total raw-cycle integration depth (samples * batch cycles) and
- * wall-clock duration per step are unchanged -- see its comment. */
-#define DISPLACEMENT_BATCH_CYCLES         128U
+ * wall-clock duration per step are unchanged -- see its comment.
+ *
+ * BACK OFF 128 -> 64 2026-09-27, at the user's request, to test whether
+ * finer batches + more post-division averaging beats fewer/coarser batches
+ * for the differential/precision-measurement strategy (docs/wp10_displacement.md
+ * has the full reasoning): division is effectively linear at this system's
+ * operating point (x only ever sits ~1e-5..1e-6 away from 0.5), so a big
+ * single coherent batch and many smaller batches averaged afterward reach
+ * the same noise floor for the same total integration time -- the real
+ * difference is that smaller batches let the quality flag
+ * (DISPLACEMENT_QUALITY_BAD_MULTIPLE below) detect and exclude a transient
+ * at finer time resolution instead of having it silently blended into one
+ * bigger division. DISPLACEMENT_MA_SAMPLES below was doubled 4->8 alongside
+ * this specifically so the smoothed (post-MA) value's total SNR is
+ * UNCHANGED: sqrt(64)*sqrt(8) = sqrt(512) = sqrt(128)*sqrt(4) exactly -- the
+ * live/smoothed reading doesn't get worse, only the exclusion granularity
+ * gets finer (2x). DISPLACEMENT_ZERO_CAL_SAMPLES doubled 32->64 alongside
+ * this too, same "keep total raw-cycle depth constant" reasoning as its own
+ * 2026-09-26 rescale. Bench comparison against the 128-cycle setting still
+ * pending -- this is explicitly an experiment ("let's see if this makes
+ * things better"), not a settled tuning. */
+#define DISPLACEMENT_BATCH_CYCLES          64U
 #define DISPLACEMENT_MAX_CYCLES_PER_TICK  64U
 
 /* --- Post-division moving average (2026-09-26) --- a second, independent
@@ -424,14 +444,19 @@
  * (one add/subtract per batch, no division-heavy complex math -- doesn't
  * touch the CPU-margin problem DISPLACEMENT_BATCH_CYCLES solves), buys a
  * further sqrt(N) SNR improvement at the cost of roughly
- * N/(2*batch_rate) added lag. At the default 4 and the ~20.3 Hz batch
- * rate above, that's sqrt(4)=2x (~6 dB) for about 100 ms of lag --
+ * N/(2*batch_rate) added lag. At the default 4 and the (then) ~20.3 Hz
+ * batch rate, that was sqrt(4)=2x (~6 dB) for about 100 ms of lag --
  * imperceptible for a mechanical displacement reading. zero-cal
  * deliberately bypasses this (svc_displacement.c's zero_cal_accumulate()
  * is fed the pre-MA raw batch delta) -- it already does its own much
  * longer, independent averaging over DISPLACEMENT_ZERO_CAL_SAMPLES
- * batches and doesn't need a second smoothing stage stacked on top. */
-#define DISPLACEMENT_MA_SAMPLES            4U
+ * batches and doesn't need a second smoothing stage stacked on top.
+ *
+ * BUMPED 4 -> 8 2026-09-27 alongside DISPLACEMENT_BATCH_CYCLES' 128->64
+ * halving, specifically to keep the smoothed value's total SNR and lag
+ * both unchanged (see that constant's comment) while doubling the raw
+ * batch rate -- not a new tuning target on its own. */
+#define DISPLACEMENT_MA_SAMPLES            8U
 
 /* Nominal calibration seeds (DeviceSettings' displacement page, EEPROM-
  * backed past first boot — see system_state.h's comment on those
@@ -519,8 +544,14 @@
  * divided by the same 4x to keep both the wall-clock duration per step
  * (~1.6 s, unchanged) AND the total raw-cycle integration depth (samples
  * * batch cycles = 32*128 = 4096, identical to the old 128*32) exactly
- * where they were -- not a re-tuning, just following the batch size. */
-#define DISPLACEMENT_ZERO_CAL_SAMPLES        32U
+ * where they were -- not a re-tuning, just following the batch size.
+ *
+ * RESCALED 32 -> 64 2026-09-27 alongside DISPLACEMENT_BATCH_CYCLES'
+ * 128->64 halving -- same reasoning, opposite direction: batch rate
+ * doubled (20.3 -> ~40.7 Hz), so this doubles too, keeping the wall-clock
+ * duration per step (~1.6 s) and total raw-cycle depth (64*64 = 4096)
+ * unchanged. */
+#define DISPLACEMENT_ZERO_CAL_SAMPLES        64U
 
 /* --- Per-batch quality flag (2026-09-26) --- bench-validated on real data
  * (a 10-minute streaming capture, see docs/wp10_displacement.md): a
@@ -534,9 +565,12 @@
  * its residual step exceeds DISPLACEMENT_QUALITY_BAD_MULTIPLE times that
  * baseline. Chosen with real margin below the observed ~4x ratio so
  * ordinary noise doesn't false-positive. EWMA window in batches, not ms --
- * ~1.6 s at the current ~20.3 Hz batch rate, long enough to average out
- * ordinary noise, short enough to track real drift in the baseline noise
- * level itself (e.g. after a gain/calibration change). */
+ * ~0.8 s at the current ~40.7 Hz batch rate (was ~1.6 s at the original
+ * ~20.3 Hz -- DISPLACEMENT_BATCH_CYCLES' 2026-09-27 halving shrank this
+ * window along with it; not re-tuned, since a faster-adapting baseline is
+ * a reasonable side effect here, not a problem), long enough to average
+ * out ordinary noise, short enough to track real drift in the baseline
+ * noise level itself (e.g. after a gain/calibration change). */
 #define DISPLACEMENT_QUALITY_BAD_MULTIPLE     3U
 #define DISPLACEMENT_QUALITY_EWMA_SAMPLES     32U
 
@@ -545,20 +579,27 @@
  * (Services/svc_api.c's Commands API2_RES_CMD_PRECISION_MEASURE), as
  * opposed to the continuous live/streaming readout. Averages only
  * quality-good batches (above) per sensor, up to this many, with a hard
- * time ceiling so a host call can never block indefinitely.
+ * time ceiling so a host call can never block indefinitely. Also gates the
+ * DIFFERENTIAL (S1-S2) result added 2026-09-27 -- see
+ * Services/svc_displacement.h's precision-measurement comment -- which only
+ * accumulates a batch when BOTH sensors are quality-good on it, so its own
+ * count reaches this target somewhat slower than either individual
+ * sensor's count in general.
  *
- * The two numbers below are in tension at the current ~20.3 Hz batch
- * rate: 64 samples takes ~3.15 s minimum even with ZERO discards
- * (64/20.3), already past a strict "~2 s" target before accounting for
- * any bad batches at all. Resolved as bounded best-effort: target 64
- * (a real sqrt(64)=8x SNR improvement over one batch) but never wait
- * past DISPLACEMENT_PRECISION_TIMEOUT_MS -- typical (clean-channel)
- * completion is ~3.2 s, a bit over the user's "ideally ~2 s" but not
- * dramatically so, and the timeout guarantees a bounded worst case (the
- * result reports how many samples were actually averaged, so a caller
- * always knows the achieved confidence rather than a silent shortfall).
- * Want a firmer ~2 s ceiling instead? Drop DISPLACEMENT_PRECISION_TARGET_SAMPLES
- * to ~40 (40/20.3 =~ 1.97 s clean-channel), trading sqrt(40)=6.3x for it. */
+ * The two numbers below were originally in tension at the ~20.3 Hz batch
+ * rate DISPLACEMENT_BATCH_CYCLES=128 gave: 64 samples took ~3.15 s minimum
+ * even with ZERO discards, already past a strict "~2 s" target before
+ * accounting for any bad batches at all. DISPLACEMENT_BATCH_CYCLES' 2026-
+ * 09-27 halving to 64 doubled the batch rate to ~40.7 Hz, which
+ * incidentally halves that minimum too (~1.6 s clean-channel) -- not the
+ * reason for that change (see its own comment), but a welcome side effect
+ * here. Resolved as bounded best-effort: target 64 (a real sqrt(64)=8x SNR
+ * improvement over one batch) but never wait past
+ * DISPLACEMENT_PRECISION_TIMEOUT_MS -- the timeout guarantees a bounded
+ * worst case (the result reports how many samples were actually averaged,
+ * so a caller always knows the achieved confidence rather than a silent
+ * shortfall). Want a firmer ceiling instead? Drop
+ * DISPLACEMENT_PRECISION_TARGET_SAMPLES, trading sqrt(N) SNR for it. */
 #define DISPLACEMENT_PRECISION_TARGET_SAMPLES 64U
 #define DISPLACEMENT_PRECISION_TIMEOUT_MS     4000U
 

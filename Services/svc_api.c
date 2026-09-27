@@ -100,6 +100,8 @@ typedef struct {
     float   residual2;
     uint8_t quality1_ok;   /* added 2026-09-26 -- see svc_api.h's doc comment */
     uint8_t quality2_ok;
+    float   delta_diff_mm_raw;  /* added 2026-09-27 -- see svc_api.h's doc comment */
+    uint8_t quality_diff_ok;
 } __attribute__((packed)) Api2TopicRawDisplacementPayload;
 
 _Static_assert(sizeof(Api2IdentityPayload)    + 1U <= MAX_PAYLOAD, "IDENTITY response too large");
@@ -830,28 +832,29 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
     if (res == API2_RES_RAW_PRECISION_STATUS) {
         struct __attribute__((packed)) {
             uint8_t  phase;
-            uint16_t target, count1, count2;
+            uint16_t target, count1, count2, count_diff;
             uint32_t elapsed_ms;
             uint8_t  timed_out;
-            float    delta1_mm, delta2_mm;
+            float    delta1_mm, delta2_mm, delta_diff_mm;
         } p;
         /* Local (non-packed) temporaries -- svc_displacement_precision_progress()
          * takes pointers, and taking the address of a packed struct's
          * members directly is a real -Werror=address-of-packed-member
          * hazard on this Cortex-M0+ build (bitten by this exact issue
          * with zero-cal's progress earlier -- see that history). */
-        uint16_t target, count1, count2;
+        uint16_t target, count1, count2, count_diff;
         uint32_t elapsed_ms;
         p.phase = (uint8_t)svc_displacement_precision_get_phase();
-        svc_displacement_precision_progress(&count1, &count2, &target, &elapsed_ms);
-        p.target = target;  p.count1 = count1;  p.count2 = count2;
+        svc_displacement_precision_progress(&count1, &count2, &count_diff, &target, &elapsed_ms);
+        p.target = target;  p.count1 = count1;  p.count2 = count2;  p.count_diff = count_diff;
         p.elapsed_ms = elapsed_ms;
         bool timed_out = false;
-        float d1 = 0.0f, d2 = 0.0f;
-        (void)svc_displacement_precision_get_result(&d1, &d2, &timed_out);
+        float d1 = 0.0f, d2 = 0.0f, ddiff = 0.0f;
+        (void)svc_displacement_precision_get_result(&d1, &d2, &ddiff, &timed_out);
         p.timed_out = timed_out ? 1U : 0U;
         p.delta1_mm = d1;
         p.delta2_mm = d2;
+        p.delta_diff_mm = ddiff;
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }
@@ -1011,6 +1014,12 @@ static uint16_t read_disp_ok(uint8_t *buf)
     buf[0] = svc_displacement_get_ok() ? 1U : 0U;
     return 1U;
 }
+static uint16_t read_disp_diff_delta(uint8_t *buf)
+{
+    float v = svc_displacement_get_delta_diff_mm();
+    memcpy(buf, &v, sizeof(float));
+    return sizeof(float);
+}
 
 typedef struct {
     uint8_t           resource;
@@ -1032,6 +1041,7 @@ static const MeasurementResourceDesc s_meas_resources[] = {
     { API2_RES_MEAS_DISP2_DELTA_MM, read_disp2_delta },
     { API2_RES_MEAS_DISP2_RESIDUAL, read_disp2_residual },
     { API2_RES_MEAS_DISP_OK,        read_disp_ok },
+    { API2_RES_MEAS_DISP_DIFF_MM,   read_disp_diff_delta },
 };
 #define MEAS_RESOURCE_COUNT (sizeof(s_meas_resources) / sizeof(s_meas_resources[0]))
 
@@ -1176,6 +1186,8 @@ static uint16_t build_topic_raw_displacement(uint8_t *buf)
     p.residual2     = svc_displacement_get_residual2();
     p.quality1_ok   = svc_displacement_get_quality1_ok() ? 1U : 0U;
     p.quality2_ok   = svc_displacement_get_quality2_ok() ? 1U : 0U;
+    p.delta_diff_mm_raw = svc_displacement_get_delta_diff_mm_raw();
+    p.quality_diff_ok   = svc_displacement_get_quality_diff_ok() ? 1U : 0U;
     memcpy(buf, &p, sizeof p);
     return sizeof p;
 }

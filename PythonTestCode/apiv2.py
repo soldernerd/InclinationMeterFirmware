@@ -47,19 +47,27 @@ def decode_zero_cal_status(d: bytes):
                 progress=progress, target=target)
 
 # Precision-measurement status (Raw data 0x7/0x04, 2026-09-26). GET ->
-# u8 phase, u16 target, u16 count1, u16 count2, u32 elapsed_ms, u8 timed_out,
-# float delta1_mm, float delta2_mm. See svc_api.h's API2_RES_RAW_PRECISION_STATUS.
+# u8 phase, u16 target, u16 count1, u16 count2, u16 count_diff, u32 elapsed_ms,
+# u8 timed_out, float delta1_mm, float delta2_mm, float delta_diff_mm. See
+# svc_api.h's API2_RES_RAW_PRECISION_STATUS. count_diff/delta_diff_mm added
+# 2026-09-27 -- the differential (S1-S2) result, gated on BOTH sensors being
+# quality-good on the SAME batch (see svc_displacement.h) -- NOT
+# delta1_mm - delta2_mm, which would average over two potentially different
+# sets of batches. This is the headline number for the differential
+# measurement strategy (docs/wp10_displacement.md's standard-error analysis).
 OP_RAW_PRECISION_STATUS = opcode(GET, CAT_RAW, 0x04)
 PRECISION_PHASE_NAMES = {0: "IDLE", 1: "RUNNING", 2: "DONE"}
 
 
 def decode_precision_status(d: bytes):
-    if len(d) < 20:
+    if len(d) < 26:
         return None
-    phase, target, count1, count2, elapsed_ms, timed_out, d1, d2 = struct.unpack("<BHHHIBff", d[:20])
+    phase, target, count1, count2, count_diff, elapsed_ms, timed_out, d1, d2, ddiff = \
+        struct.unpack("<BHHHHIBfff", d[:26])
     return dict(phase=phase, phase_name=PRECISION_PHASE_NAMES.get(phase, f"?{phase}"),
-                target=target, count1=count1, count2=count2, elapsed_ms=elapsed_ms,
-                timed_out=bool(timed_out), delta1_mm=d1, delta2_mm=d2)
+                target=target, count1=count1, count2=count2, count_diff=count_diff,
+                elapsed_ms=elapsed_ms, timed_out=bool(timed_out),
+                delta1_mm=d1, delta2_mm=d2, delta_diff_mm=ddiff)
 
 # Displacement diagnostics (Raw data 0x7/0x02, OP_RAW_DISPLACEMENT_DIAG
 # below). See svc_api.h's API2_RES_RAW_DISPLACEMENT_DIAG comment.
@@ -141,13 +149,14 @@ MEAS_DISP1_RESIDUAL = 0x0A
 MEAS_DISP2_DELTA_MM = 0x0B
 MEAS_DISP2_RESIDUAL = 0x0C
 MEAS_DISP_OK        = 0x0D   # uint8 0/1
+MEAS_DISP_DIFF_MM   = 0x0E   # float32 mm, S1 - S2 (2026-09-27)
 DBG_LOG_STREAM = 0x00
 
 # Topic groups (CAT_TOPICS = 5) — GET or SUBSCRIBE (4-byte LE interval_ms payload)
 TOPIC_ENV     = 0x00   # BME280 + onboard + external temp
 TOPIC_STATUS  = 0x01   # battery / connections / charging / rails / RTC
 TOPIC_PHASORS = 0x02   # WP10 displacement demod's raw batch phasors
-TOPIC_RAW_DISPLACEMENT = 0x03   # pre-moving-average delta/residual, ~20.3 Hz (2026-09-26)
+TOPIC_RAW_DISPLACEMENT = 0x03   # pre-moving-average delta/residual + differential, ~40.7 Hz (2026-09-26/27)
 
 
 def build_interval(ms: int) -> bytes:
@@ -189,15 +198,18 @@ def decode_topic_phasors(d: bytes):
 
 def decode_topic_raw_displacement(d: bytes):
     """Topic groups 0x03: pre-moving-average delta_mm/residual, one
-    DISPLACEMENT_BATCH_CYCLES batch, ~20.3 Hz (2026-09-26). Valid only
-    while MEAS_DISP_OK is true. quality1/2_ok added 2026-09-26 -- see
-    svc_api.h's doc comment (0 = this batch's residual moved anomalously,
-    treat delta_mm_raw with suspicion)."""
-    if len(d) < 18:
+    DISPLACEMENT_BATCH_CYCLES batch (2026-09-26). Valid only while
+    MEAS_DISP_OK is true. quality1/2_ok added 2026-09-26 -- see svc_api.h's
+    doc comment (0 = this batch's residual moved anomalously, treat
+    delta_mm_raw with suspicion). delta_diff_mm_raw/quality_diff_ok added
+    2026-09-27 -- the differential (S1-S2) reading, excluded (quality_diff_ok
+    false) if EITHER sensor's quality flag is false on this batch."""
+    if len(d) < 23:
         return None
-    d1, r1, d2, r2, q1, q2 = struct.unpack("<4fBB", d[:18])
+    d1, r1, d2, r2, q1, q2, ddiff, qdiff = struct.unpack("<4fBBfB", d[:23])
     return dict(delta1_mm_raw=d1, residual1=r1, delta2_mm_raw=d2, residual2=r2,
-                quality1_ok=bool(q1), quality2_ok=bool(q2))
+                quality1_ok=bool(q1), quality2_ok=bool(q2),
+                delta_diff_mm_raw=ddiff, quality_diff_ok=bool(qdiff))
 
 
 def decode_phasor_log_entry(d: bytes):

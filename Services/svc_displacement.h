@@ -152,12 +152,29 @@ bool  svc_displacement_get_ok(void);
 /* Pre-moving-average delta_mm -- the value computed directly from one
  * DISPLACEMENT_BATCH_CYCLES batch, before DISPLACEMENT_MA_SAMPLES'
  * boxcar smoothing is applied (added 2026-09-26, at the user's request,
- * for granular analysis of the raw ~20.3 updates/s batch stream --
+ * for granular analysis of the raw ~40.7 updates/s batch stream --
  * Services/svc_api.c's Topic groups (0x5) API2_RES_TOPIC_RAW_DISPLACEMENT
  * exposes this as a subscribable stream). Same validity contract as
  * svc_displacement_get_delta1_mm() above. */
 float svc_displacement_get_delta1_mm_raw(void);
 float svc_displacement_get_delta2_mm_raw(void);
+
+/* --- Differential (S1-S2) reading (2026-09-27) --- added once the
+ * standard-error analysis in docs/wp10_displacement.md showed a
+ * differential reading (one sensor fixed as a reference, the other roved)
+ * reaches the target standard error where a single absolute channel
+ * cannot, because the dominant noise/drift is common-mode between S1/S2 and
+ * cancels in the difference -- the original unit's own two supported
+ * configurations (one sensor connected = absolute, both connected =
+ * differential) already anticipated this. Just delta1 - delta2 (or the raw
+ * pair, before MA) -- no separate moving-average state needed: a boxcar
+ * average is linear, so MA(delta1) - MA(delta2) equals MA(delta1-delta2)
+ * exactly, meaning these getters can derive the smoothed differential from
+ * the two smoothed per-sensor values already computed, with no additional
+ * accumulator. Same validity contract as svc_displacement_get_delta1_mm()
+ * (meaningless before the first batch / while !get_ok()). */
+float svc_displacement_get_delta_diff_mm(void);
+float svc_displacement_get_delta_diff_mm_raw(void);
 
 /* Latest completed batch's raw phasors -- same validity contract as the
  * getters above (all-zero before the first batch / while !get_ok()).
@@ -385,14 +402,30 @@ bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offs
 bool svc_displacement_get_quality1_ok(void);
 bool svc_displacement_get_quality2_ok(void);
 
+/* Differential quality (2026-09-27): true only when BOTH sensors' batches
+ * are individually quality-good on this SAME batch -- "exclude the
+ * differential reading if either input is bad," per the analysis above.
+ * A derived AND, not independent state (same reasoning as the delta_diff
+ * getters above). */
+bool svc_displacement_get_quality_diff_ok(void);
+
 /* --- Triggered precision measurement (2026-09-26) --- see Config/config.h's
- * DISPLACEMENT_PRECISION_TARGET_SAMPLES comment for the ~2s-vs-64-samples
- * timing tradeoff. API-driven (Commands API2_RES_CMD_PRECISION_MEASURE,
- * Services/svc_api.c): begin() arms averaging of up to
- * DISPLACEMENT_PRECISION_TARGET_SAMPLES quality-good batches PER SENSOR
- * (svc_displacement_get_quality1/2_ok() above), stopping once BOTH
- * sensors reach the target or DISPLACEMENT_PRECISION_TIMEOUT_MS elapses,
- * whichever comes first. Requires the demod already running and no
+ * DISPLACEMENT_PRECISION_TARGET_SAMPLES comment for the timing tradeoff.
+ * API-driven (Commands API2_RES_CMD_PRECISION_MEASURE, Services/svc_api.c):
+ * begin() arms averaging of up to DISPLACEMENT_PRECISION_TARGET_SAMPLES
+ * quality-good batches PER SENSOR (svc_displacement_get_quality1/2_ok()
+ * above), PLUS a third, differential (S1-S2) accumulator (2026-09-27) that
+ * only counts a batch where BOTH sensors are quality-good on it
+ * (svc_displacement_get_quality_diff_ok()) -- the headline result for the
+ * differential measurement strategy docs/wp10_displacement.md's standard-
+ * error analysis found necessary to reach the target repeatability, since
+ * the original unit's own two supported configurations (one sensor
+ * connected = absolute, both = differential) already anticipated this
+ * being the dominant mode. Stops once ALL THREE (S1, S2, and the
+ * differential) reach the target or DISPLACEMENT_PRECISION_TIMEOUT_MS
+ * elapses, whichever comes first -- the differential count is always
+ * <= min(count1, count2), so it's typically the last (and therefore
+ * gating) one to reach target. Requires the demod already running and no
  * zero-cal in progress (DRV_ERR_NOT_READY otherwise -- the two averaging
  * consumers of the batch stream are mutually exclusive by design, same
  * reasoning as bulk capture vs. real-time demod). A fresh begin() while
@@ -413,13 +446,17 @@ void      svc_displacement_precision_cancel(void);   /* back to IDLE from any ph
 
 DisplacementPrecisionPhase svc_displacement_precision_get_phase(void);
 
-/* All four out-params may be NULL. count1/2_out are batches averaged so
- * far per sensor (0..DISPLACEMENT_PRECISION_TARGET_SAMPLES); target_out
- * is always DISPLACEMENT_PRECISION_TARGET_SAMPLES (so a host doesn't need
- * to hardcode it); elapsed_ms_out is wall-clock time since begin(), 0
- * while idle. */
+/* All out-params may be NULL. count1/2_out are batches averaged so far per
+ * sensor (0..DISPLACEMENT_PRECISION_TARGET_SAMPLES); target_out is always
+ * DISPLACEMENT_PRECISION_TARGET_SAMPLES (so a host doesn't need to
+ * hardcode it); elapsed_ms_out is wall-clock time since begin(), 0 while
+ * idle. count_diff_out (2026-09-27) is the differential accumulator's own
+ * count -- only incremented on a batch where BOTH sensors are quality-good
+ * (svc_displacement_get_quality_diff_ok()), so it generally lags count1/2
+ * and is the one that gates completion (below) alongside them. */
 void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_out,
-                                          uint16_t *target_out, uint32_t *elapsed_ms_out);
+                                          uint16_t *count_diff_out, uint16_t *target_out,
+                                          uint32_t *elapsed_ms_out);
 
 /* Only succeeds (returns true) while phase == DISP_PRECISION_DONE --
  * false (outputs untouched) otherwise. delta1/2_mm_out are the mean of
@@ -427,10 +464,17 @@ void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_
  * (count may be less than the target if timed_out_out is true, or even
  * 0 in a pathological case -- a caller should check
  * svc_displacement_precision_progress()'s counts alongside this to judge
- * confidence, not just trust that the target was met). timed_out_out is
- * true if DISPLACEMENT_PRECISION_TIMEOUT_MS was hit before both sensors
- * reached the target sample count. */
+ * confidence, not just trust that the target was met). delta_diff_mm_out
+ * (2026-09-27) is the mean of delta1-delta2 over only the batches where
+ * BOTH sensors were quality-good on that same batch -- NOT delta1_mm_out
+ * minus delta2_mm_out, which would average over two potentially-different
+ * sets of batches and lose the point of excluding jointly. This is the
+ * headline number for the differential measurement strategy
+ * (docs/wp10_displacement.md's standard-error analysis); delta1/2_mm_out
+ * remain available alongside it for diagnosis. timed_out_out is true if
+ * DISPLACEMENT_PRECISION_TIMEOUT_MS was hit before all three (S1, S2, and
+ * the differential) reached the target sample count. */
 bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,
-                                            bool *timed_out_out);
+                                            float *delta_diff_mm_out, bool *timed_out_out);
 
 #endif /* SVC_DISPLACEMENT_H */

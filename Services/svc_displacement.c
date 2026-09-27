@@ -152,7 +152,7 @@ static float s_residual2  = 0.0f;
 static bool  s_disp_ok    = false;
 
 /* Pre-moving-average delta_mm (2026-09-26), same storage/context/getter
- * rationale as s_delta1_mm above, kept separately so the raw ~20.3 Hz
+ * rationale as s_delta1_mm above, kept separately so the raw ~40.7 Hz
  * batch stream stays available (Services/svc_api.c's Topic groups (0x5)
  * API2_RES_TOPIC_RAW_DISPLACEMENT) even though the Measurements
  * resources and the LIVE screen consume the post-MA s_delta1/2_mm. */
@@ -237,6 +237,14 @@ static double   s_precision_sum1      = 0.0;
 static double   s_precision_sum2      = 0.0;
 static float    s_precision_result1_mm = 0.0f;
 static float    s_precision_result2_mm = 0.0f;
+/* Differential (S1-S2) accumulator (2026-09-27) -- separate from sum1/sum2
+ * above because it must average delta1[i]-delta2[i] for the SAME batch i,
+ * not sum1/count1 - sum2/count2 (which would average over two potentially
+ * different sets of batches, losing the point of excluding jointly). See
+ * svc_displacement.h's precision-measurement comment. */
+static uint16_t s_precision_count_diff     = 0;
+static double   s_precision_sum_diff       = 0.0;
+static float    s_precision_result_diff_mm = 0.0f;
 static uint32_t s_precision_start_ms  = 0;
 static bool     s_precision_timed_out = false;
 
@@ -588,6 +596,8 @@ static void precision_finish(bool timed_out)
         ? (float)(s_precision_sum1 / (double)s_precision_count1) : 0.0f;
     s_precision_result2_mm = (s_precision_count2 > 0U)
         ? (float)(s_precision_sum2 / (double)s_precision_count2) : 0.0f;
+    s_precision_result_diff_mm = (s_precision_count_diff > 0U)
+        ? (float)(s_precision_sum_diff / (double)s_precision_count_diff) : 0.0f;
     s_precision_phase = DISP_PRECISION_DONE;
 }
 
@@ -595,7 +605,10 @@ static void precision_finish(bool timed_out)
  * precision-measurement run, if one is armed (cheap no-op via the phase
  * check when idle, same shape as zero_cal_accumulate() above). Each
  * sensor accumulates independently -- a channel with a worse quality-good
- * rate simply takes longer to reach the target, up to the shared timeout. */
+ * rate simply takes longer to reach the target, up to the shared timeout.
+ * The differential (2026-09-27) accumulates delta1-delta2 for this SAME
+ * batch, gated on BOTH good1 AND good2 -- "exclude the differential
+ * reading if either input is bad" (svc_displacement.h's comment). */
 static void precision_accumulate(float delta1, bool good1, float delta2, bool good2)
 {
     if (s_precision_phase != DISP_PRECISION_RUNNING) {
@@ -609,8 +622,13 @@ static void precision_accumulate(float delta1, bool good1, float delta2, bool go
         s_precision_sum2 += (double)delta2;
         s_precision_count2++;
     }
+    if (good1 && good2 && s_precision_count_diff < DISPLACEMENT_PRECISION_TARGET_SAMPLES) {
+        s_precision_sum_diff += (double)(delta1 - delta2);
+        s_precision_count_diff++;
+    }
     if (s_precision_count1 >= DISPLACEMENT_PRECISION_TARGET_SAMPLES
-        && s_precision_count2 >= DISPLACEMENT_PRECISION_TARGET_SAMPLES) {
+        && s_precision_count2 >= DISPLACEMENT_PRECISION_TARGET_SAMPLES
+        && s_precision_count_diff >= DISPLACEMENT_PRECISION_TARGET_SAMPLES) {
         precision_finish(false);
     }
 }
@@ -787,8 +805,14 @@ bool  svc_displacement_get_ok(void)        { return s_disp_ok; }
 float svc_displacement_get_delta1_mm_raw(void) { return s_delta1_mm_raw; }
 float svc_displacement_get_delta2_mm_raw(void) { return s_delta2_mm_raw; }
 
+/* Derived, not separately stored -- see svc_displacement.h's comment on
+ * why a boxcar MA's linearity makes this exact, not an approximation. */
+float svc_displacement_get_delta_diff_mm(void)     { return s_delta1_mm - s_delta2_mm; }
+float svc_displacement_get_delta_diff_mm_raw(void) { return s_delta1_mm_raw - s_delta2_mm_raw; }
+
 bool svc_displacement_get_quality1_ok(void) { return s_quality1_ok; }
 bool svc_displacement_get_quality2_ok(void) { return s_quality2_ok; }
+bool svc_displacement_get_quality_diff_ok(void) { return s_quality1_ok && s_quality2_ok; }
 
 void svc_displacement_get_phasors(DisplacementPhasors *out)
 {
@@ -1200,21 +1224,24 @@ DrvStatus svc_displacement_precision_begin(void)
         && s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
         return DRV_ERR_NOT_READY;   /* mutually exclusive with an in-progress zero-cal */
     }
-    s_precision_count1    = 0;
-    s_precision_count2    = 0;
-    s_precision_sum1      = 0.0;
-    s_precision_sum2      = 0.0;
-    s_precision_timed_out = false;
-    s_precision_start_ms  = hal_systick_get_ms();
-    s_precision_phase     = DISP_PRECISION_RUNNING;
+    s_precision_count1      = 0;
+    s_precision_count2      = 0;
+    s_precision_sum1        = 0.0;
+    s_precision_sum2        = 0.0;
+    s_precision_count_diff  = 0;
+    s_precision_sum_diff    = 0.0;
+    s_precision_timed_out   = false;
+    s_precision_start_ms    = hal_systick_get_ms();
+    s_precision_phase       = DISP_PRECISION_RUNNING;
     return DRV_OK;
 }
 
 void svc_displacement_precision_cancel(void)
 {
-    s_precision_phase  = DISP_PRECISION_IDLE;
-    s_precision_count1 = 0;
-    s_precision_count2 = 0;
+    s_precision_phase      = DISP_PRECISION_IDLE;
+    s_precision_count1     = 0;
+    s_precision_count2     = 0;
+    s_precision_count_diff = 0;
 }
 
 DisplacementPrecisionPhase svc_displacement_precision_get_phase(void)
@@ -1223,11 +1250,13 @@ DisplacementPrecisionPhase svc_displacement_precision_get_phase(void)
 }
 
 void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_out,
-                                          uint16_t *target_out, uint32_t *elapsed_ms_out)
+                                          uint16_t *count_diff_out, uint16_t *target_out,
+                                          uint32_t *elapsed_ms_out)
 {
-    if (count1_out)  *count1_out  = s_precision_count1;
-    if (count2_out)  *count2_out  = s_precision_count2;
-    if (target_out)  *target_out  = DISPLACEMENT_PRECISION_TARGET_SAMPLES;
+    if (count1_out)     *count1_out     = s_precision_count1;
+    if (count2_out)     *count2_out     = s_precision_count2;
+    if (count_diff_out) *count_diff_out = s_precision_count_diff;
+    if (target_out)     *target_out     = DISPLACEMENT_PRECISION_TARGET_SAMPLES;
     if (elapsed_ms_out) {
         *elapsed_ms_out = (s_precision_phase == DISP_PRECISION_IDLE)
             ? 0U : (uint32_t)(hal_systick_get_ms() - s_precision_start_ms);
@@ -1235,13 +1264,14 @@ void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_
 }
 
 bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,
-                                            bool *timed_out_out)
+                                            float *delta_diff_mm_out, bool *timed_out_out)
 {
     if (s_precision_phase != DISP_PRECISION_DONE) {
         return false;
     }
-    if (delta1_mm_out) *delta1_mm_out = s_precision_result1_mm;
-    if (delta2_mm_out) *delta2_mm_out = s_precision_result2_mm;
-    if (timed_out_out) *timed_out_out = s_precision_timed_out;
+    if (delta1_mm_out)      *delta1_mm_out      = s_precision_result1_mm;
+    if (delta2_mm_out)      *delta2_mm_out      = s_precision_result2_mm;
+    if (delta_diff_mm_out)  *delta_diff_mm_out  = s_precision_result_diff_mm;
+    if (timed_out_out)      *timed_out_out      = s_precision_timed_out;
     return true;
 }

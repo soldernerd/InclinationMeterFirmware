@@ -862,3 +862,62 @@ cancels in the difference. Practical implication for a plate-flatness survey: le
 sensor head at a fixed reference point and rove the other -- not because it's
 theoretically elegant, but because it's the only one of the two schemes that has
 actually been shown, on three separate real datasets, to hit the target.
+
+## Differential reading exposed on the API + 64-cycle batch experiment (2026-09-27, fw 0.10.50)
+
+Two follow-ups from the analysis above, both requested directly:
+
+**1. Differential (S1-S2) now a first-class reading, not something a client derives.**
+The original unit's own two supported configurations (one sensor connected = absolute,
+both = differential) already anticipated differential being the dominant mode once both
+are wired up -- this makes it so everywhere the two absolute channels are exposed:
+- Measurements `0x0E` (`delta_diff_mm`, post-MA) and Topic groups `0x5/0x03`
+  (`delta_diff_mm_raw` + `quality_diff_ok`, pre-MA) -- both exactly `delta1 - delta2`
+  (a boxcar average is linear, so `MA(d1)-MA(d2) == MA(d1-d2)` exactly -- no separate
+  moving-average state needed, just a subtraction getter).
+- Triggered precision measurement (Commands `0x07`/Raw `0x04`): a THIRD accumulator,
+  `delta_diff_mm`, alongside the existing per-sensor `delta1_mm`/`delta2_mm`. Critically
+  this is NOT `delta1_mm - delta2_mm` -- it separately accumulates `delta1[i]-delta2[i]`
+  for the same batch `i`, gated on BOTH sensors' quality flags being good on THAT batch
+  ("exclude the differential reading if either input is bad," per the user's explicit
+  ask). `count_diff` generally lags `count1`/`count2` slightly (it needs the AND of both,
+  not either independently) and now gates run completion alongside them.
+- LIVE screen: a new small "Diff ±X.XXXmm" line between S1/S2 and the temp/battery line
+  (`App/app_display.c`, y=172; bottom line moved 180->204 to make room).
+
+**Bench-verified over UART (fw 0.10.50):** Measurements `0x0E` and Topic `0x03`'s new
+fields both agree with `delta1-delta2` computed client-side to the last bit (wire value
+`0.11204147338867188` matched a client-side subtraction of the same two raw values
+exactly). A triggered precision measurement completed in 2.04s with `count1=count2=
+count_diff=64/64` (target reached on all three, zero timeout) -- confirms the joint
+gating doesn't meaningfully lag the individual channels when quality is good, and that
+the new ~40.7 Hz batch rate roughly halves the measurement's wall-clock time as expected.
+
+**2. `DISPLACEMENT_BATCH_CYCLES` 128->64, `DISPLACEMENT_MA_SAMPLES` 4->8 (experiment,
+user's own framing: "let's see if this makes things better").** Reasoning (see
+config.h's own comments for the full derivation): division is effectively linear at this
+system's operating point (x only ever sits ~1e-5..1e-6 from 0.5), so a big single
+coherent batch and many smaller batches averaged afterward reach the same noise floor
+for the same total integration time -- the real difference is that smaller batches let
+the quality flag detect and exclude a transient at finer time resolution instead of
+having it silently blended into one bigger division. Doubling `DISPLACEMENT_MA_SAMPLES`
+alongside the halving keeps the smoothed value's total SNR exactly unchanged
+(`sqrt(64)*sqrt(8) = sqrt(512) = sqrt(128)*sqrt(4)`) -- only the exclusion granularity
+changes, not the live-display noise floor. `DISPLACEMENT_ZERO_CAL_SAMPLES` 32->64
+alongside it, same "keep total raw-cycle depth/duration constant" reasoning as its own
+earlier rescale.
+
+**Bench-verified, not yet A/B'd against the old 128-cycle setting:** build is clean
+(zero warnings, `-Wall -Wextra -Werror`), flashed and running fw 0.10.50. A 20s streamed
+soak (Topic `0x03` at the 50ms subscription floor, so observed push rate is ~18 Hz
+regardless of the faster underlying batch rate) showed: zero sequence gaps in the pushed
+stream, quality-bad rates of 1.9%/5.8%/6.1% (S1/S2/diff) in the same ballpark as prior
+sessions, and `input_drop_count` rising by 7626 over 20s (~14.6% of the ~52k cycles
+produced in that window). That drop rate is real but **not attributable to this change
+with confidence** -- the dominant driver of input drops was already identified
+independently as the LIVE-screen redraw cost (~64% of drops) and BLE/LEDs (~33% more),
+present at both 32 and 128 cycles/batch per [[wp10-redraw-cost-bug]]; doubling the
+division rate (64 vs 128 cycles) could be a secondary contributor but no controlled A/B
+(same screen state, same duration, old vs new firmware) has been run to isolate it.
+**Open follow-up if a firm answer is wanted:** reflash the 128-cycle build and repeat
+the identical 20s soak for a real before/after comparison.

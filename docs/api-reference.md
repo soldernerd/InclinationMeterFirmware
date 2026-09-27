@@ -213,7 +213,7 @@ The classic 180-degree reversal test. 1-byte payload:
 | value | action |
 |---|---|
 | `0x00` | cancel — abort an in-progress run. `OK` even if already idle. |
-| `0x01` | step 1 — place the instrument in its starting orientation, then EXECUTE this. Averages ~128 batches (~1.6 s) at the current orientation. `BUSY_RESOURCE` if the demod (Commands 0x01) isn't running, or a precision measurement (Commands 0x07) is in progress. |
+| `0x01` | step 1 — place the instrument in its starting orientation, then EXECUTE this. Averages 64 batches (~1.6 s) at the current orientation. `BUSY_RESOURCE` if the demod (Commands 0x01) isn't running, or a precision measurement (Commands 0x07) is in progress. |
 | `0x02` | step 2 — physically rotate the instrument 180°, then EXECUTE this. Same averaging at the new orientation, then computes and **persists** new `disp_s1/s2_zero_offset_um` to this instrument's own EEPROM (Calibrations 0x2, resources 0x03/0x06). `BUSY_RESOURCE` if step 1 hasn't finished yet. |
 
 Each EXECUTE acks (`OK` or `BUSY_RESOURCE`) immediately; the averaging
@@ -229,16 +229,17 @@ the continuous live/streaming readout). 1-byte payload:
 
 | value | action |
 |---|---|
-| `0x00` | start — begin averaging up to 64 quality-good batches **per sensor**, stopping once BOTH sensors reach 64 or 4000 ms elapses, whichever comes first. Restarts a fresh run if one was already in progress. `BUSY_RESOURCE` if the demod isn't running or a zero-cal is in progress. |
+| `0x00` | start — begin averaging up to 64 quality-good batches **per sensor**, PLUS a third, differential (S1-S2) accumulator (2026-09-27) that only counts a batch where BOTH sensors are quality-good on it. Stopping once ALL THREE (S1, S2, and the differential) reach 64 or 4000 ms elapses, whichever comes first. Restarts a fresh run if one was already in progress. `BUSY_RESOURCE` if the demod isn't running or a zero-cal is in progress. |
 | `0x01` | cancel — abort an in-progress run. `OK` even if already idle/done. |
 
 Acks immediately; **poll progress and read the result via `GET Raw data
-0x7/0x04`.** Typical (clean-signal) completion is ~3.2 s — note this is
-*not* ~2 s even in the best case, since 64 samples at the ~20.3 Hz source
-rate takes ~3.15 s minimum with zero discards; the 4 s figure is a worst-
-case ceiling, not the expected time. Unlike zero-cal, nothing is written
-to EEPROM — the result is a plain, repeatable `GET`, valid until the next
-`start`. See the worked example at the end of this document for the full
+0x7/0x04`.** Typical (clean-signal) completion is ~1.6 s (64 samples at the
+~40.7 Hz source rate); the 4 s figure is a worst-case ceiling, not the
+expected time. Unlike zero-cal, nothing is written to EEPROM — the result
+is a plain, repeatable `GET`, valid until the next `start`. **The
+differential result (`delta_diff_mm`) is the recommended value to use** —
+see the "Absolute vs differential" note below `GET 0x7/0x04`'s field table.
+See the worked example at the end of this document for the full
 start→poll→read flow.
 
 ### `EXECUTE 0x1/0x08` — End charging  → opcode `0x2108`
@@ -304,6 +305,7 @@ calibration is done.
 | 0x0B displacement S2 delta | `0x040B` | f32 LE, mm — post-moving-average |
 | 0x0C displacement S2 residual | `0x040C` | f32 LE, Im(x2) |
 | 0x0D displacement ok | `0x040D` | u8, 0/1 — 0x09–0x0C are meaningless while this is 0 |
+| 0x0E displacement differential | `0x040E` | f32 LE, mm — S1 - S2, post-moving-average (2026-09-27) |
 
 - **GET**: request payload none → response `[OK][value]`.
 - **SUBSCRIBE** (`0x34xx`): request payload = `u32 interval_ms` LE, range
@@ -313,11 +315,15 @@ calibration is done.
 - **UNSUBSCRIBE** (`0x44xx`): payload none. `NOT_SUBSCRIBED` if there was
   no active subscription on this transport.
 - All subscriptions are per-transport and cleared on connect/disconnect.
-- **0x09/0x0B are smoothed** (a 4-sample boxcar on top of the underlying
-  ~20.3 Hz batch rate). If you want the raw, pre-smoothing value at the
+- **0x09/0x0B are smoothed** (an 8-sample boxcar on top of the underlying
+  ~40.7 Hz batch rate). If you want the raw, pre-smoothing value at the
   full batch rate for tighter-loop analysis, use Topic groups `0x5/0x03`
   instead (below) — it carries the same two deltas/residuals unsmoothed,
   plus a per-batch quality flag.
+- **0x0E is exactly `0x09 - 0x0B`**, provided directly so a client doesn't
+  need to subtract two floats itself. **This is the recommended reading
+  once both sensors are connected** — see the "Absolute vs differential"
+  note under Topic groups `0x5/0x03` below.
 
 ---
 
@@ -380,14 +386,14 @@ alone can't distinguish from "device working, instrument tilted." All
 A healthy A/B pair should read ~180° apart in phase; if it doesn't,
 suspect wiring, not calibration.
 
-### `0x5/0x03` — Raw (pre-smoothing) displacement  → GET `0x0503`, SUBSCRIBE `0x3503` (18 B payload)
+### `0x5/0x03` — Raw (pre-smoothing) displacement  → GET `0x0503`, SUBSCRIBE `0x3503` (23 B payload)
 
 The **recommended resource for anything that needs the sensor value at
 full rate or wants to reason about data quality** — e.g. the precision-
 measurement feature's own internal averaging is built on exactly this
-data. Same ~20.3 Hz source rate as the phasors topic above (both come
+data. Same ~40.7 Hz source rate as the phasors topic above (both come
 from the same underlying batch); subscribe at the 50 ms floor to track it
-essentially 1:1 (batch period is ~49.2 ms). Valid only while Measurements
+essentially 1:1 (batch period is ~24.6 ms). Valid only while Measurements
 `0x0D` (disp_ok) is true:
 
 | off | type | field |
@@ -398,6 +404,8 @@ essentially 1:1 (batch period is ~49.2 ms). Valid only while Measurements
 | 12 | f32 | residual2 — Im(x2), identical to Measurements 0x0C |
 | 16 | u8 | quality1_ok — 0/1, see below |
 | 17 | u8 | quality2_ok — 0/1, see below |
+| 18 | f32 | delta_diff_mm_raw — S1 - S2, pre-moving-average (2026-09-27) |
+| 22 | u8 | quality_diff_ok — 0/1, see below |
 
 **Quality flag (bench-validated 2026-09-26):** a real jump/glitch in a
 sensor's underlying signal makes its residual step by ~4-4.6x its normal
@@ -405,10 +413,30 @@ size in the *same* batch. `quality1/2_ok` tracks a rolling baseline of the
 residual's typical step size and flags a batch `0` (bad) when the current
 step exceeds 3x that baseline. `0` means: treat this specific batch's
 `delta*_mm_raw` with suspicion — it is *not* a hard guarantee of error,
-just a statistically-motivated warning. A host doing its own averaging
-(rather than using the triggered precision measurement, which already
-does this) should discard or downweight batches where the relevant
-`quality*_ok` is 0.
+just a statistically-motivated warning. `quality_diff_ok` is simply
+`quality1_ok AND quality2_ok` on this same batch — exclude the
+differential reading if EITHER input is bad. A host doing its own
+averaging (rather than using the triggered precision measurement, which
+already does this) should discard or downweight batches where the
+relevant `quality*_ok` is 0.
+
+**Absolute vs differential (2026-09-27):** the device supports two physical
+configurations — one sensor connected (absolute reading) or both (S1 and
+S2 available for a differential reading, one sensor left as a fixed
+reference while the other is moved). Bench analysis
+(`docs/wp10_displacement.md`'s "Standard error vs averaging duration"
+section) found that an absolute single-channel reading's noise/drift does
+**not** keep improving with more averaging — it plateaus well above a
+1µm-scale target no matter how long you wait, because the dominant
+long-timescale noise is real drift, not something that keeps averaging
+away. A differential (S1-S2) reading crosses that target within about a
+second and settles 4-300x lower, because that same dominant noise/drift is
+common-mode between S1 and S2 and cancels in the difference. **When both
+sensors are connected, use the differential fields
+(`delta_diff_mm_raw`/`quality_diff_ok` here, `delta_diff_mm` on
+Measurements `0x0E`, or `delta_diff_mm` from the triggered precision
+measurement) as the primary reading, not the two absolute channels
+averaged separately.**
 
 ---
 
@@ -556,7 +584,7 @@ Request payload: none. Response (5 B, LE):
 | 3 | u16 | target — always 32 (the sample count for a zero-cal step, ~1.6s at the current batch rate), no need to hardcode |
 
 ### `GET 0x7/0x04` — Precision-measurement status  → opcode `0x0704`
-Request payload: none. Response (20 B, LE):
+Request payload: none. Response (26 B, LE):
 
 | off | type | field |
 |---|---|---|
@@ -564,12 +592,15 @@ Request payload: none. Response (20 B, LE):
 | 1 | u16 | target — always 64, no need to hardcode |
 | 3 | u16 | count1 — quality-good batches averaged so far, Sensor 1 (0..target) |
 | 5 | u16 | count2 — same, Sensor 2 |
-| 7 | u32 | elapsed_ms — wall-clock time since the triggering EXECUTE, 0 while idle |
-| 11 | u8 | timed_out — 1 if the 4000ms ceiling was hit before both sensors reached target (only meaningful once phase==done) |
-| 12 | f32 | delta1_mm — mean of the count1 batches actually collected; valid once phase==done, 0 before that |
-| 16 | f32 | delta2_mm — same, Sensor 2 |
+| 7 | u16 | count_diff — batches averaged into the differential accumulator (both sensors quality-good on the SAME batch); generally ≤ min(count1,count2), and the one that gates completion |
+| 9 | u32 | elapsed_ms — wall-clock time since the triggering EXECUTE, 0 while idle |
+| 13 | u8 | timed_out — 1 if the 4000ms ceiling was hit before all three (S1, S2, differential) reached target (only meaningful once phase==done) |
+| 14 | f32 | delta1_mm — mean of the count1 batches actually collected; valid once phase==done, 0 before that |
+| 18 | f32 | delta2_mm — same, Sensor 2 |
+| 22 | f32 | delta_diff_mm — **the recommended value once both sensors are connected** — mean of delta1-delta2 over the count_diff jointly-good batches. NOT delta1_mm - delta2_mm above, which would average over two potentially different sets of batches, losing the point of excluding jointly. |
 
-See the worked example below for the full flow.
+See the "Absolute vs differential" note under Topic groups `0x5/0x03`
+above, and the worked example below for the full flow.
 
 ---
 
@@ -615,16 +646,20 @@ The recommended flow for the mobile app's "take a reading" action:
    `[OK]`. (`[BUSY_RESOURCE]` if the demod isn't running or a zero-cal is
    in progress — resolve that first, don't retry blindly.)
 3. Poll every ~200–500 ms: `GET 0x7/0x04` → decode `phase`. While
-   `phase==1` (running), `count1`/`count2` climb toward `target` (64) and
-   `elapsed_ms` climbs toward the 4000 ms ceiling — a progress bar can use
-   `min(count1,count2)/target`.
-4. Once `phase==2` (done): read `delta1_mm`/`delta2_mm` as the final
-   values. Check `timed_out` — if `1`, the result is still the mean of
-   whatever was collected (`count1`/`count2`, which may be less than 64),
-   not a hard failure, but worth surfacing as lower-confidence in the UI
-   (e.g. show the achieved sample count next to the result).
+   `phase==1` (running), `count1`/`count2`/`count_diff` climb toward
+   `target` (64) and `elapsed_ms` climbs toward the 4000 ms ceiling — a
+   progress bar can use `min(count1,count2,count_diff)/target`.
+4. Once `phase==2` (done): **if both sensors are connected, read
+   `delta_diff_mm` as the result** (see the "Absolute vs differential" note
+   above for why — it reaches the target repeatability where either
+   absolute channel alone doesn't). `delta1_mm`/`delta2_mm` remain
+   available for diagnosis. Check `timed_out` — if `1`, the result is still
+   the mean of whatever was collected (`count1`/`count2`/`count_diff`,
+   which may be less than 64), not a hard failure, but worth surfacing as
+   lower-confidence in the UI (e.g. show the achieved sample count next to
+   the result).
 5. The result stays readable (repeat `GET 0x7/0x04`) until the next
    `EXECUTE 0x1/0x07` payload `00` starts a fresh run.
 
-Expect ~3.2 s typical wall-clock time for a clean signal, not ~2 s — see
-that command's own section above for why.
+Expect ~1.6 s typical wall-clock time for a clean signal; the 4 s figure
+is a worst-case ceiling, not the expected time.

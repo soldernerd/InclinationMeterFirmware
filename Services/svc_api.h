@@ -276,7 +276,7 @@ typedef enum {
  * POST-moving-average value (config.h's DISPLACEMENT_MA_SAMPLES, added
  * 2026-09-26 -- a boxcar smoothing stage over the last few completed
  * batches, applied on top of the coherent per-batch sum config.h's
- * DISPLACEMENT_BATCH_CYCLES already does; ~20.3 raw batches/s at the
+ * DISPLACEMENT_BATCH_CYCLES already does; ~40.7 raw batches/s at the
  * default batch size, but the smoothed value here updates no faster than
  * that regardless). Want the raw, pre-MA per-batch value instead (e.g.
  * for granular noise analysis)? Subscribe to Topic groups (0x5)
@@ -293,6 +293,15 @@ typedef enum {
 #define API2_RES_MEAS_DISP2_DELTA_MM 0x0BU   /* float32 mm, Sensor 2 (CH0) */
 #define API2_RES_MEAS_DISP2_RESIDUAL 0x0CU   /* float32, Im(x2) diagnostic */
 #define API2_RES_MEAS_DISP_OK        0x0DU   /* uint8 0/1 */
+/* Differential (S1-S2), post-MA -- added 2026-09-27 once the standard-error
+ * analysis (docs/wp10_displacement.md) found this, not a longer average of
+ * either absolute channel, is what actually reaches target repeatability
+ * (the dominant noise/drift is common-mode between S1/S2 and cancels in
+ * the difference). Exactly delta1_mm - delta2_mm (Measurements 0x09/0x0B) --
+ * provided directly so a client doesn't need to subtract two floats and
+ * re-derive the same rounding, and so this resource can be
+ * GET/SUBSCRIBEd on its own. */
+#define API2_RES_MEAS_DISP_DIFF_MM   0x0EU   /* float32 mm, S1 - S2 */
 
 #define API2_MEASUREMENT_MIN_INTERVAL_MS 50U
 #define API2_MEASUREMENT_MAX_INTERVAL_MS 3600000U   /* 1 hour */
@@ -343,13 +352,13 @@ typedef enum {
  *   float iS2, qS2   (Sensor 2, CH0)
  *
  * 0x03 Raw displacement -- PRE-moving-average per-batch delta/residual
- * (18 B, added 2026-09-26 at the user's request for granular analysis of
+ * (23 B, added 2026-09-26 at the user's request for granular analysis of
  * the demod's raw output, before config.h's DISPLACEMENT_MA_SAMPLES
- * boxcar smoothing that Measurements 0x09/0x0B apply). Same ~20.3
- * updates/s source rate as the phasors topic above (both come from
- * process_one_batch(), config.h's DISPLACEMENT_BATCH_CYCLES); subscribe
- * at the API2_MEASUREMENT_MIN_INTERVAL_MS floor (50 ms) to track it
- * essentially 1:1 (batch period ~49.2 ms). Valid only while Measurements
+ * boxcar smoothing that Measurements 0x09/0x0B apply). Same source rate as
+ * the phasors topic above (both come from process_one_batch(),
+ * config.h's DISPLACEMENT_BATCH_CYCLES -- ~40.7 updates/s at the current
+ * 64-cycle batch size); subscribe at the API2_MEASUREMENT_MIN_INTERVAL_MS
+ * floor (50 ms) to track it essentially 1:1. Valid only while Measurements
  * 0x0D (disp_ok) is true:
  *   float delta1_mm_raw   (Sensor 1, pre-MA)
  *   float residual1       (Im(x1) -- identical to Measurements 0x0A,
@@ -365,6 +374,14 @@ typedef enum {
  *                            treat this batch's delta1_mm_raw with
  *                            suspicion, not a hard guarantee of error)
  *   u8    quality2_ok      (same, for Sensor 2)
+ *   float delta_diff_mm_raw (2026-09-27, S1-S2, pre-MA -- exactly
+ *                            delta1_mm_raw - delta2_mm_raw, provided
+ *                            directly for the same reason Measurements
+ *                            0x0E is)
+ *   u8    quality_diff_ok  (svc_displacement_get_quality_diff_ok() --
+ *                            quality1_ok AND quality2_ok on this same
+ *                            batch: exclude the differential reading if
+ *                            EITHER input is bad)
  */
 #define API2_RES_TOPIC_ENV              0x00U
 #define API2_RES_TOPIC_STATUS           0x01U
@@ -520,21 +537,32 @@ typedef enum {
 #define API2_RES_RAW_ZERO_CAL_STATUS    0x03U
 /* 0x04 = triggered precision-measurement progress/result (Commands 0x07,
  * see its comment for the full procedure). GET, no request payload.
- * Response (20 B, LE):
+ * Response (26 B, LE):
  *   u8    phase       (DisplacementPrecisionPhase: 0 idle, 1 running, 2 done)
  *   u16   target       (DISPLACEMENT_PRECISION_TARGET_SAMPLES, so a host
  *                        doesn't need to hardcode it)
  *   u16   count1       (quality-good batches averaged so far for Sensor 1,
  *                        0..target)
  *   u16   count2       (same, for Sensor 2)
+ *   u16   count_diff   (2026-09-27: batches averaged into the differential
+ *                        accumulator, i.e. where BOTH sensors were
+ *                        quality-good on the SAME batch -- generally
+ *                        <= min(count1, count2), and the one that gates
+ *                        completion alongside count1/count2)
  *   u32   elapsed_ms   (wall-clock time since the EXECUTE that started
  *                        this run, 0 while idle)
  *   u8    timed_out     (1 if DISPLACEMENT_PRECISION_TIMEOUT_MS was hit
- *                        before both sensors reached target -- only
- *                        meaningful once phase == done)
+ *                        before all three (S1, S2, differential) reached
+ *                        target -- only meaningful once phase == done)
  *   float delta1_mm    (mean of the count1 batches actually collected --
  *                        valid once phase == done; 0 before that)
- *   float delta2_mm    (same, for Sensor 2) */
+ *   float delta2_mm    (same, for Sensor 2)
+ *   float delta_diff_mm (2026-09-27, THE headline number for the
+ *                        differential measurement strategy -- mean of
+ *                        delta1-delta2 over the count_diff jointly-good
+ *                        batches, NOT delta1_mm - delta2_mm above, which
+ *                        would average over two potentially different sets
+ *                        of batches) */
 #define API2_RES_RAW_PRECISION_STATUS   0x04U
 
 #define API2_OP_RAW_ADC_DIAG \
