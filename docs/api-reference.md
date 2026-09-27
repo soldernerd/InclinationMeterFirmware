@@ -241,6 +241,16 @@ to EEPROM — the result is a plain, repeatable `GET`, valid until the next
 `start`. See the worked example at the end of this document for the full
 start→poll→read flow.
 
+### `EXECUTE 0x1/0x08` — End charging  → opcode `0x2108`
+Request payload: none. Response: status only, always `OK` (a no-op, not
+an error, if force-charge wasn't armed). Cancels an armed force-charge
+override (`EXECUTE 0x1/0x02`) immediately — added because force-charge
+previously had no way back off except reaching full charge or physically
+removing the USB cable. **Does not disable normal (non-forced) charging**
+— if the battery voltage is still below Settings `battery_charge_start_mv`,
+the automatic policy resumes charging on its own next tick, same as if
+force-charge had never been armed; this only cancels the manual override.
+
 ---
 
 ## Calibrations (0x2) — GET, SET

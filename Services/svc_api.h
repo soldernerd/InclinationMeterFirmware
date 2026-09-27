@@ -226,6 +226,18 @@ typedef enum {
  * settings -- it's a pure read-back, re-readable any number of times
  * once done, no separate "consume" step. */
 #define API2_RES_CMD_PRECISION_MEASURE 0x07U
+/* 0x08 End charging (2026-09-27) -- no payload. Cancels an armed
+ * force-charge override (Commands 0x02) immediately, without needing to
+ * reach full or physically remove USB. Added after a real bench gap: a
+ * force-charge triggered for a quick test left the board charging with
+ * no way back except unplugging the cable. Response is status-only,
+ * always OK (a no-op, not an error, if force-charge wasn't armed). Does
+ * NOT disable normal (non-forced) charging -- if Vbat is still below
+ * Settings battery_charge_start_mv, the auto-policy resumes charging on
+ * its own next tick, same as if force-charge had never been armed; this
+ * only cancels the manual override. See Services/svc_battery.h's
+ * svc_battery_cancel_force_charge(). */
+#define API2_RES_CMD_END_CHARGING      0x08U
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
@@ -241,6 +253,8 @@ typedef enum {
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_REBOOT_DFU)
 #define API2_OP_CMD_PRECISION_MEASURE \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_PRECISION_MEASURE)
+#define API2_OP_CMD_END_CHARGING \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_END_CHARGING)
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
  * Only what REV B actually reads today. All are subscribable. */

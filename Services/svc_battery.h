@@ -29,6 +29,18 @@ bool         svc_battery_is_charging(void);
 void         svc_battery_force_charge(void);
 bool         svc_battery_is_force_charging(void);
 
+/* Cancels an armed force_charge override immediately (the next
+ * svc_battery_update() re-evaluates the normal SOC-threshold policy from
+ * scratch). Added 2026-09-27 -- force_charge previously had no way back
+ * off except reaching full or physically removing USB, discovered as a
+ * real gap while bench-testing (a force-charge triggered for a quick test
+ * left the board charging with no way to stop it short of unplugging the
+ * cable). No-op if not currently force-charging. Does not affect the
+ * normal (non-forced) auto-charge policy -- if Vbat is still below
+ * battery_charge_start_mv, charging resumes on its own next tick, same
+ * as if force_charge had never been armed. */
+void         svc_battery_cancel_force_charge(void);
+
 /* Disables the LEDs and the 3.3V/5V rails, then enters STM32 Standby mode.
  * Does not return — Standby mode resets the MCU on wake (see
  * HAL_App/hal_power.h). Public so a later work package's user-initiated

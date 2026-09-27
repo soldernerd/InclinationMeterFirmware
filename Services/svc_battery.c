@@ -329,3 +329,13 @@ void svc_battery_force_charge(void)
     s_force_charge = true;
     svc_log(API2_LOG_INFO, "battery: force-charge armed");
 }
+
+void svc_battery_cancel_force_charge(void)
+{
+    /* Just clear the flag -- update_charge_enable() (called every
+     * svc_battery_update() tick) re-evaluates s_charge_enabled from the
+     * normal SOC-threshold policy on its own next pass; no need to touch
+     * s_charge_enabled or the CHARGE_EN pin directly here. */
+    s_force_charge = false;
+    svc_log(API2_LOG_INFO, "battery: force-charge cancelled");
+}

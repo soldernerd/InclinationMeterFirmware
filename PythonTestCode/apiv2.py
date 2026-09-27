@@ -31,6 +31,7 @@ OP_CMD_PIN_TEST        = opcode(EXECUTE, CAT_COMMANDS, 0x04)  # 1B: [5:0]=SCK,MO
 OP_CMD_ZERO_CAL        = opcode(EXECUTE, CAT_COMMANDS, 0x06)  # 1B: 0=cancel 1=step1 2=step2 (180-degree reversal test)
 OP_CMD_REBOOT_DFU      = opcode(EXECUTE, CAT_COMMANDS, 0x05)  # no payload — reset into the ROM bootloader (one-shot; see HAL_App/hal_dfu.h)
 OP_CMD_PRECISION_MEASURE = opcode(EXECUTE, CAT_COMMANDS, 0x07)  # 1B: 0=start 1=cancel (2026-09-26)
+OP_CMD_END_CHARGING     = opcode(EXECUTE, CAT_COMMANDS, 0x08)  # no payload -- cancels an armed force-charge (2026-09-27)
 
 # Zero-cal status (Raw data 0x7/0x03). GET -> u8 phase, u16 progress, u16 target.
 OP_RAW_ZERO_CAL_STATUS = opcode(GET, CAT_RAW, 0x03)

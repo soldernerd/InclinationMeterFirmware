@@ -413,6 +413,15 @@ static void cmd_force_charge(ApiTransport t, uint16_t opcode,
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
+static void cmd_end_charging(ApiTransport t, uint16_t opcode,
+                             const uint8_t *pl, uint16_t paylen)
+{
+    (void)pl; (void)paylen;
+    svc_battery_cancel_force_charge();
+    svc_log(API2_LOG_INFO, "cmd: end charging");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
 static void cmd_power_test(ApiTransport t, uint16_t opcode,
                            const uint8_t *pl, uint16_t paylen)
 {
@@ -537,6 +546,7 @@ static const CommandDesc s_commands[] = {
     { API2_RES_CMD_ZERO_CAL,        1U, cmd_zero_cal        },
     { API2_RES_CMD_REBOOT_DFU,      0U, cmd_reboot_dfu      },
     { API2_RES_CMD_PRECISION_MEASURE, 1U, cmd_precision_measure },
+    { API2_RES_CMD_END_CHARGING,      0U, cmd_end_charging     },
 };
 #define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
 
