@@ -104,6 +104,17 @@ typedef struct {
     uint8_t quality_diff_ok;
 } __attribute__((packed)) Api2TopicRawDisplacementPayload;
 
+/* Signal diagnostics (2026-09-27, granite-plate calibration tool) -- see
+ * svc_api.h's Topic groups 0x04 doc comment and
+ * Services/svc_displacement.h's DisplacementSignalDiag comment. */
+typedef struct {
+    float rms_mv[4];
+    float p2p_mv[4];
+    float phase_deg[4];
+    float theoretical_tilt1_mm_per_m;
+    float theoretical_tilt2_mm_per_m;
+} __attribute__((packed)) Api2TopicSignalDiagPayload;
+
 _Static_assert(sizeof(Api2IdentityPayload)    + 1U <= MAX_PAYLOAD, "IDENTITY response too large");
 _Static_assert(sizeof(Api2DeviceStatePayload) + 1U <= MAX_PAYLOAD, "DEVICE_STATE response too large");
 /* +3: stream pushes prefix [status][issue_seq][page] */
@@ -111,6 +122,7 @@ _Static_assert(sizeof(Api2TopicEnvPayload)    + 3U <= MAX_PAYLOAD, "TOPIC env pu
 _Static_assert(sizeof(Api2TopicStatusPayload) + 3U <= MAX_PAYLOAD, "TOPIC status push too large");
 _Static_assert(sizeof(Api2TopicPhasorsPayload) + 3U <= MAX_PAYLOAD, "TOPIC phasors push too large");
 _Static_assert(sizeof(Api2TopicRawDisplacementPayload) + 3U <= MAX_PAYLOAD, "TOPIC raw displacement push too large");
+_Static_assert(sizeof(Api2TopicSignalDiagPayload) + 3U <= MAX_PAYLOAD, "TOPIC signal diag push too large");
 
 /* ---------------- per-transport state ---------------- */
 
@@ -1192,6 +1204,22 @@ static uint16_t build_topic_raw_displacement(uint8_t *buf)
     return sizeof p;
 }
 
+static uint16_t build_topic_signal_diag(uint8_t *buf)
+{
+    DisplacementSignalDiag d;
+    svc_displacement_get_signal_diag(&d);
+    Api2TopicSignalDiagPayload p;
+    for (uint8_t ch = 0; ch < 4U; ++ch) {
+        p.rms_mv[ch]   = d.rms_mv[ch];
+        p.p2p_mv[ch]   = d.p2p_mv[ch];
+        p.phase_deg[ch] = d.phase_deg[ch];
+    }
+    p.theoretical_tilt1_mm_per_m = d.theoretical_tilt1_mm_per_m;
+    p.theoretical_tilt2_mm_per_m = d.theoretical_tilt2_mm_per_m;
+    memcpy(buf, &p, sizeof p);
+    return sizeof p;
+}
+
 typedef struct {
     uint8_t      resource;
     TopicBuildFn build;
@@ -1202,6 +1230,7 @@ static const TopicResourceDesc s_topic_resources[] = {
     { API2_RES_TOPIC_STATUS,           build_topic_status },
     { API2_RES_TOPIC_PHASORS,          build_topic_phasors },
     { API2_RES_TOPIC_RAW_DISPLACEMENT, build_topic_raw_displacement },
+    { API2_RES_TOPIC_SIGNAL_DIAG,      build_topic_signal_diag },
 };
 #define TOPIC_RESOURCE_COUNT (sizeof(s_topic_resources) / sizeof(s_topic_resources[0]))
 
@@ -1434,17 +1463,20 @@ static void dispatch_settings(ApiTransport t, uint16_t opcode, uint8_t verb,
 static const SettingsFieldDesc s_calibration_fields[] = {
     SF(API2_RES_CALIB_DISP_ATTEN_MILLI,       SF_UNSIGNED, disp_atten_milli,           100, 100000),
     SF(API2_RES_CALIB_DISP_S1_GAIN_MILLI,     SF_UNSIGNED, disp_s1_gain_milli,         100, 1000000),
-    /* Max widened 10000 -> 2000000 (10 mm -> 2 m) 2026-09-26 alongside
-     * DEFAULT_DISP_S1/S2_D0_UM's 1000x bump (config.h's comment on that
-     * default has the full reasoning) -- d0 no longer just represents a
-     * literal sensor air gap, it's standing in for the still-missing
-     * gain calibration too, so it needs headroom well past a real
-     * mechanical gap's plausible range. */
-    SF(API2_RES_CALIB_DISP_S1_D0_UM,          SF_UNSIGNED, disp_s1_d0_um,                1, 2000000),
     SF(API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM, SF_SIGNED,   disp_s1_zero_offset_um,   -5000, 5000),
     SF(API2_RES_CALIB_DISP_S2_GAIN_MILLI,     SF_UNSIGNED, disp_s2_gain_milli,         100, 1000000),
-    SF(API2_RES_CALIB_DISP_S2_D0_UM,          SF_UNSIGNED, disp_s2_d0_um,                1, 2000000),
     SF(API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM, SF_SIGNED,   disp_s2_zero_offset_um,   -5000, 5000),
+    /* Theoretical baseline + calibration multiplier (2026-09-27, replacing
+     * D0_UM -- see Config/config.h's DEFAULT_DISP_S1_D0_THEORETICAL_UM
+     * comment). Bounds on D0_THEORETICAL match the old D0_UM's (this is
+     * the same "not a literal air gap, needs generous headroom" constant,
+     * just derived from the Wyler handbook instead of a paper-shim test).
+     * CAL_MULT's bounds (10..1000000 milli = 0.01x..1000x) match
+     * DISP_ATTEN_MILLI's own "generic milli-ratio" range. */
+    SF(API2_RES_CALIB_DISP_S1_D0_THEORETICAL_UM, SF_UNSIGNED, disp_s1_d0_theoretical_um,     1, 2000000),
+    SF(API2_RES_CALIB_DISP_S1_CAL_MULT_MILLI,    SF_UNSIGNED, disp_s1_cal_mult_milli,       10, 1000000),
+    SF(API2_RES_CALIB_DISP_S2_D0_THEORETICAL_UM, SF_UNSIGNED, disp_s2_d0_theoretical_um,     1, 2000000),
+    SF(API2_RES_CALIB_DISP_S2_CAL_MULT_MILLI,    SF_UNSIGNED, disp_s2_cal_mult_milli,       10, 1000000),
 };
 #define CALIBRATION_FIELD_COUNT (sizeof(s_calibration_fields) / sizeof(s_calibration_fields[0]))
 

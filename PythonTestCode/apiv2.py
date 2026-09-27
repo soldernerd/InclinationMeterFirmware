@@ -150,6 +150,20 @@ MEAS_DISP2_DELTA_MM = 0x0B
 MEAS_DISP2_RESIDUAL = 0x0C
 MEAS_DISP_OK        = 0x0D   # uint8 0/1
 MEAS_DISP_DIFF_MM   = 0x0E   # float32 mm, S1 - S2 (2026-09-27)
+
+# Displacement calibration (CAT_CALIB = 2) -- see svc_api.h's Calibrations
+# comment. 0x02/0x05 (old S1/S2 D0_UM) retired 2026-09-27, replaced by the
+# theoretical-baseline + multiplier pair below (Config/config.h's
+# DEFAULT_DISP_S1_D0_THEORETICAL_UM has the Wyler-handbook derivation).
+CALIB_DISP_ATTEN_MILLI          = 0x00   # u32, x1000
+CALIB_DISP_S1_GAIN_MILLI        = 0x01   # u32, x1000
+CALIB_DISP_S1_ZERO_OFFSET_UM    = 0x03   # i32, signed
+CALIB_DISP_S2_GAIN_MILLI        = 0x04   # u32, x1000
+CALIB_DISP_S2_ZERO_OFFSET_UM    = 0x06   # i32, signed
+CALIB_DISP_S1_D0_THEORETICAL_UM = 0x07   # u32, um -- fixed Wyler-derived anchor
+CALIB_DISP_S1_CAL_MULT_MILLI    = 0x08   # u32, x1000 -- "digital calibration" on top of it
+CALIB_DISP_S2_D0_THEORETICAL_UM = 0x09   # u32, um
+CALIB_DISP_S2_CAL_MULT_MILLI    = 0x0A   # u32, x1000
 DBG_LOG_STREAM = 0x00
 
 # Topic groups (CAT_TOPICS = 5) — GET or SUBSCRIBE (4-byte LE interval_ms payload)
@@ -157,6 +171,7 @@ TOPIC_ENV     = 0x00   # BME280 + onboard + external temp
 TOPIC_STATUS  = 0x01   # battery / connections / charging / rails / RTC
 TOPIC_PHASORS = 0x02   # WP10 displacement demod's raw batch phasors
 TOPIC_RAW_DISPLACEMENT = 0x03   # pre-moving-average delta/residual + differential, ~40.7 Hz (2026-09-26/27)
+TOPIC_SIGNAL_DIAG = 0x04   # amplitude/phase, all 4 channels + Wyler theoretical tilt (2026-09-27)
 
 
 def build_interval(ms: int) -> bytes:
@@ -210,6 +225,25 @@ def decode_topic_raw_displacement(d: bytes):
     return dict(delta1_mm_raw=d1, residual1=r1, delta2_mm_raw=d2, residual2=r2,
                 quality1_ok=bool(q1), quality2_ok=bool(q2),
                 delta_diff_mm_raw=ddiff, quality_diff_ok=bool(qdiff))
+
+
+def decode_topic_signal_diag(d: bytes):
+    """Topic groups 0x04 (2026-09-27): amplitude (RMS + peak-to-peak, mV,
+    referred to the ADC pin at each channel's own PGA) and phase for all 4
+    raw channels (order B, A, S1, S2 -- matches Topic 0x02's phasors), plus
+    a Wyler-handbook-only theoretical tilt estimate for S1/S2 (20uV RMS =
+    1um/m, independent of atten/gain/d0/cal_mult entirely). Granite-plate
+    calibration tool -- see Services/svc_displacement.h's
+    DisplacementSignalDiag comment. Valid only while MEAS_DISP_OK is true."""
+    if len(d) < 56:
+        return None
+    vals = struct.unpack("<14f", d[:56])
+    labels = ("B", "A", "S1", "S2")
+    rms   = dict(zip(labels, vals[0:4]))
+    p2p   = dict(zip(labels, vals[4:8]))
+    phase = dict(zip(labels, vals[8:12]))
+    return dict(rms_mv=rms, p2p_mv=p2p, phase_deg=phase,
+                theoretical_tilt1_mm_per_m=vals[12], theoretical_tilt2_mm_per_m=vals[13])
 
 
 def decode_phasor_log_entry(d: bytes):

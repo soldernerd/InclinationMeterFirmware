@@ -80,10 +80,22 @@ typedef struct {
      * resources to use that category. */
     int32_t disp_atten_milli;        /* shared A/B attenuator, x1000 (nominal 3.000) */
     int32_t disp_s1_gain_milli;      /* S1 amplifier gain, x1000 (nominal 10.000) */
-    int32_t disp_s1_d0_um;           /* S1 neutral air gap, micrometers (nominal 100) */
+    /* d0 REPLACED 2026-09-27 by a theoretical-baseline + multiplier pair
+     * (config.h's "Displacement sensitivity: theoretical baseline" comment
+     * has the full derivation) -- effective d0_mm = d0_theoretical_um/1000
+     * * cal_mult_milli/1000, computed in Services/svc_displacement.c's
+     * load_sensor_cal(). d0_theoretical is the Wyler-handbook-derived
+     * micrometers-per-x-unit constant (20uV RMS = 1um/m); cal_mult is
+     * "any digital calibration on top of that baseline," starting at
+     * whatever value reproduces the previous empirical d0 exactly (so
+     * this refactor changes NOTHING behaviorally on its own) -- see that
+     * default's own comment for the exact number and its derivation. */
+    int32_t disp_s1_d0_theoretical_um;
+    int32_t disp_s1_cal_mult_milli;
     int32_t disp_s1_zero_offset_um;  /* S1 displacement zero calibration, micrometers, signed */
     int32_t disp_s2_gain_milli;      /* S2 amplifier gain, x1000 */
-    int32_t disp_s2_d0_um;           /* S2 neutral air gap, micrometers */
+    int32_t disp_s2_d0_theoretical_um;
+    int32_t disp_s2_cal_mult_milli;
     int32_t disp_s2_zero_offset_um;  /* S2 displacement zero calibration, micrometers, signed */
 } DeviceSettings;
 

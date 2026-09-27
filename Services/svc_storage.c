@@ -184,10 +184,12 @@ static void fill_default_settings(DeviceSettings *s)
     /* Displacement calibration page (WP10) */
     s->disp_atten_milli         = DEFAULT_DISP_ATTEN_MILLI;
     s->disp_s1_gain_milli       = DEFAULT_DISP_S1_GAIN_MILLI;
-    s->disp_s1_d0_um            = DEFAULT_DISP_S1_D0_UM;
+    s->disp_s1_d0_theoretical_um = DEFAULT_DISP_S1_D0_THEORETICAL_UM;
+    s->disp_s1_cal_mult_milli   = DEFAULT_DISP_S1_CAL_MULT_MILLI;
     s->disp_s1_zero_offset_um   = DEFAULT_DISP_S1_ZERO_OFFSET_UM;
     s->disp_s2_gain_milli       = DEFAULT_DISP_S2_GAIN_MILLI;
-    s->disp_s2_d0_um            = DEFAULT_DISP_S2_D0_UM;
+    s->disp_s2_d0_theoretical_um = DEFAULT_DISP_S2_D0_THEORETICAL_UM;
+    s->disp_s2_cal_mult_milli   = DEFAULT_DISP_S2_CAL_MULT_MILLI;
     s->disp_s2_zero_offset_um   = DEFAULT_DISP_S2_ZERO_OFFSET_UM;
 }
 

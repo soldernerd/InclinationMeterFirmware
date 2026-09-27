@@ -982,3 +982,74 @@ the API unaffected (64/64/64 target reached, zero timeout, ~2.7s). The LIVE-scre
 button binding and its on-screen feedback are code-reviewed but **not yet visually
 confirmed on the physical panel** (needs the user's own eyes on the display + a real
 knob press) -- same caveat this project routinely carries for display-only changes.
+
+## Signal diagnostics screen + Wyler theoretical baseline (2026-09-27, fw 0.10.53)
+
+Two changes for tonight's granite-plate calibration, both requested directly.
+
+**1. DIAGNOSTICS screen** (`App/app_display.c`'s `draw_diagnostics_screen()`, a new
+`UI_SCREEN_DIAGNOSTICS` in the LEFT-encoder screen cycle) shows amplitude (RMS +
+peak-to-peak) and phase for all 4 raw ADC channels (B, A, S1, S2) -- the calibration tool
+for the two Wyler sensors' own "zero" and "gain" trim pots. S1/S2 shown in microvolts
+(their signal is small enough that millivolt resolution would hide exactly the digits a
+pot adjustment needs), B/A in millivolts. Also exposed over the API as Topic groups
+`0x5/0x04` (`docs/api-reference.md`) so the same numbers can be logged from a laptop at
+the plate, not just read off the small on-device screen.
+
+Math (`Services/svc_displacement.c`'s `svc_displacement_get_signal_diag()`): inverts
+`math_phasor.c`'s per-cycle scale (one cycle's `i_sum/q_sum = 65536*A_peak_code*cos/sin(phi)`,
+config.h's `DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG` comment has the same derivation) to
+get back to a peak ADC code, then the ADS131M04's own LSB size
+(`2.4V/PGA/ADS131M04_CODE_MAX`) to get millivolts AT THE ADC PIN -- i.e. after each
+channel's own PGA (16 for S1/S2, 1 for A/B), which is the right reference point for
+watching a physical trim pot's effect.
+
+**2. Theoretical baseline, replacing the empirical D0_UM.** User's framing: "we
+empirically added a gain of 7000x the original value. Now the Wyler handbook gives us
+the precise (if theoretical) answer: 20uV RMS means 1um/m. Implement this as a baseline,
+any digital calibration should just be a multiplier to this theoretical baseline."
+
+**Derivation:** `delta_mm = 2*d0*(x_re-0.5)` is meant to read directly in mm/m (this
+project's own established convention). The Wyler spec gives an INDEPENDENT tilt estimate
+for the same batch, computed directly from S's own measured RMS amplitude (the
+diagnostics screen above) with zero dependency on atten/gain/(A-B) at all:
+`tilt_theoretical_mm_per_m = S_rms_mV / 20`. Solving for the `d0` that would make THIS
+SAME batch's `x_re` reproduce that tilt exactly: `d0_theoretical = tilt_theoretical /
+(2*(x_re-0.5))` -- exactly how the old `d0=700mm` was derived too (empirically, from one
+known physical displacement), just with the Wyler handbook as the reference instead of a
+paper-shim test.
+
+**Computed from the one real dataset available** (`Testing/2026-09-25_gain_sizing_bulk_capture/data/gain16_check_pga16.csv`,
+PGA=16, matching current hardware -- an uncontrolled bench tilt, not a certified
+reference): `d0_theoretical` = 439mm (S1), 495mm (S2). **This is a genuinely useful
+cross-check on its own**: two completely independent calibration methods (a physical
+paper-shim test vs. a manufacturer's handbook spec) landing within 1.4-1.6x of each
+other, not an order of magnitude apart, is a reassuring sign neither is wildly wrong.
+
+**Implementation** (`system_state.h`, `Config/config.h`, `Services/svc_displacement.c`'s
+`load_sensor_cal()`): `disp_s1/s2_d0_um` REPLACED by `disp_s1/s2_d0_theoretical_um`
+(fixed, Wyler-derived anchor) and `disp_s1/s2_cal_mult_milli` ("any digital calibration on
+top of that baseline" -- literally the user's own words). `effective_d0 = d0_theoretical *
+cal_mult`. **`cal_mult` defaults were chosen to reproduce the OLD empirical d0=700mm
+exactly** (1.595x for S1, 1.414x for S2) -- this refactor changes NOTHING behaviorally on
+its own; it makes the existing calibration's distance from pure theory a single, always-
+readable number instead of an opaque 700mm constant. EEPROM version bumped
+(`EEPROM_DISPLACEMENT_SETTINGS_VERSION` 0x0004->0x0005, a struct layout change). API:
+Calibrations `0x2/0x02` and `0x2/0x05` (old D0_UM) retired, replaced by `0x07`-`0x0A`
+(theoretical + mult, per sensor) -- see `docs/api-reference.md`.
+
+**Tonight's actual job:** the granite plate gives a REAL, known reference tilt --
+compare the device's `delta1/2_mm` (or, better, `delta_diff_mm` -- see the differential
+section above) against that known value, then adjust `cal_mult` (not `d0_theoretical`,
+which stays fixed as the traceable anchor) until they agree. The DIAGNOSTICS screen's
+`theoretical_tilt1/2_mm_per_m` gives a live, independent second opinion at the same time,
+computed straight from the Wyler spec with no calibration constants involved at all.
+
+**Bench-verified (fw 0.10.53):** build clean (zero warnings). New Calibrations fields
+read back the correct new defaults (439000/1595/495000/1414) after the EEPROM version
+bump; old 0x02/0x05 correctly return `UNKNOWN_RESOURCE`. Topic `0x5/0x04` decodes
+correctly (B/A ~885-893mV RMS, S1/S2 ~34-39mV RMS at the bench's current, un-leveled
+tilt -- consistent with earlier session findings); `theoretical_tilt1/2` computed live
+alongside `delta1/2_mm` for direct comparison, exactly as intended. **Not yet visually
+confirmed on the physical panel** -- same open caveat as every other display-only change
+this session.

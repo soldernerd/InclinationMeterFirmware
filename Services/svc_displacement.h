@@ -182,6 +182,33 @@ float svc_displacement_get_delta_diff_mm_raw(void);
  * (Services/svc_api.c). */
 void svc_displacement_get_phasors(DisplacementPhasors *out);
 
+/* --- Signal diagnostics (2026-09-27) --- amplitude (RMS + peak-to-peak,
+ * referred to the ADC pin -- i.e. AFTER each channel's own PGA, so S1/S2
+ * already reflect their PGA=16 the same way A/B's PGA=1 needs no further
+ * adjustment) and phase for the latest completed batch's 4 raw phasors.
+ * Granite-plate calibration tool: the Wyler sensors' own "zero" and "gain"
+ * trim pots are adjusted while watching these numbers directly, in real
+ * physical units, instead of the derived delta_mm (App/app_display.c's
+ * DIAGNOSTICS screen, Services/svc_api.c's Topic groups resource). All
+ * amplitudes in millivolts (App/app_display.c picks per-channel display
+ * units -- microvolts for S1/S2, millivolts for A/B). theoretical_tilt1/2
+ * are the Wyler-handbook-only estimate (config.h's
+ * DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M: 20uV RMS = 1um/m, applied
+ * directly to rms_mv[2]/rms_mv[3] -- S1/S2's own RMS amplitude), computed
+ * with NO dependency on atten/gain/d0/cal_mult at all -- an independent
+ * cross-check to compare against delta1_mm/delta2_mm side by side. Same
+ * validity contract as the other getters (meaningless before the first
+ * batch / while !get_ok()). */
+typedef struct {
+    float rms_mv[4];         /* order: B, A, S1, S2 -- matches DisplacementPhasors */
+    float p2p_mv[4];
+    float phase_deg[4];      /* atan2(q,i), degrees, -180..+180 */
+    float theoretical_tilt1_mm_per_m;   /* from rms_mv[2] (S1) via the Wyler constant */
+    float theoretical_tilt2_mm_per_m;   /* from rms_mv[3] (S2) */
+} DisplacementSignalDiag;
+
+void svc_displacement_get_signal_diag(DisplacementSignalDiag *out);
+
 /* Call alongside svc_displacement_update() from the scheduler. If the
  * acquisition driver (Drivers_App/drv_ads131m04.c) has latched an
  * integrity fault (lost/duplicated conversion, ring overrun, or lost

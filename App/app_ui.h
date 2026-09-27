@@ -8,6 +8,12 @@ typedef enum {
     UI_SCREEN_LIVE = 0,
     UI_SCREEN_STATUS,
     UI_SCREEN_SETTINGS,
+    UI_SCREEN_DIAGNOSTICS,   /* 2026-09-27: granite-plate calibration tool --
+                                * amplitude/phase for all 4 raw ADC channels,
+                                * App/app_display.c's draw_diagnostics_screen().
+                                * Left-encoder rotation cycles into this screen
+                                * automatically (next_screen()/prev_screen() in
+                                * App/app_ui.c use UI_SCREEN_COUNT generically). */
     UI_SCREEN_COUNT,
 } UiScreen;
 

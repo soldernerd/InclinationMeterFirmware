@@ -259,22 +259,35 @@ force-charge had never been armed; this only cancels the manual override.
 Sensor-correction constants for the WP10 displacement path — distinct
 from Settings (0x3), which is operational/behavioral config. All fields
 are **4-byte payload** (`i32` on the wire, LE), regardless of sign.
-**None of these values are independently meaningful physical quantities
-yet** — `d0_um` in particular is a coarse software scale factor standing
-in for a still-missing real gain/d0 calibration against a certified
-reference (it does not represent a literal sensor air gap). Treat these
-as tuning knobs, not calibrated physical constants, until a proper bench
-calibration is done.
+
+**2026-09-27: `d0` is no longer a directly-settable value.** It used to be
+a single opaque software scale factor (`d0_um`, tuned empirically from a
+paper-shim test — see the effective sensitivity's own history if curious).
+It's now the **product of a theoretical baseline and a digital calibration
+multiplier**: `effective_d0_mm = d0_theoretical_um/1000 * cal_mult_milli/1000`.
+`d0_theoretical` is derived from the Wyler handbook's own spec (20µV RMS at
+the sensor's own output = 1µm/m of tilt — see
+`docs/wp10_displacement.md`'s "Displacement sensitivity: theoretical
+baseline" section for the full derivation) and is meant to be a fixed,
+traceable anchor, not something you tune casually. `cal_mult` **is** "any
+digital calibration on top of that baseline" — this is the field to adjust
+after comparing the device against a known reference tilt (e.g. tonight's
+granite-plate session): if the device reads high by some factor, divide
+`cal_mult` by that factor (or multiply if it reads low).
 
 | res | opcode (GET) | field | range |
 |---|---|---|---|
 | 0x00 | `0x0200` | `disp_atten_milli` — shared A/B attenuator, x1000 (nominal 3.000) | 100…100000 |
 | 0x01 | `0x0201` | `disp_s1_gain_milli` — S1 amplifier gain, x1000 (nominal 160.000 as of the PGA=16 bump) | 100…1000000 |
-| 0x02 | `0x0202` | `disp_s1_d0_um` — S1 scale factor, micrometers (NOT a literal air gap — see above) | 1…2000000 |
+| ~~0x02~~ | — | **retired** (`disp_s1_d0_um`) — replaced by 0x07/0x08 below | — |
 | 0x03 | `0x0203` | `disp_s1_zero_offset_um` — S1 zero calibration, micrometers, signed | −5000…5000 |
 | 0x04 | `0x0204` | `disp_s2_gain_milli` — S2 amplifier gain, x1000 | 100…1000000 |
-| 0x05 | `0x0205` | `disp_s2_d0_um` — S2 scale factor, micrometers | 1…2000000 |
+| ~~0x05~~ | — | **retired** (`disp_s2_d0_um`) — replaced by 0x09/0x0A below | — |
 | 0x06 | `0x0206` | `disp_s2_zero_offset_um` — S2 zero calibration, micrometers, signed | −5000…5000 |
+| 0x07 | `0x0207` | `disp_s1_d0_theoretical_um` — S1 Wyler-derived baseline, micrometers (fixed anchor) | 1…2000000 |
+| 0x08 | `0x0208` | `disp_s1_cal_mult_milli` — S1 multiplier on top of it, x1000 (**the tuning knob**) | 10…1000000 |
+| 0x09 | `0x0209` | `disp_s2_d0_theoretical_um` — S2 Wyler-derived baseline, micrometers | 1…2000000 |
+| 0x0A | `0x020A` | `disp_s2_cal_mult_milli` — S2 multiplier, x1000 (**the tuning knob**) | 10…1000000 |
 
 - **GET** (`0x02xx`): payload none → `[OK][i32 LE value]`.
 - **SET** (`0x12xx`): payload = 4-byte `i32` LE value. `BAD_LENGTH` if not
@@ -419,6 +432,36 @@ differential reading if EITHER input is bad. A host doing its own
 averaging (rather than using the triggered precision measurement, which
 already does this) should discard or downweight batches where the
 relevant `quality*_ok` is 0.
+
+### `0x5/0x04` — Signal diagnostics  → GET `0x0504`, SUBSCRIBE `0x3504` (56 B payload)
+
+**Granite-plate calibration tool (2026-09-27).** Amplitude (RMS and
+peak-to-peak, mV, referred to the ADC pin at each channel's own PGA) and
+phase for all 4 raw channels, plus a Wyler-handbook-only theoretical tilt
+estimate for S1/S2 — the two Wyler sensors' own "zero" and "gain" trim pots
+are adjusted while watching THESE numbers directly (real physical units at
+the actual measurement point), not the derived `delta_mm`. Valid only
+while Measurements `0x0D` (disp_ok) is true. All `f32` LE, order B, A, S1,
+S2 (matching Topic `0x5/0x02`'s phasors):
+
+| off | type | field |
+|---|---|---|
+| 0 | f32×4 | `rms_mv[4]` — B, A, S1, S2 |
+| 16 | f32×4 | `p2p_mv[4]` |
+| 32 | f32×4 | `phase_deg[4]` — `atan2(q,i)`, −180…+180 |
+| 48 | f32 | `theoretical_tilt1_mm_per_m` — from S1's own `rms_mv`: `S_rms_mV / 20` (20µV RMS = 1µm/m), independent of atten/gain/d0/cal_mult entirely |
+| 52 | f32 | `theoretical_tilt2_mm_per_m` — same, for S2 |
+
+**Zeroing a sensor:** with the instrument level, adjust that sensor's
+"zero" pot until its `rms_mv`/`p2p_mv` reads as close to 0 as it will go.
+**Setting gain:** at a known reference tilt (e.g. a certified shim or the
+granite plate's own reference), the sensor's own handbook says its output
+should read `20µV RMS × known_tilt_um_per_m` — adjust the "gain" pot (or
+derive a `cal_mult` correction — see the Calibrations `0x2` section above)
+until it does. `theoretical_tilt1/2_mm_per_m` do this arithmetic for you
+already; compare them directly against Measurements `0x09`/`0x0B`
+(`delta1_mm`/`delta2_mm`) to see how far the CURRENT digital calibration is
+from pure theory.
 
 **Absolute vs differential (2026-09-27):** the device supports two physical
 configurations — one sensor connected (absolute reading) or both (S1 and

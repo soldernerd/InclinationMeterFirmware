@@ -382,12 +382,25 @@ typedef enum {
  *                            quality1_ok AND quality2_ok on this same
  *                            batch: exclude the differential reading if
  *                            EITHER input is bad)
+ *
+ * 0x04 Signal diagnostics -- WP10 granite-plate calibration tool
+ * (2026-09-27, Services/svc_displacement.h's DisplacementSignalDiag
+ * comment has the full reasoning). Amplitude (RMS + peak-to-peak, mV,
+ * referred to the ADC pin at each channel's own PGA) and phase for all 4
+ * raw phasors, plus a Wyler-handbook-only theoretical tilt estimate for
+ * S1/S2 (independent of atten/gain/d0/cal_mult entirely). 56 B, all
+ * float32 LE, valid only while Measurements 0x0D (disp_ok) is true, order
+ * B/A/S1/S2 (matching Topic 0x02's phasors and DisplacementPhasors):
+ *   float rms_mv[4], p2p_mv[4], phase_deg[4]   (B, A, S1, S2)
+ *   float theoretical_tilt1_mm_per_m           (from S1's own rms_mv)
+ *   float theoretical_tilt2_mm_per_m           (from S2's own rms_mv)
  */
 #define API2_RES_TOPIC_ENV              0x00U
 #define API2_RES_TOPIC_STATUS           0x01U
 #define API2_RES_TOPIC_PHASORS          0x02U
 #define API2_RES_TOPIC_RAW_DISPLACEMENT 0x03U
-#define API2_TOPIC_SLOTS        4U          /* direct-indexed by resource id */
+#define API2_RES_TOPIC_SIGNAL_DIAG      0x04U
+#define API2_TOPIC_SLOTS        5U          /* direct-indexed by resource id */
 
 /* ---------------- Calibrations (0x2: GET, SET) ----------------
  * Sensor-correction constants — structurally identical to Settings
@@ -399,21 +412,31 @@ typedef enum {
  * gaps to preserve.
  *
  * Displacement (Services/svc_displacement.c) — milli-units (x1000) for
- * the two dimensionless ratios, micrometers for the two lengths, not
+ * the dimensionless ratios/multipliers, micrometers for the lengths, not
  * raw floats (see system_state.h's comment on these DeviceSettings
  * fields for why). All u32 payload (4 bytes), int32 signed for the
- * offsets. D0_UM's default was bumped 1000x 2026-09-26 as a coarse
- * sensitivity fix standing in for a still-missing gain calibration --
- * see Config/config.h's DEFAULT_DISP_S1_D0_UM comment; its wire bounds
- * (Services/svc_api.c's s_calibration_fields[]) widened to match, so it
- * no longer represents a literal sensor air gap in mm. */
+ * offsets.
+ *
+ * 0x02/0x05 (S1/S2 D0_UM) RETIRED 2026-09-27, replaced by 0x07-0x0A below
+ * -- a directly-settable "d0" no longer exists; it's now the PRODUCT of a
+ * theoretical baseline (traceable to the Wyler handbook's 20uV RMS = 1um/m
+ * spec) and a digital calibration multiplier, so "any digital calibration
+ * is just a multiplier on top of the theoretical baseline" is visible on
+ * the wire, not just in firmware source. See Config/config.h's
+ * DEFAULT_DISP_S1_D0_THEORETICAL_UM comment for the full derivation. Gaps
+ * stay so 0x00/0x01/0x03/0x04/0x06 keep their numbers, same convention
+ * Settings (0x3) already uses for its own retired resources. */
 #define API2_RES_CALIB_DISP_ATTEN_MILLI        0x00U   /* shared A/B attenuator, x1000 */
 #define API2_RES_CALIB_DISP_S1_GAIN_MILLI      0x01U   /* S1 amplifier gain, x1000 */
-#define API2_RES_CALIB_DISP_S1_D0_UM           0x02U   /* S1 neutral air gap, um (see 1000x-bump note above) */
+/* 0x02 retired (disp_s1_d0_um) */
 #define API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM  0x03U   /* S1 zero calibration, um, signed */
 #define API2_RES_CALIB_DISP_S2_GAIN_MILLI      0x04U   /* S2 amplifier gain, x1000 */
-#define API2_RES_CALIB_DISP_S2_D0_UM           0x05U   /* S2 neutral air gap, um */
+/* 0x05 retired (disp_s2_d0_um) */
 #define API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM  0x06U   /* S2 zero calibration, um, signed */
+#define API2_RES_CALIB_DISP_S1_D0_THEORETICAL_UM 0x07U   /* S1 Wyler-derived baseline, um -- fixed anchor, not meant to be tuned casually */
+#define API2_RES_CALIB_DISP_S1_CAL_MULT_MILLI    0x08U   /* S1 "digital calibration" multiplier on top of it, x1000 */
+#define API2_RES_CALIB_DISP_S2_D0_THEORETICAL_UM 0x09U   /* S2 Wyler-derived baseline, um */
+#define API2_RES_CALIB_DISP_S2_CAL_MULT_MILLI    0x0AU   /* S2 multiplier, x1000 */
 
 /* ---------------- Settings (0x3: GET, SET) ----------------
  * Resource IDs are stable wire values, not a dense sequence. 0x01 and

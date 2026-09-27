@@ -171,6 +171,16 @@ typedef struct {
                                   * absolute channel, is the dominant
                                   * measurement strategy. Same "empty means
                                   * don't draw" convention as disp2_line. */
+    char diag_line[4][96];      /* DIAGNOSTICS screen (2026-09-27), one row
+                                   * per raw channel (B, A, S1, S2) -- see
+                                   * draw_diagnostics_screen(). Only
+                                   * populated/drawn while that screen is
+                                   * shown (same "only checked while its own
+                                   * screen is active" convention as
+                                   * uptime_s/displacement_tick above). */
+    char diag_theory_line[96];  /* Wyler-handbook theoretical tilt for S1/S2,
+                                   * for direct comparison against the LIVE
+                                   * screen's S1/S2/Diff readings. */
     char precision_line[40];   /* Triggered precision measurement status
                                   * (2026-09-27, right-knob press on LIVE --
                                   * see app_ui.c). Empty means "nothing to
@@ -258,6 +268,35 @@ static void format_displacement_mm_4dp(char *buf, size_t bufsz, float mm)
     snprintf(buf, bufsz, "%s%ld.%04ld", sign < 0 ? "-" : "+", (long)(a / 10000), (long)(a % 10000));
 }
 
+/* ---- DIAGNOSTICS screen format helpers (2026-09-27) ----
+ * Amplitude (RMS/peak-to-peak) is always >= 0 -- no sign handling needed,
+ * unlike format_displacement_mm()'s signed delta. */
+static void format_amplitude_mv(char *buf, size_t bufsz, float mv)
+{
+    int32_t hundredths = (int32_t)(mv * 100.0f + 0.5f);
+    if (hundredths < 0) { hundredths = 0; }   /* shouldn't happen (it's a magnitude), but never print garbage */
+    snprintf(buf, bufsz, "%ld.%02ld", (long)(hundredths / 100), (long)(hundredths % 100));
+}
+
+/* Same magnitude, shown in microvolts instead of millivolts -- S1/S2's
+ * signal is small enough (Wyler spec: 20uV RMS per um/m) that millivolt
+ * resolution would hide exactly the digits a zero/gain pot adjustment
+ * needs to watch. */
+static void format_amplitude_uv(char *buf, size_t bufsz, float mv)
+{
+    int32_t uv = (int32_t)(mv * 1000.0f + 0.5f);
+    if (uv < 0) { uv = 0; }
+    snprintf(buf, bufsz, "%ld", (long)uv);
+}
+
+static void format_phase_deg(char *buf, size_t bufsz, float deg)
+{
+    int32_t tenths = (int32_t)(deg * 10.0f + (deg >= 0.0f ? 0.5f : -0.5f));
+    int sign = (tenths < 0) ? -1 : 1;
+    int32_t a = tenths * sign;
+    snprintf(buf, bufsz, "%s%ld.%01ld", sign < 0 ? "-" : "+", (long)(a / 10), (long)(a % 10));
+}
+
 /* ---- top bar ---- */
 
 static void draw_top_bar(void)
@@ -296,7 +335,7 @@ static void draw_top_bar(void)
 
 static void draw_screen_indicator(UiScreen current)
 {
-    static const char *labels[UI_SCREEN_COUNT] = { "LIVE", "STATUS", "SETTINGS" };
+    static const char *labels[UI_SCREEN_COUNT] = { "LIVE", "STATUS", "SETTINGS", "DIAG" };
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
 
     /* Lay out evenly across the width */
@@ -545,6 +584,30 @@ static void draw_settings_screen(void)
     }
 }
 
+/* ---- DIAGNOSTICS screen (2026-09-27) ---- */
+
+/* Granite-plate calibration tool: raw amplitude (RMS + peak-to-peak) and
+ * phase for all 4 ADC channels, plus a Wyler-handbook-only theoretical
+ * tilt estimate for S1/S2 -- see Services/svc_displacement.h's
+ * DisplacementSignalDiag comment. s_last.diag_line[]/diag_theory_line are
+ * pre-formatted once per redraw in snapshot_capture(), not here -- same
+ * reasoning as draw_live_screen()'s S1/S2/Diff lines. */
+static void draw_diagnostics_screen(void)
+{
+    u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
+    u8g2_DrawUTF8(&s_u8g2, 8, 38, "Signal Diagnostics");
+
+    u8g2_uint_t y = 62;
+    for (uint8_t ch = 0; ch < 4U; ++ch) {
+        u8g2_DrawUTF8(&s_u8g2, 8, y, s_last.diag_line[ch]);
+        y += 20;
+    }
+
+    if (s_last.diag_theory_line[0] != '\0') {
+        u8g2_DrawUTF8(&s_u8g2, 8, y + 10, s_last.diag_theory_line);
+    }
+}
+
 /* ---- low-battery overlay (carried over from WP2) ---- */
 
 static void draw_low_battery_screen(uint16_t vbat_mv)
@@ -585,7 +648,8 @@ static bool snapshot_changed(void)
         || s_last.edit_value       != g_ui_state.edit_value
         || (g_ui_state.current_screen == UI_SCREEN_STATUS
             && s_last.uptime_s != hal_systick_get_ms() / 1000U)
-        || (g_ui_state.current_screen == UI_SCREEN_LIVE
+        || ((g_ui_state.current_screen == UI_SCREEN_LIVE
+             || g_ui_state.current_screen == UI_SCREEN_DIAGNOSTICS)
             && s_last.displacement_tick != hal_systick_get_ms() / LIVE_DISPLACEMENT_REFRESH_MS);
 }
 
@@ -632,6 +696,50 @@ static void snapshot_capture(void)
         snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "-- not running --");
         s_last.disp2_line[0] = '\0';
         s_last.disp_diff_line[0] = '\0';
+    }
+
+    /* DIAGNOSTICS screen (2026-09-27) -- only computed while that screen is
+     * shown (same "only checked while its own screen is active" convention
+     * as uptime_s/displacement_tick), same reasoning as the LIVE-screen
+     * formatting above: do the float work once per redraw, not once per
+     * band. See Services/svc_displacement.h's DisplacementSignalDiag
+     * comment for what these numbers mean and why S1/S2 show microvolts
+     * while B/A show millivolts. */
+    if (g_ui_state.current_screen == UI_SCREEN_DIAGNOSTICS) {
+        if (svc_displacement_get_ok()) {
+            DisplacementSignalDiag diag;
+            svc_displacement_get_signal_diag(&diag);
+            static const char *const ch_labels[4] = { "B", "A", "S1", "S2" };
+            for (uint8_t ch = 0; ch < 4U; ++ch) {
+                bool micro = (ch >= 2U);   /* S1/S2 (index 2,3) shown in uV, B/A in mV */
+                char rms_s[16], p2p_s[16], ph_s[16];
+                format_phase_deg(ph_s, sizeof ph_s, diag.phase_deg[ch]);
+                if (micro) {
+                    format_amplitude_uv(rms_s, sizeof rms_s, diag.rms_mv[ch]);
+                    format_amplitude_uv(p2p_s, sizeof p2p_s, diag.p2p_mv[ch]);
+                    snprintf(s_last.diag_line[ch], sizeof s_last.diag_line[ch],
+                             "%-2s RMS %5suV  P2P %5suV  Ph %6s",
+                             ch_labels[ch], rms_s, p2p_s, ph_s);
+                } else {
+                    format_amplitude_mv(rms_s, sizeof rms_s, diag.rms_mv[ch]);
+                    format_amplitude_mv(p2p_s, sizeof p2p_s, diag.p2p_mv[ch]);
+                    snprintf(s_last.diag_line[ch], sizeof s_last.diag_line[ch],
+                             "%-2s RMS %7smV  P2P %7smV  Ph %6s",
+                             ch_labels[ch], rms_s, p2p_s, ph_s);
+                }
+            }
+            char t1[16], t2[16];
+            format_displacement_mm(t1, sizeof t1, diag.theoretical_tilt1_mm_per_m);
+            format_displacement_mm(t2, sizeof t2, diag.theoretical_tilt2_mm_per_m);
+            snprintf(s_last.diag_theory_line, sizeof s_last.diag_theory_line,
+                     "Theory S1 %smm/m  S2 %smm/m", t1, t2);
+        } else {
+            for (uint8_t ch = 0; ch < 4U; ++ch) {
+                s_last.diag_line[ch][0] = '\0';
+            }
+            snprintf(s_last.diag_line[0], sizeof s_last.diag_line[0], "-- not running --");
+            s_last.diag_theory_line[0] = '\0';
+        }
     }
 
     /* Triggered precision measurement status (2026-09-27) -- see app_ui.c's
@@ -713,10 +821,11 @@ static void draw_active_screen(void)
     } else {
         draw_top_bar();
         switch (s_last.screen) {
-            case UI_SCREEN_LIVE:     draw_live_screen();     break;
-            case UI_SCREEN_STATUS:   draw_status_screen();   break;
-            case UI_SCREEN_SETTINGS: draw_settings_screen(); break;
-            default:                                          break;
+            case UI_SCREEN_LIVE:        draw_live_screen();        break;
+            case UI_SCREEN_STATUS:      draw_status_screen();      break;
+            case UI_SCREEN_SETTINGS:    draw_settings_screen();    break;
+            case UI_SCREEN_DIAGNOSTICS: draw_diagnostics_screen(); break;
+            default:                                                break;
         }
         draw_screen_indicator(s_last.screen);
     }

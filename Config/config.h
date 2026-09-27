@@ -144,7 +144,7 @@
                                                          rest of the REV A sensor
                                                          stack; first REV B use of
                                                          this freed page. */
-#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0004  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0005  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
                                                          S2_D0_UM bumped 1000x (sensitivity
                                                          fix, see that comment) -- learned
                                                          from the battery-scale bug earlier
@@ -168,7 +168,17 @@
                                                          160000) to compensate for the
                                                          ADS131M04's own PGA going to 16 on
                                                          S1/S2 (Drivers_App/drv_ads131m04.c) --
-                                                         same propagation reasoning again. */
+                                                         same propagation reasoning again.
+                                                         0x0005 (2026-09-27): DISP_S1/S2_D0_UM
+                                                         fields REPLACED by D0_THEORETICAL_UM +
+                                                         CAL_MULT_MILLI (struct layout change,
+                                                         not just a default-value change --
+                                                         see DEFAULT_DISP_S1_D0_THEORETICAL_UM's
+                                                         comment for the Wyler-handbook
+                                                         derivation); defaults chosen to
+                                                         reproduce the old d0=700mm exactly, so
+                                                         this bump changes field layout, not
+                                                         behavior. */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -511,11 +521,65 @@
  * same shape as D0_UM's bumps above but for a different reason. */
 #define DEFAULT_DISP_ATTEN_MILLI            3000    /* atten = 3.000 */
 #define DEFAULT_DISP_S1_GAIN_MILLI        160000    /* gain  = 160.000 (10.000 x 16, see comment above) */
-#define DEFAULT_DISP_S1_D0_UM             700000    /* d0    = 700.000 mm (see comment above) */
+
+/* --- Displacement sensitivity: theoretical baseline (2026-09-27) ---
+ * D0_UM RETIRED, replaced by a theoretical-baseline + calibration-multiplier
+ * pair: effective d0_mm = d0_theoretical_um/1000 * cal_mult_milli/1000
+ * (Services/svc_displacement.c's load_sensor_cal()). User's own framing:
+ * "the Wyler handbook gives us the precise (if theoretical) answer: 20uV
+ * RMS means 1um/m. Implement this as a baseline, any digital calibration
+ * should just be a multiplier to this theoretical baseline."
+ *
+ * DERIVATION: for a given batch, delta_mm = 2*d0*(x_re-0.5) is meant to
+ * read directly in mm/m (this project's own established convention -- the
+ * ±1mm/m PGA-sizing target, the precision-measurement target, etc. all
+ * treat it that way). Wyler's spec (20uV RMS per sensor's own output, per
+ * um/m of tilt) gives an INDEPENDENT estimate of the same batch's tilt,
+ * computed directly from S's own measured RMS amplitude at the ADC pin
+ * (Services/svc_displacement.c's svc_displacement_get_signal_diag(),
+ * App/app_display.c's DIAGNOSTICS screen) with NO dependency on k/atten/
+ * gain/(A-B) at all:
+ *   tilt_theoretical_mm_per_m = S_rms_uV / 20 / 1000 = S_rms_mV / 20
+ * Solving for the d0 that would make THIS SAME batch's x_re reproduce that
+ * tilt exactly:
+ *   d0_theoretical_mm = tilt_theoretical_mm_per_m / (2*(x_re - 0.5))
+ * This is EXACTLY how the previous d0=700mm was derived too (empirically,
+ * from one known physical displacement) -- same method, but the reference
+ * is Wyler's handbook figure instead of a paper-shim test.
+ *
+ * COMPUTED 2026-09-27 from the one real dataset available (the 2026-09-25
+ * gain-sizing bulk capture, Testing/2026-09-25_gain_sizing_bulk_capture/
+ * data/gain16_check_pga16.csv -- PGA=16, matching current hardware): S1
+ * d0_theoretical ~= 439 mm, S2 ~= 495 mm. This is an UNCONTROLLED BENCH
+ * TILT, not a certified reference -- refine with a real known tilt on the
+ * granite plate before trusting these numbers past "same ballpark as the
+ * old empirical value" (they are: 439/495 vs the old 700mm is a ~1.4-1.6x
+ * gap, not an order of magnitude, which is itself a reassuring cross-check
+ * between two completely independent calibration methods).
+ *
+ * CAL_MULT_MILLI defaults chosen to reproduce the OLD empirical d0=700mm
+ * exactly (700/439=1.595, 700/495=1.414) -- this refactor is a pure
+ * relabeling of the SAME effective sensitivity, not a behavior change, on
+ * its own. Change cal_mult (not d0_theoretical) once real granite-plate
+ * data says the calibration needs adjusting -- d0_theoretical stays fixed
+ * as the traceable, handbook-derived anchor; cal_mult is "how far off
+ * theory we currently know we are," always readable as a single number. */
+#define DEFAULT_DISP_S1_D0_THEORETICAL_UM  439000    /* d0_theoretical = 439.000 mm */
+#define DEFAULT_DISP_S1_CAL_MULT_MILLI        1595    /* 1.595x -- reproduces old d0=700mm */
 #define DEFAULT_DISP_S1_ZERO_OFFSET_UM         0
 #define DEFAULT_DISP_S2_GAIN_MILLI        160000
-#define DEFAULT_DISP_S2_D0_UM             700000
+#define DEFAULT_DISP_S2_D0_THEORETICAL_UM  495000    /* d0_theoretical = 495.000 mm */
+#define DEFAULT_DISP_S2_CAL_MULT_MILLI        1414    /* 1.414x -- reproduces old d0=700mm */
 #define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
+
+/* Wyler handbook constant: 20uV RMS (at the sensor's own S-channel output,
+ * referred to the ADC pin -- i.e. AFTER that channel's own PGA, same
+ * reference point svc_displacement_get_signal_diag() reports) per um/m of
+ * tilt. Used directly (not folded into d0_theoretical above) for the
+ * DIAGNOSTICS screen / API's live "theoretical tilt" readout, so a user
+ * doing a real reference-tilt calibration can compare it side by side with
+ * the device's own delta_mm without needing a calculator. */
+#define DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M   20U
 
 /* --- Displacement zero calibration (180-degree reversal test, 2026-09-25) ---
  * Standard precision-level technique: place the instrument, average its

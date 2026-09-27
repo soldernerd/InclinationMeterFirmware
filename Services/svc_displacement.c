@@ -7,6 +7,7 @@
 #include "system_state.h"
 #include <stddef.h>
 #include <stdbool.h>
+#include <math.h>   /* sqrtf/atan2f -- signal diagnostics (2026-09-27), Services layer float use only */
 
 /* Hot path: MUST be built optimised -- see CMakeLists.txt's pin and
  * Math/math_phasor.c's matching guard. on_sample() runs inside
@@ -446,14 +447,25 @@ static void push_output(uint16_t seq, float delta1, float residual1, float delta
  * codebase -- see config.h's DEFAULT_DISP_* comment. */
 typedef struct {
     float gain;              /* S-channel amplifier gain */
-    float d0_mm;              /* neutral-position air gap, mm */
+    float d0_mm;              /* effective scale factor, mm -- see load_sensor_cal() */
     float zero_offset_mm;    /* displacement zero calibration, mm */
 } SensorCalF;
 
-static void load_sensor_cal(SensorCalF *out, int32_t gain_milli, int32_t d0_um, int32_t zero_offset_um)
+/* d0 (2026-09-27) is now the PRODUCT of a theoretical baseline and a digital
+ * calibration multiplier, not one directly-settable number -- see
+ * config.h's "Displacement sensitivity: theoretical baseline" comment for
+ * the full Wyler-handbook derivation. d0_theoretical_um is what the Wyler
+ * spec's 20uV RMS = 1um/m implies for THIS batch's actual x-sensitivity;
+ * cal_mult_milli is "any digital calibration on top of that baseline" --
+ * defaults to whatever value reproduces the pre-2026-09-27 empirical d0
+ * exactly, so this refactor is a pure relabeling until someone actually
+ * changes cal_mult. */
+static void load_sensor_cal(SensorCalF *out, int32_t gain_milli,
+                             int32_t d0_theoretical_um, int32_t cal_mult_milli,
+                             int32_t zero_offset_um)
 {
     out->gain           = (float)gain_milli / 1000.0f;
-    out->d0_mm          = (float)d0_um / 1000.0f;
+    out->d0_mm          = ((float)d0_theoretical_um / 1000.0f) * ((float)cal_mult_milli / 1000.0f);
     out->zero_offset_mm = (float)zero_offset_um / 1000.0f;
 }
 
@@ -694,9 +706,11 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
 
     SensorCalF s1_cal, s2_cal;
     load_sensor_cal(&s1_cal, g_device_settings.disp_s1_gain_milli,
-                     g_device_settings.disp_s1_d0_um, g_device_settings.disp_s1_zero_offset_um);
+                     g_device_settings.disp_s1_d0_theoretical_um, g_device_settings.disp_s1_cal_mult_milli,
+                     g_device_settings.disp_s1_zero_offset_um);
     load_sensor_cal(&s2_cal, g_device_settings.disp_s2_gain_milli,
-                     g_device_settings.disp_s2_d0_um, g_device_settings.disp_s2_zero_offset_um);
+                     g_device_settings.disp_s2_d0_theoretical_um, g_device_settings.disp_s2_cal_mult_milli,
+                     g_device_settings.disp_s2_zero_offset_um);
 
     SharedCycleTerms shared = {
         .atten      = (float)g_device_settings.disp_atten_milli / 1000.0f,
@@ -819,6 +833,45 @@ void svc_displacement_get_phasors(DisplacementPhasors *out)
     if (out != 0) {
         *out = s_phasors;
     }
+}
+
+/* Peak amplitude (mV, referred to the ADC pin at this channel's own PGA)
+ * from one raw phasor -- inverts math_phasor.c's per-cycle scale
+ * (i_sum/q_sum = 65536*A_peak_code*cos/sin(phi) for one cycle, so a
+ * DISPLACEMENT_BATCH_CYCLES-cycle coherent batch sum is that many times
+ * bigger -- see config.h's DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG comment
+ * for the same derivation) then the ADS131M04's own LSB size
+ * (2.4V/PGA/ADS131M04_CODE_MAX, drv_ads131m04.h). */
+static float phasor_peak_mv(float i, float q, uint8_t pga)
+{
+    float mag       = sqrtf(i * i + q * q);
+    float peak_code = mag / (65536.0f * (float)DISPLACEMENT_BATCH_CYCLES);
+    return peak_code * (2400.0f / (float)pga) / (float)ADS131M04_CODE_MAX;
+}
+
+void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
+{
+    if (out == 0) {
+        return;
+    }
+    const float i[4] = { s_phasors.iB, s_phasors.iA, s_phasors.iS1, s_phasors.iS2 };
+    const float q[4] = { s_phasors.qB, s_phasors.qA, s_phasors.qS1, s_phasors.qS2 };
+    /* B, A at PGA=1; S1, S2 at PGA=16 -- must stay in sync with
+     * Drivers_App/drv_ads131m04.c's GAIN1_REG_VALUE. */
+    const uint8_t pga[4] = { 1U, 1U, 16U, 16U };
+
+    for (uint8_t ch = 0; ch < 4U; ++ch) {
+        float peak_mv    = phasor_peak_mv(i[ch], q[ch], pga[ch]);
+        out->rms_mv[ch]   = peak_mv * 0.70710678f;   /* /sqrt(2) */
+        out->p2p_mv[ch]   = peak_mv * 2.0f;
+        out->phase_deg[ch] = atan2f(q[ch], i[ch]) * (180.0f / 3.14159265f);
+    }
+
+    /* Wyler-handbook-only estimate -- see svc_displacement.h's comment.
+     * 20uV RMS = 1um/m => tilt_mm_per_m = S_rms_uV/20/1000 = S_rms_mV/20
+     * (the uV->mV and um/m->mm/m factors of 1000 cancel exactly). */
+    out->theoretical_tilt1_mm_per_m = out->rms_mv[2] / (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M;
+    out->theoretical_tilt2_mm_per_m = out->rms_mv[3] / (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M;
 }
 
 void svc_displacement_stop(void)
