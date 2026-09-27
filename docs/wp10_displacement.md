@@ -803,3 +803,62 @@ magnitude changing without a matching change in the physical setup.
   `DISPLACEMENT_BATCH_CYCLES` (now 128) + a 4-sample moving average are in, giving a real
   ~12 dB SNR improvement independent of this bug, but the refresh rate itself is
   deliberately still at 2000 ms pending that bug's fix.
+
+## Standard error vs averaging duration -- absolute vs differential (2026-09-27)
+
+Post-hoc statistical analysis of already-archived data (`Testing/`), not a new bench
+test -- answers two questions: ignoring drift, how long an averaging window gets an
+absolute reading's standard error under 1µm (treating the current `d0`-calibrated
+`delta_mm` output numerically as the "1µm/m" target unit, since `d0` was tuned toward a
+±1mm/m range -- **caveat: this is NOT the same as a real inclination-angle calibration**,
+which per this doc's intro is still pending pendulum/flexure characterization); and how
+that changes for a *differential* measurement (one sensor left fixed as a reference,
+the other moved to take readings -- a classic surface-plate comparator scheme).
+Script: `PythonTestCode/stderr_vs_duration_analysis.py`, run against three independent
+archived datasets (2-hour test's baseline hour, the pre-swap and post-swap 10-minute
+streams).
+
+**Method:** rather than trust the textbook SE=σ/√N formula, checked it empirically --
+binned each trace into non-overlapping windows of N samples (N=1..5000, i.e. ~0.06s to
+~280s at the ~18Hz stream rate) and measured the actual std of the bin means, comparing
+against what 1/√N scaling from the per-sample noise (step std/√2, since consecutive
+raw-batch samples showed the strong negative lag-1 autocorrelation -- roughly -0.4 to
+-0.6 -- expected when independent per-batch noise dominates over real signal change
+between adjacent ~56ms samples) would predict.
+
+**Absolute (single-channel) SE does NOT keep improving with more averaging.** All three
+datasets: predicted-vs-actual diverge fast -- by N=1000 (~56-58s) actual std is
+20-70x worse than naive 1/√N prediction. The empirical std instead *plateaus*: ~2.1-2.4µm
+(S1) / ~2.2-2.6µm (S2) in the 2-hour test's calm baseline hour; ~5.0-5.2µm in the
+pre-swap run; a dramatic ~57-60µm in the post-swap run (a large real thermal/settling
+transient after the physical handling dominated that window). **Conclusion: a single
+absolute channel cannot reach sub-1µm/m standard error by averaging longer, under any of
+the three real sessions measured** -- the noise has real power at long timescales
+(consistent with everything else this session found about non-white, partly-shared
+drift), not just short-term white noise that would average away.
+
+**Differential (S1-S2) SE is dramatically better, in all three datasets, and crosses
+under 1µm within roughly a second:**
+
+| dataset | N=1 (~0.06s) | N=20 (~1.1-1.2s) | plateau (N≥500, ~28-280s) |
+|---|---|---|---|
+| 2-hour test baseline hour | 1.90µm | 0.52µm | ~0.44-0.49µm |
+| pre-swap 10min | 6.61µm | 0.85µm | ~0.36-0.49µm |
+| post-swap 10min | 1.84µm | 0.27µm | ~0.16-0.19µm |
+
+Every dataset crosses under the 1µm target by roughly N=10-20 samples (~0.5-1.2s) and
+settles to a plateau 4-10x better than either single channel's own floor. In the
+post-swap run specifically, where a large shared thermal transient made the absolute
+channels' std blow up to ~57-60µm, the differential reading was essentially unaffected
+(~0.16-0.19µm) -- ~300x better -- because that transient was almost entirely common-mode
+between S1 and S2 (matches the tight S1/S2 correlation already established in
+[[wp10-charging-noise-and-drift]] and [[wp10-micro-jump-noise-characterization]]).
+
+**Bottom line:** the target (<1µm/m-equivalent standard error) is not achievable from a
+single absolute reading no matter how long you average, with the AFE as it stands today
+-- but is comfortably (4-10x margin) and quickly (<2s) achievable with a differential
+scheme, because most of the dominant noise/drift is common-mode between S1 and S2 and
+cancels in the difference. Practical implication for a plate-flatness survey: leave one
+sensor head at a fixed reference point and rove the other -- not because it's
+theoretically elegant, but because it's the only one of the two schemes that has
+actually been shown, on three separate real datasets, to hit the target.
