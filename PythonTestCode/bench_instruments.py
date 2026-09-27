@@ -15,6 +15,7 @@ pyvisa.ResourceManager().list_resources()).
 import pyvisa
 
 PSU_RESOURCE = "USB0::0x2A8D::0x0802::MY55506105::0::INSTR"
+DMM_RESOURCE = "USB0::0x2A8D::0x0101::MY54502615::0::INSTR"
 SCOPE_RESOURCE = "TCPIP0::192.168.1.107::inst0::INSTR"
 
 # Bench safety limits agreed for this project -- see docs/bench_instruments.md
@@ -57,6 +58,45 @@ class Psu:
         self.h.write(f"CURR {amps}")
 
     def close(self):
+        """Releases front-panel control back to the user before disconnecting
+        -- SYSTem:LOCal, standard on these Keysight instruments. Closing the
+        VISA session alone does NOT do this (unlike GPIB's REN line, a
+        USBTMC instrument's remote/local state isn't tied to the connection
+        lifetime), so a script that only calls close() leaves the front
+        panel locked out with no obvious way for a human to notice why.
+        Output/settings are unaffected -- this only returns UI control, it
+        doesn't change voltage/current or anything else live."""
+        try:
+            self.h.write("SYST:LOC")
+        except Exception:
+            pass
+        self.h.close()
+
+
+class Dmm:
+    """Keysight 34465A, DC voltage measurement -- this bench's use case
+    (ground-truth reference for battery-ADC calibration sweeps). Read-only,
+    no safety caps needed."""
+
+    def __init__(self, resource=DMM_RESOURCE, rm=None):
+        self.rm = rm or pyvisa.ResourceManager()
+        self.h = self.rm.open_resource(resource)
+        self.h.timeout = 5000
+
+    def idn(self):
+        return self.h.query("*IDN?").strip()
+
+    def measure_vdc(self):
+        return float(self.h.query("MEAS:VOLT:DC?"))
+
+    def close(self):
+        """Releases front-panel control -- see Psu.close()'s comment for why
+        this is needed explicitly (closing the VISA session alone doesn't
+        do it)."""
+        try:
+            self.h.write("SYST:LOC")
+        except Exception:
+            pass
         self.h.close()
 
 
@@ -168,6 +208,13 @@ class Scope:
             f.write(data)
 
     def close(self):
+        """Releases front-panel control -- see Psu.close()'s comment for why
+        this is needed explicitly (closing the VISA session alone doesn't
+        do it)."""
+        try:
+            self.h.write("SYST:LOC")
+        except Exception:
+            pass
         self.h.close()
 
 

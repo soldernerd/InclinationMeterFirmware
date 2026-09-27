@@ -1,10 +1,19 @@
 # Bench instruments — SCPI reference
 
-Two SCPI-controllable instruments live on this bench. Both are driven the
+Three SCPI-controllable instruments live on this bench. All are driven the
 same way: PyVISA + plain SCPI ASCII commands over a VISA resource string.
 The shared Python wrapper is `PythonTestCode/bench_instruments.py`
-(`Psu` + `Scope` classes); `PythonTestCode/scope_label_channels.py` is the
-CLI for the scope's channel-naming problem specifically.
+(`Psu` + `Dmm` + `Scope` classes); `PythonTestCode/scope_label_channels.py` is
+the CLI for the scope's channel-naming problem specifically.
+
+**Every wrapper's `close()` sends `SYSTem:LOCal` before disconnecting**,
+releasing the instrument's front panel back to the user. Closing the VISA
+session alone does NOT do this for a USBTMC instrument (unlike GPIB's REN
+line, remote/local state isn't tied to the connection lifetime) -- without
+it, an instrument stays remote-locked with no obvious front-panel way out
+after a script finishes. Always go through a wrapper's `close()` (or a
+`with`-style pattern that guarantees it runs) rather than calling
+`.h.close()` directly, so this always happens.
 
 ```sh
 pip install pyvisa
@@ -42,6 +51,25 @@ the cap) — belt-and-braces alongside just not doing it.
 script) predates this module and has its own minimal read-only `Psu` —
 it never writes voltage/current, only queries, so there's nothing to
 migrate there; both can coexist.
+
+---
+
+## Keysight 34465A — 6½-digit DMM
+
+| | |
+|---|---|
+| Link | USB (USBTMC) |
+| VISA resource | `USB0::0x2A8D::0x0101::MY54502615::0::INSTR` |
+| Wrapper | `bench_instruments.Dmm` |
+
+Read-only (DC voltage only, this bench's use case so far — e.g. ground-truth
+reference for a battery-ADC calibration sweep against `Psu`). No safety
+caps needed.
+
+| SCPI | wrapper method | notes |
+|---|---|---|
+| `*IDN?` | `idn()` | |
+| `MEAS:VOLT:DC?` | `measure_vdc()` | |
 
 ---
 
