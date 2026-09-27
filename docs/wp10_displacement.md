@@ -1050,6 +1050,6 @@ read back the correct new defaults (439000/1595/495000/1414) after the EEPROM ve
 bump; old 0x02/0x05 correctly return `UNKNOWN_RESOURCE`. Topic `0x5/0x04` decodes
 correctly (B/A ~885-893mV RMS, S1/S2 ~34-39mV RMS at the bench's current, un-leveled
 tilt -- consistent with earlier session findings); `theoretical_tilt1/2` computed live
-alongside `delta1/2_mm` for direct comparison, exactly as intended. **Not yet visually
-confirmed on the physical panel** -- same open caveat as every other display-only change
-this session.
+alongside `delta1/2_mm` for direct comparison, exactly as intended. **Visually confirmed
+on the physical panel by the user 2026-09-27** -- the DIAGNOSTICS screen renders
+correctly.
