@@ -1463,20 +1463,33 @@ static void dispatch_settings(ApiTransport t, uint16_t opcode, uint8_t verb,
 static const SettingsFieldDesc s_calibration_fields[] = {
     SF(API2_RES_CALIB_DISP_ATTEN_MILLI,       SF_UNSIGNED, disp_atten_milli,           100, 100000),
     SF(API2_RES_CALIB_DISP_S1_GAIN_MILLI,     SF_UNSIGNED, disp_s1_gain_milli,         100, 1000000),
-    SF(API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM, SF_SIGNED,   disp_s1_zero_offset_um,   -5000, 5000),
+    SF(API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM, SF_SIGNED,   disp_s1_zero_offset_um,
+       -DISPLACEMENT_ZERO_OFFSET_UM_MAX, DISPLACEMENT_ZERO_OFFSET_UM_MAX),
     SF(API2_RES_CALIB_DISP_S2_GAIN_MILLI,     SF_UNSIGNED, disp_s2_gain_milli,         100, 1000000),
-    SF(API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM, SF_SIGNED,   disp_s2_zero_offset_um,   -5000, 5000),
-    /* Theoretical baseline + calibration multiplier (2026-09-27, replacing
-     * D0_UM -- see Config/config.h's DEFAULT_DISP_S1_D0_THEORETICAL_UM
-     * comment). Bounds on D0_THEORETICAL match the old D0_UM's (this is
-     * the same "not a literal air gap, needs generous headroom" constant,
-     * just derived from the Wyler handbook instead of a paper-shim test).
-     * CAL_MULT's bounds (10..1000000 milli = 0.01x..1000x) match
-     * DISP_ATTEN_MILLI's own "generic milli-ratio" range. */
+    SF(API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM, SF_SIGNED,   disp_s2_zero_offset_um,
+       -DISPLACEMENT_ZERO_OFFSET_UM_MAX, DISPLACEMENT_ZERO_OFFSET_UM_MAX),
+    /* Theoretical baseline + real measured sensitivity (2026-09-27,
+     * replacing D0_UM; sensitivity re-expressed in physical uV/um/m units
+     * 2026-09-29, replacing a bare dimensionless CAL_MULT ratio -- see
+     * Config/config.h's DEFAULT_DISP_S1_D0_THEORETICAL_UM /
+     * DEFAULT_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI comments). Bounds on
+     * D0_THEORETICAL match the old D0_UM's (this is the same "not a
+     * literal air gap, needs generous headroom" constant, just derived
+     * from the Wyler handbook instead of a paper-shim test). Sensitivity's
+     * bounds (100..1000000 milli = 0.1..1000 uV/um/m) are generous headroom
+     * either side of the 20uV nominal spec -- wide enough to never bind in
+     * practice, narrow enough to catch an obviously-wrong SET (e.g. a
+     * value left over from the old ratio convention, where anything under
+     * 100 would have been a plausible ratio but is not a plausible
+     * uV/um/m sensitivity). */
     SF(API2_RES_CALIB_DISP_S1_D0_THEORETICAL_UM, SF_UNSIGNED, disp_s1_d0_theoretical_um,     1, 2000000),
-    SF(API2_RES_CALIB_DISP_S1_CAL_MULT_MILLI,    SF_UNSIGNED, disp_s1_cal_mult_milli,       10, 1000000),
+    SF(API2_RES_CALIB_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI, SF_UNSIGNED, disp_s1_sensitivity_uv_per_um_milli, 100, 1000000),
     SF(API2_RES_CALIB_DISP_S2_D0_THEORETICAL_UM, SF_UNSIGNED, disp_s2_d0_theoretical_um,     1, 2000000),
-    SF(API2_RES_CALIB_DISP_S2_CAL_MULT_MILLI,    SF_UNSIGNED, disp_s2_cal_mult_milli,       10, 1000000),
+    SF(API2_RES_CALIB_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI, SF_UNSIGNED, disp_s2_sensitivity_uv_per_um_milli, 100, 1000000),
+    /* Sign flip on the final reading (2026-09-29) -- see svc_api.h's
+     * API2_RES_CALIB_DISP_S1_INVERT comment. */
+    SF(API2_RES_CALIB_DISP_S1_INVERT,            SF_UNSIGNED, disp_s1_invert,                0, 1),
+    SF(API2_RES_CALIB_DISP_S2_INVERT,            SF_UNSIGNED, disp_s2_invert,                0, 1),
 };
 #define CALIBRATION_FIELD_COUNT (sizeof(s_calibration_fields) / sizeof(s_calibration_fields[0]))
 
@@ -1744,10 +1757,13 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
  * follows -- svc_displacement.c computes the result but never writes
  * settings itself. Called every tick from svc_api_update() so the save
  * happens promptly (usually the very tick step 2 finishes) rather than
- * waiting for a host to poll Raw data 0x03. mm -> um matches
- * dispatch_calibrations()'s existing ZERO_OFFSET_UM bounds (-5000..5000)
- * exactly -- clamped, not rejected, since this is a computed result, not
- * a host-supplied value that should ever be "invalid" in normal use. */
+ * waiting for a host to poll Raw data 0x03. Divides by cal_mult before
+ * storing (2026-09-29) so the persisted value stays valid across future
+ * cal_mult changes -- see svc_displacement.c's load_sensor_cal() comment.
+ * mm -> um matches dispatch_calibrations()'s existing ZERO_OFFSET_UM
+ * bounds (+-DISPLACEMENT_ZERO_OFFSET_UM_MAX, config.h) exactly -- clamped,
+ * not rejected, since this is a computed result, not a host-supplied value
+ * that should ever be "invalid" in normal use. */
 static void zero_cal_apply_if_ready(void)
 {
     float offset1_mm, offset2_mm;
@@ -1765,14 +1781,31 @@ static void zero_cal_apply_if_ready(void)
         svc_log(API2_LOG_WARN, "zero-cal: EEPROM busy, result dropped -- retry the calibration");
         return;
     }
+    /* svc_displacement.c hands back the result in OUTPUT-mm domain (the
+     * same domain as the delta_mm readings it was measured from), but
+     * disp_s1/s2_zero_offset_um is stored in the cal_mult-INDEPENDENT
+     * theoretical domain (load_sensor_cal()'s 2026-09-29 comment) so a
+     * later sensitivity change can't silently invalidate it again. Divide
+     * by the cal_mult active for THIS run before persisting --
+     * svc_displacement_cal_mult_from_sensitivity() is the same formula
+     * load_sensor_cal() uses internally, and sensitivity_uv_per_um_milli
+     * is bounded >= 100 (this file's s_calibration_fields[]), so this can
+     * never divide by zero. */
+    float cal_mult1 = svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s1_sensitivity_uv_per_um_milli);
+    float cal_mult2 = svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s2_sensitivity_uv_per_um_milli);
+    offset1_mm /= cal_mult1;
+    offset2_mm /= cal_mult2;
+
     /* Round to nearest micrometer, not truncate toward zero (a naive
      * cast would silently discard any sub-micrometer correction --
      * e.g. -0.6 um truncates to 0, not -1 -- same rounding
      * App/app_display.c's format_displacement_mm() already uses). */
     int32_t off1_um = (int32_t)(offset1_mm * 1000.0f + (offset1_mm >= 0.0f ? 0.5f : -0.5f));
     int32_t off2_um = (int32_t)(offset2_mm * 1000.0f + (offset2_mm >= 0.0f ? 0.5f : -0.5f));
-    if (off1_um < -5000) off1_um = -5000; else if (off1_um > 5000) off1_um = 5000;
-    if (off2_um < -5000) off2_um = -5000; else if (off2_um > 5000) off2_um = 5000;
+    if (off1_um < -DISPLACEMENT_ZERO_OFFSET_UM_MAX) off1_um = -DISPLACEMENT_ZERO_OFFSET_UM_MAX;
+    else if (off1_um > DISPLACEMENT_ZERO_OFFSET_UM_MAX) off1_um = DISPLACEMENT_ZERO_OFFSET_UM_MAX;
+    if (off2_um < -DISPLACEMENT_ZERO_OFFSET_UM_MAX) off2_um = -DISPLACEMENT_ZERO_OFFSET_UM_MAX;
+    else if (off2_um > DISPLACEMENT_ZERO_OFFSET_UM_MAX) off2_um = DISPLACEMENT_ZERO_OFFSET_UM_MAX;
     g_device_settings.disp_s1_zero_offset_um = off1_um;
     g_device_settings.disp_s2_zero_offset_um = off2_um;
     svc_storage_validate_settings(&g_device_settings);

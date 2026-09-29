@@ -157,13 +157,15 @@ MEAS_DISP_DIFF_MM   = 0x0E   # float32 mm, S1 - S2 (2026-09-27)
 # DEFAULT_DISP_S1_D0_THEORETICAL_UM has the Wyler-handbook derivation).
 CALIB_DISP_ATTEN_MILLI          = 0x00   # u32, x1000
 CALIB_DISP_S1_GAIN_MILLI        = 0x01   # u32, x1000
-CALIB_DISP_S1_ZERO_OFFSET_UM    = 0x03   # i32, signed
+CALIB_DISP_S1_ZERO_OFFSET_UM    = 0x03   # i32, signed -- cal_mult-independent theoretical domain (2026-09-29)
 CALIB_DISP_S2_GAIN_MILLI        = 0x04   # u32, x1000
-CALIB_DISP_S2_ZERO_OFFSET_UM    = 0x06   # i32, signed
+CALIB_DISP_S2_ZERO_OFFSET_UM    = 0x06   # i32, signed -- same theoretical domain as S1's
 CALIB_DISP_S1_D0_THEORETICAL_UM = 0x07   # u32, um -- fixed Wyler-derived anchor
-CALIB_DISP_S1_CAL_MULT_MILLI    = 0x08   # u32, x1000 -- "digital calibration" on top of it
+CALIB_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI = 0x08   # u32, x1000 -- real measured uV/um/m sensitivity (2026-09-29, was a bare CAL_MULT ratio)
 CALIB_DISP_S2_D0_THEORETICAL_UM = 0x09   # u32, um
-CALIB_DISP_S2_CAL_MULT_MILLI    = 0x0A   # u32, x1000
+CALIB_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI = 0x0A   # u32, x1000
+CALIB_DISP_S1_INVERT            = 0x0B   # u8/u32, 0=normal 1=inverted -- sign flip on the final reading (2026-09-29)
+CALIB_DISP_S2_INVERT            = 0x0C   # u8/u32, 0=normal 1=inverted
 DBG_LOG_STREAM = 0x00
 
 # Topic groups (CAT_TOPICS = 5) — GET or SUBSCRIBE (4-byte LE interval_ms payload)

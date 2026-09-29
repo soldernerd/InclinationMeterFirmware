@@ -73,7 +73,7 @@ static const SettingsSection s_sections[] = {
       SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) },
     { EEPROM_DISPLACEMENT_SETTINGS_ADDR, EEPROM_DISPLACEMENT_SETTINGS_VERSION,
       offsetof(DeviceSettings, disp_atten_milli),
-      SECTION_SPAN(disp_atten_milli, disp_s2_zero_offset_um) },
+      SECTION_SPAN(disp_atten_milli, disp_reserved_pad) },
 };
 #define SETTINGS_SECTION_COUNT  ((uint8_t)(sizeof(s_sections) / sizeof(s_sections[0])))
 
@@ -97,7 +97,7 @@ _Static_assert(offsetof(DeviceSettings, lm35_scale_mv_per_c) + SECTION_SPAN(lm35
 _Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent)
                 == offsetof(DeviceSettings, disp_atten_milli),
                 "encoder section must end exactly where displacement section begins");
-_Static_assert(offsetof(DeviceSettings, disp_atten_milli) + SECTION_SPAN(disp_atten_milli, disp_s2_zero_offset_um)
+_Static_assert(offsetof(DeviceSettings, disp_atten_milli) + SECTION_SPAN(disp_atten_milli, disp_reserved_pad)
                 == sizeof(DeviceSettings),
                 "displacement section must end exactly at the struct's end");
 
@@ -111,7 +111,7 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c)
                "lm35 page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) <= 0x0100U,
                "encoder page must fit within its 256-byte EEPROM page budget");
-_Static_assert(HDR_SIZE + SECTION_SPAN(disp_atten_milli, disp_s2_zero_offset_um) <= 0x0100U,
+_Static_assert(HDR_SIZE + SECTION_SPAN(disp_atten_milli, disp_reserved_pad) <= 0x0100U,
                "displacement page must fit within its 256-byte EEPROM page budget");
 
 _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
@@ -185,12 +185,14 @@ static void fill_default_settings(DeviceSettings *s)
     s->disp_atten_milli         = DEFAULT_DISP_ATTEN_MILLI;
     s->disp_s1_gain_milli       = DEFAULT_DISP_S1_GAIN_MILLI;
     s->disp_s1_d0_theoretical_um = DEFAULT_DISP_S1_D0_THEORETICAL_UM;
-    s->disp_s1_cal_mult_milli   = DEFAULT_DISP_S1_CAL_MULT_MILLI;
+    s->disp_s1_sensitivity_uv_per_um_milli = DEFAULT_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI;
     s->disp_s1_zero_offset_um   = DEFAULT_DISP_S1_ZERO_OFFSET_UM;
     s->disp_s2_gain_milli       = DEFAULT_DISP_S2_GAIN_MILLI;
     s->disp_s2_d0_theoretical_um = DEFAULT_DISP_S2_D0_THEORETICAL_UM;
-    s->disp_s2_cal_mult_milli   = DEFAULT_DISP_S2_CAL_MULT_MILLI;
+    s->disp_s2_sensitivity_uv_per_um_milli = DEFAULT_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI;
     s->disp_s2_zero_offset_um   = DEFAULT_DISP_S2_ZERO_OFFSET_UM;
+    s->disp_s1_invert           = DEFAULT_DISP_S1_INVERT;
+    s->disp_s2_invert           = DEFAULT_DISP_S2_INVERT;
 }
 
 /* ---------------- header helpers ---------------- */

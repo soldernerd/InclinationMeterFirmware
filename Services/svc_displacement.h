@@ -113,6 +113,15 @@ typedef struct {
  * does not start the acquisition trigger -- see svc_displacement_start()
  * below, same split as WP8's svc_signal_analysis.c had). Call once from
  * main.c, checking the return value (CLAUDE.md 7.6). */
+/* nominal(20uV/um/m)/actual -- converts a stored sensitivity_uv_per_um_milli
+ * value into the internal cal_mult scale factor (2026-09-29). Exposed
+ * (not static) so svc_api.c's zero_cal_apply_if_ready() can convert a
+ * freshly-measured zero-cal result back into the same cal_mult-independent
+ * theoretical domain the stored value lives in, using the exact same
+ * formula svc_displacement.c's own load_sensor_cal()/zero_cal_accumulate()
+ * use internally -- one formula, not two copies that could drift apart. */
+float svc_displacement_cal_mult_from_sensitivity(int32_t sensitivity_uv_per_um_milli);
+
 DrvStatus svc_displacement_init(void);
 
 /* Start / stop the ADC sample stream + per-cycle demodulation. start()
@@ -142,7 +151,10 @@ void svc_displacement_update(void);
  * 2026-09-26) -- see svc_displacement_get_delta1_mm_raw()/
  * get_delta2_mm_raw() below for the pre-MA value. residual1/2 were never
  * run through the MA (zero-cal's own comment explains why) so there is
- * only one version of each. */
+ * only one version of each. delta1/2_mm (and _raw) carry the per-instrument
+ * sign flip (disp_s1/s2_invert, system_state.h, 2026-09-29) -- residual1/2
+ * do not, since they're an internal quality signal, not a directional
+ * physical reading. */
 float svc_displacement_get_delta1_mm(void);
 float svc_displacement_get_residual1(void);
 float svc_displacement_get_delta2_mm(void);
@@ -498,7 +510,11 @@ void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_
  * sets of batches and lose the point of excluding jointly. This is the
  * headline number for the differential measurement strategy
  * (docs/wp10_displacement.md's standard-error analysis); delta1/2_mm_out
- * remain available alongside it for diagnosis. timed_out_out is true if
+ * remain available alongside it for diagnosis. All three outputs carry the
+ * per-instrument sign flip (disp_s1/s2_invert, 2026-09-29); delta_diff_mm_out
+ * is scaled by S1's sign specifically, exact when S1/S2 share the same
+ * invert setting (the expected case) -- see the .c file's comment on this
+ * function for the edge case where they don't. timed_out_out is true if
  * DISPLACEMENT_PRECISION_TIMEOUT_MS was hit before all three (S1, S2, and
  * the differential) reached the target sample count. */
 bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,

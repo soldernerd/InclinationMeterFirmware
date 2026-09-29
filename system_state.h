@@ -80,23 +80,67 @@ typedef struct {
      * resources to use that category. */
     int32_t disp_atten_milli;        /* shared A/B attenuator, x1000 (nominal 3.000) */
     int32_t disp_s1_gain_milli;      /* S1 amplifier gain, x1000 (nominal 10.000) */
-    /* d0 REPLACED 2026-09-27 by a theoretical-baseline + multiplier pair
-     * (config.h's "Displacement sensitivity: theoretical baseline" comment
-     * has the full derivation) -- effective d0_mm = d0_theoretical_um/1000
-     * * cal_mult_milli/1000, computed in Services/svc_displacement.c's
-     * load_sensor_cal(). d0_theoretical is the Wyler-handbook-derived
-     * micrometers-per-x-unit constant (20uV RMS = 1um/m); cal_mult is
-     * "any digital calibration on top of that baseline," starting at
-     * whatever value reproduces the previous empirical d0 exactly (so
-     * this refactor changes NOTHING behaviorally on its own) -- see that
-     * default's own comment for the exact number and its derivation. */
+    /* d0 REPLACED 2026-09-27 by a theoretical-baseline + a calibration
+     * factor (config.h's "Displacement sensitivity: theoretical baseline"
+     * comment has the full derivation). d0_theoretical is the
+     * Wyler-handbook-derived micrometers-per-x-unit constant (assuming the
+     * nominal 20uV RMS = 1um/m spec exactly).
+     *
+     * sensitivity_uv_per_um_milli (2026-09-29, replacing the original
+     * cal_mult_milli -- a bare dimensionless ratio, which is exactly the
+     * kind of indirect representation that caused real confusion this
+     * session: "why is the correction factor 2.7x, I expected ~1x?" has an
+     * immediate answer when the field IS the physical quantity being
+     * calibrated, not a multiplier on an assumption buried in firmware).
+     * This is the sensor's REAL, measured electrical sensitivity: how many
+     * microvolts (RMS, at the ADC pin, same reference point as the
+     * DIAGNOSTICS screen / signal-diag RMS values) this specific sensor
+     * actually produces per 0.001mm/m (1um/m) of real tilt -- calibrated
+     * directly against a known applied tilt, nothing else. Compares
+     * directly against the fixed nominal spec
+     * (DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M, config.h, =20) with no unit
+     * conversion needed: this sensor's real sensitivity IS this many uV,
+     * period, vs. the datasheet's 20uV claim.
+     * Services/svc_displacement.c's load_sensor_cal() converts this to the
+     * old internal cal_mult concept (cal_mult = nominal/sensitivity) before
+     * computing effective_d0 -- that's purely an internal implementation
+     * detail now, not something this field's meaning depends on. */
     int32_t disp_s1_d0_theoretical_um;
-    int32_t disp_s1_cal_mult_milli;
-    int32_t disp_s1_zero_offset_um;  /* S1 displacement zero calibration, micrometers, signed */
+    int32_t disp_s1_sensitivity_uv_per_um_milli;
+    /* S1 displacement zero calibration, micrometers, signed -- stored in the
+     * cal_mult-INDEPENDENT theoretical domain (i.e. what this sensor's
+     * electrical zero error would read with cal_mult=1.0), NOT the final
+     * output-mm domain the name might suggest -- see
+     * Services/svc_displacement.c's load_sensor_cal() comment (2026-09-29)
+     * for why: the sensor's zero error lives in x_re itself, so it has to
+     * scale with cal_mult like any other x-domain quantity, not sit fixed
+     * in mm. Written by svc_api.c's zero_cal_apply_if_ready(), which
+     * divides by cal_mult before persisting here. */
+    int32_t disp_s1_zero_offset_um;
     int32_t disp_s2_gain_milli;      /* S2 amplifier gain, x1000 */
     int32_t disp_s2_d0_theoretical_um;
-    int32_t disp_s2_cal_mult_milli;
-    int32_t disp_s2_zero_offset_um;  /* S2 displacement zero calibration, micrometers, signed */
+    int32_t disp_s2_sensitivity_uv_per_um_milli;  /* S2 -- same meaning as disp_s1_sensitivity_uv_per_um_milli above */
+    int32_t disp_s2_zero_offset_um;  /* S2 zero calibration -- same theoretical domain as disp_s1_zero_offset_um above */
+
+    /* Sign convention is arbitrary at the sensor level -- these flip the
+     * FINAL reported reading (after gain/zero-cal, at the getter layer in
+     * svc_displacement.c) so "front up" can be made to read positive per
+     * instrument, without touching the zero-cal/gain math itself. 0 =
+     * normal, 1 = inverted. Deliberately NOT folded into the sensitivity's
+     * sign -- doing so would silently invalidate the sensor's existing
+     * zero_offset the same way changing cal_mult's magnitude does (see
+     * 2026-09-29 granite-plate session). */
+    uint8_t disp_s1_invert;
+    uint8_t disp_s2_invert;
+    /* Explicit, not compiler-inserted: the struct's overall alignment (4,
+     * from its int32_t members) would otherwise leave 2 silent trailing
+     * pad bytes after disp_s2_invert, which svc_storage.c's SECTION_SPAN/
+     * _Static_assert machinery can't see (it measures declared fields,
+     * not compiler padding) -- making it deliberate here keeps that
+     * "section must end exactly at the struct's end" assert meaningful.
+     * Never read/written; exists purely so this struct's layout has no
+     * bytes the EEPROM section machinery doesn't know about. */
+    uint8_t disp_reserved_pad[2];
 } DeviceSettings;
 
 typedef struct {

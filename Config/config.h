@@ -144,7 +144,7 @@
                                                          rest of the REV A sensor
                                                          stack; first REV B use of
                                                          this freed page. */
-#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0005  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0008  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
                                                          S2_D0_UM bumped 1000x (sensitivity
                                                          fix, see that comment) -- learned
                                                          from the battery-scale bug earlier
@@ -178,7 +178,48 @@
                                                          derivation); defaults chosen to
                                                          reproduce the old d0=700mm exactly, so
                                                          this bump changes field layout, not
-                                                         behavior. */
+                                                         behavior.
+                                                         0x0006 (2026-09-29): disp_s1_invert/
+                                                         disp_s2_invert ADDED (struct layout
+                                                         change, appended at the end of the
+                                                         displacement section) -- per-instrument
+                                                         sign flip on the FINAL reported reading,
+                                                         applied at the svc_displacement.c getter
+                                                         layer so it can't disturb the existing
+                                                         gain/zero-cal math (see system_state.h's
+                                                         comment). Defaults to 0 (not inverted)
+                                                         on both, so this bump is layout-only,
+                                                         same as 0x0005.
+                                                         0x0007 (2026-09-29, same day): zero_offset_um's
+                                                         MEANING changed -- was the final output-mm
+                                                         domain (root cause of instruments reading
+                                                         several mm off at true level right after a
+                                                         cal_mult change, twice in one session), now
+                                                         the cal_mult-INDEPENDENT theoretical domain
+                                                         (system_state.h's disp_s1_zero_offset_um
+                                                         comment has the full derivation) -- one
+                                                         zero-cal run now stays valid across future
+                                                         cal_mult changes. No struct layout change,
+                                                         but old on-disk values would be silently
+                                                         misinterpreted under the new meaning, so this
+                                                         still needs a version bump to force a reset
+                                                         to 0 rather than reusing stale data under a
+                                                         different domain.
+                                                         0x0008 (2026-09-29, same day): cal_mult_milli
+                                                         RENAMED to sensitivity_uv_per_um_milli --
+                                                         same storage slot, but reinterpreted from a
+                                                         bare dimensionless ratio (e.g. "2.669x") to
+                                                         the sensor's real uV-per-0.001mm/m sensitivity
+                                                         (e.g. "7493" = 7.493 uV/um/m) -- directly
+                                                         comparable to the 20uV nominal spec, no mental
+                                                         unit conversion (system_state.h's field
+                                                         comment has the full reasoning). A stale
+                                                         dimensionless-ratio value under the new
+                                                         interpretation would be silently, badly wrong
+                                                         (2.669 read as "2.669 uV/um/m" is nowhere near
+                                                         2669), so this bump forces a reset to the
+                                                         nominal-spec default (20000) rather than
+                                                         reusing it under the new meaning. */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -522,13 +563,21 @@
 #define DEFAULT_DISP_ATTEN_MILLI            3000    /* atten = 3.000 */
 #define DEFAULT_DISP_S1_GAIN_MILLI        160000    /* gain  = 160.000 (10.000 x 16, see comment above) */
 
-/* --- Displacement sensitivity: theoretical baseline (2026-09-27) ---
- * D0_UM RETIRED, replaced by a theoretical-baseline + calibration-multiplier
- * pair: effective d0_mm = d0_theoretical_um/1000 * cal_mult_milli/1000
- * (Services/svc_displacement.c's load_sensor_cal()). User's own framing:
- * "the Wyler handbook gives us the precise (if theoretical) answer: 20uV
- * RMS means 1um/m. Implement this as a baseline, any digital calibration
- * should just be a multiplier to this theoretical baseline."
+/* --- Displacement sensitivity: theoretical baseline (2026-09-27,
+ * re-expressed in physical units 2026-09-29) ---
+ * D0_UM RETIRED, replaced by a theoretical baseline + this sensor's real
+ * measured sensitivity: effective d0_mm = d0_theoretical_um/1000 *
+ * (DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M / (sensitivity_uv_per_um_milli/1000))
+ * (Services/svc_displacement.c's load_sensor_cal()). User's own framing,
+ * both halves of it: "the Wyler handbook gives us the precise (if
+ * theoretical) answer: 20uV RMS means 1um/m. Implement this as a baseline,
+ * any digital calibration should just be a multiplier to this theoretical
+ * baseline" (2026-09-27) -- then, once a bare multiplier turned out to
+ * obscure what was actually being corrected: "the gain needs to be in
+ * uV/0.001mm/m" (2026-09-29). sensitivity_uv_per_um_milli IS that -- this
+ * sensor's own real electrical sensitivity, calibrated directly against a
+ * known applied tilt, comparable at a glance against the 20uV nominal spec
+ * with no mental unit conversion.
  *
  * DERIVATION: for a given batch, delta_mm = 2*d0*(x_re-0.5) is meant to
  * read directly in mm/m (this project's own established convention -- the
@@ -557,20 +606,48 @@
  * gap, not an order of magnitude, which is itself a reassuring cross-check
  * between two completely independent calibration methods).
  *
- * CAL_MULT_MILLI defaults chosen to reproduce the OLD empirical d0=700mm
- * exactly (700/439=1.595, 700/495=1.414) -- this refactor is a pure
- * relabeling of the SAME effective sensitivity, not a behavior change, on
- * its own. Change cal_mult (not d0_theoretical) once real granite-plate
- * data says the calibration needs adjusting -- d0_theoretical stays fixed
- * as the traceable, handbook-derived anchor; cal_mult is "how far off
- * theory we currently know we are," always readable as a single number. */
+ * SENSITIVITY_UV_PER_UM_MILLI defaults to the bare nominal spec, 20000
+ * (20.000 uV per 0.001mm/m) -- pure theory, zero correction, until a real
+ * granite-plate/known-tilt calibration says otherwise. This is a clean
+ * break from the field's history (old CAL_MULT_MILLI defaulted to whatever
+ * reproduced the empirical d0=700mm exactly, carrying that legacy forward
+ * indefinitely) -- per the user's explicit instruction this session ("I do
+ * not at all care about any previous calibrations... the baseline has to
+ * be the theoretical 20uV per 0.001mm/m"), the default is now the
+ * theoretical anchor itself, not a historical empirical value. Real
+ * per-instrument values (measured 2026-09-29 against known +0.5mm/m /
+ * +0.667mm/m tilts): S1 ~= 7.49 uV/um/m, S2 ~= 8.76 uV/um/m -- both well
+ * below the 20uV nominal spec, i.e. both sensors are real-world LESS
+ * sensitive than the Wyler handbook claims, not a trim-quality artifact
+ * (docs/wp10_displacement.md has the full session writeup). d0_theoretical
+ * stays fixed as the traceable, handbook-derived anchor; sensitivity is
+ * the single number that says how far this specific sensor's real
+ * electronics differ from that anchor, in the same units as the anchor
+ * itself. */
 #define DEFAULT_DISP_S1_D0_THEORETICAL_UM  439000    /* d0_theoretical = 439.000 mm */
-#define DEFAULT_DISP_S1_CAL_MULT_MILLI        1595    /* 1.595x -- reproduces old d0=700mm */
+#define DEFAULT_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI  20000    /* 20.000 uV/um/m -- nominal Wyler spec, uncalibrated */
 #define DEFAULT_DISP_S1_ZERO_OFFSET_UM         0
 #define DEFAULT_DISP_S2_GAIN_MILLI        160000
 #define DEFAULT_DISP_S2_D0_THEORETICAL_UM  495000    /* d0_theoretical = 495.000 mm */
-#define DEFAULT_DISP_S2_CAL_MULT_MILLI        1414    /* 1.414x -- reproduces old d0=700mm */
+#define DEFAULT_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI  20000    /* 20.000 uV/um/m -- nominal Wyler spec, uncalibrated */
 #define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
+#define DEFAULT_DISP_S1_INVERT                 0    /* 0=normal, 1=inverted -- see system_state.h */
+#define DEFAULT_DISP_S2_INVERT                 0
+
+/* Zero-offset clamp, output-mm domain (same domain as zero_offset_um
+ * itself), so it scales with cal_mult -- raising cal_mult to compensate for
+ * a sensor with a maxed-out physical trim pot raises the zero-offset
+ * correction needed by the same factor. The original +-5000 (WP10's first
+ * port, 2026-09-24) was sized against d0's THEN-default of 100um -- ~50x
+ * headroom at the time -- and was never rescaled through the later ~7000x
+ * sensitivity bumps (100->100000->700000, then the 2026-09-27
+ * d0_theoretical/cal_mult refactor). Widened to 20000 on 2026-09-29 after
+ * instrument 1 (pot maxed out, needing extra digital gain via cal_mult) hit
+ * the old bound. Used by both svc_api.c's dispatch_calibrations() SF()
+ * bounds and zero_cal_apply_if_ready()'s clamp -- keep them sharing this
+ * one constant so they can't drift apart again the way the raw +-5000
+ * literals just did. */
+#define DISPLACEMENT_ZERO_OFFSET_UM_MAX    20000
 
 /* Wyler handbook constant: 20uV RMS (at the sensor's own S-channel output,
  * referred to the ADC pin -- i.e. AFTER that channel's own PGA, same

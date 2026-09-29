@@ -420,23 +420,34 @@ typedef enum {
  * 0x02/0x05 (S1/S2 D0_UM) RETIRED 2026-09-27, replaced by 0x07-0x0A below
  * -- a directly-settable "d0" no longer exists; it's now the PRODUCT of a
  * theoretical baseline (traceable to the Wyler handbook's 20uV RMS = 1um/m
- * spec) and a digital calibration multiplier, so "any digital calibration
- * is just a multiplier on top of the theoretical baseline" is visible on
- * the wire, not just in firmware source. See Config/config.h's
+ * spec) and this sensor's real measured sensitivity, so "how far off
+ * theory this specific sensor's real electronics are" is visible on the
+ * wire, in physical units, not just in firmware source. See Config/config.h's
  * DEFAULT_DISP_S1_D0_THEORETICAL_UM comment for the full derivation. Gaps
  * stay so 0x00/0x01/0x03/0x04/0x06 keep their numbers, same convention
  * Settings (0x3) already uses for its own retired resources. */
 #define API2_RES_CALIB_DISP_ATTEN_MILLI        0x00U   /* shared A/B attenuator, x1000 */
 #define API2_RES_CALIB_DISP_S1_GAIN_MILLI      0x01U   /* S1 amplifier gain, x1000 */
 /* 0x02 retired (disp_s1_d0_um) */
-#define API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM  0x03U   /* S1 zero calibration, um, signed */
+#define API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM  0x03U   /* S1 zero calibration, um, signed --
+                                                           cal_mult-independent theoretical
+                                                           domain since 2026-09-29, see
+                                                           system_state.h's field comment */
 #define API2_RES_CALIB_DISP_S2_GAIN_MILLI      0x04U   /* S2 amplifier gain, x1000 */
 /* 0x05 retired (disp_s2_d0_um) */
-#define API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM  0x06U   /* S2 zero calibration, um, signed */
+#define API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM  0x06U   /* S2 zero calibration, um, signed -- same
+                                                           theoretical domain as 0x03 */
 #define API2_RES_CALIB_DISP_S1_D0_THEORETICAL_UM 0x07U   /* S1 Wyler-derived baseline, um -- fixed anchor, not meant to be tuned casually */
-#define API2_RES_CALIB_DISP_S1_CAL_MULT_MILLI    0x08U   /* S1 "digital calibration" multiplier on top of it, x1000 */
+#define API2_RES_CALIB_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI  0x08U   /* S1 real measured sensitivity, uV per 0.001mm/m, x1000 -- compare directly against the 20uV nominal spec (2026-09-29, was a bare "CAL_MULT" ratio) */
 #define API2_RES_CALIB_DISP_S2_D0_THEORETICAL_UM 0x09U   /* S2 Wyler-derived baseline, um */
-#define API2_RES_CALIB_DISP_S2_CAL_MULT_MILLI    0x0AU   /* S2 multiplier, x1000 */
+#define API2_RES_CALIB_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI  0x0AU   /* S2 real measured sensitivity, uV per 0.001mm/m, x1000 */
+/* Sign flip on the FINAL reported reading (2026-09-29) -- 0=normal,
+ * 1=inverted. Deliberately separate from the sensitivity's sign so
+ * toggling it never disturbs the sensor's existing zero-cal, unlike a
+ * sensitivity magnitude change (see Config/config.h's EEPROM_DISPLACEMENT_SETTINGS_
+ * VERSION 0x0006 comment). */
+#define API2_RES_CALIB_DISP_S1_INVERT            0x0BU   /* S1: 0=normal, 1=inverted */
+#define API2_RES_CALIB_DISP_S2_INVERT            0x0CU   /* S2: 0=normal, 1=inverted */
 
 /* ---------------- Settings (0x3: GET, SET) ----------------
  * Resource IDs are stable wire values, not a dense sequence. 0x01 and

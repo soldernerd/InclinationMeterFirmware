@@ -280,14 +280,16 @@ granite-plate session): if the device reads high by some factor, divide
 | 0x00 | `0x0200` | `disp_atten_milli` — shared A/B attenuator, x1000 (nominal 3.000) | 100…100000 |
 | 0x01 | `0x0201` | `disp_s1_gain_milli` — S1 amplifier gain, x1000 (nominal 160.000 as of the PGA=16 bump) | 100…1000000 |
 | ~~0x02~~ | — | **retired** (`disp_s1_d0_um`) — replaced by 0x07/0x08 below | — |
-| 0x03 | `0x0203` | `disp_s1_zero_offset_um` — S1 zero calibration, micrometers, signed | −5000…5000 |
+| 0x03 | `0x0203` | `disp_s1_zero_offset_um` — S1 zero calibration, micrometers, signed. **cal_mult-independent theoretical domain since 2026-09-29** (what this sensor's zero error would read with cal_mult=1.0) — one zero-cal run now survives future cal_mult changes | −20000…20000 |
 | 0x04 | `0x0204` | `disp_s2_gain_milli` — S2 amplifier gain, x1000 | 100…1000000 |
 | ~~0x05~~ | — | **retired** (`disp_s2_d0_um`) — replaced by 0x09/0x0A below | — |
-| 0x06 | `0x0206` | `disp_s2_zero_offset_um` — S2 zero calibration, micrometers, signed | −5000…5000 |
+| 0x06 | `0x0206` | `disp_s2_zero_offset_um` — S2 zero calibration, micrometers, signed — same theoretical domain as 0x03 | −20000…20000 |
 | 0x07 | `0x0207` | `disp_s1_d0_theoretical_um` — S1 Wyler-derived baseline, micrometers (fixed anchor) | 1…2000000 |
-| 0x08 | `0x0208` | `disp_s1_cal_mult_milli` — S1 multiplier on top of it, x1000 (**the tuning knob**) | 10…1000000 |
+| 0x08 | `0x0208` | `disp_s1_sensitivity_uv_per_um_milli` — S1's real measured sensitivity, µV per 0.001mm/m, x1000 (**the tuning knob** — compare directly against the 20µV nominal spec; was a bare `cal_mult` ratio before 2026-09-29) | 100…1000000 |
 | 0x09 | `0x0209` | `disp_s2_d0_theoretical_um` — S2 Wyler-derived baseline, micrometers | 1…2000000 |
-| 0x0A | `0x020A` | `disp_s2_cal_mult_milli` — S2 multiplier, x1000 (**the tuning knob**) | 10…1000000 |
+| 0x0A | `0x020A` | `disp_s2_sensitivity_uv_per_um_milli` — S2's real measured sensitivity, µV per 0.001mm/m, x1000 | 100…1000000 |
+| 0x0B | `0x020B` | `disp_s1_invert` — S1 sign flip on the final reading, 0=normal/1=inverted | 0…1 |
+| 0x0C | `0x020C` | `disp_s2_invert` — S2 sign flip on the final reading, 0=normal/1=inverted | 0…1 |
 
 - **GET** (`0x02xx`): payload none → `[OK][i32 LE value]`.
 - **SET** (`0x12xx`): payload = 4-byte `i32` LE value. `BAD_LENGTH` if not

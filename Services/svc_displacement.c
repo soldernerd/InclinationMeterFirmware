@@ -451,22 +451,57 @@ typedef struct {
     float zero_offset_mm;    /* displacement zero calibration, mm */
 } SensorCalF;
 
-/* d0 (2026-09-27) is now the PRODUCT of a theoretical baseline and a digital
- * calibration multiplier, not one directly-settable number -- see
- * config.h's "Displacement sensitivity: theoretical baseline" comment for
- * the full Wyler-handbook derivation. d0_theoretical_um is what the Wyler
- * spec's 20uV RMS = 1um/m implies for THIS batch's actual x-sensitivity;
- * cal_mult_milli is "any digital calibration on top of that baseline" --
- * defaults to whatever value reproduces the pre-2026-09-27 empirical d0
- * exactly, so this refactor is a pure relabeling until someone actually
- * changes cal_mult. */
+/* d0 (2026-09-27) is now the PRODUCT of a theoretical baseline and a
+ * calibration factor, not one directly-settable number -- see config.h's
+ * "Displacement sensitivity: theoretical baseline" comment for the full
+ * Wyler-handbook derivation. d0_theoretical_um is what the Wyler spec's
+ * 20uV RMS = 1um/m implies for THIS batch's actual x-sensitivity.
+ *
+ * sensitivity_uv_per_um_milli (2026-09-29, replacing the original bare
+ * "cal_mult" ratio -- see system_state.h's field comment for why a
+ * dimensionless multiplier on an assumption buried in firmware was
+ * confusing in a way a direct physical quantity isn't) is this sensor's
+ * REAL measured electrical sensitivity, in the SAME uV-per-0.001mm/m units
+ * as the fixed nominal spec (DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M,
+ * config.h, =20). cal_mult is now just an internal implementation detail
+ * derived from it here (nominal/actual -- if this sensor produces FEWER uV
+ * per unit tilt than the 20uV spec claims, cal_mult > 1, compensating by
+ * exactly that shortfall), not something stored or exposed on its own.
+ *
+ * zero_offset_um (2026-09-29, root-caused after a cal_mult change left two
+ * instruments reading several mm at true level): stored in the SAME
+ * cal_mult-independent theoretical domain as d0_theoretical -- i.e. "what
+ * this sensor's electrical zero error would read at the nominal spec's
+ * sensitivity" -- not the final output-mm domain the field's own name
+ * might suggest. The sensor's intrinsic zero error lives in x_re itself (a
+ * fixed offset from 0.5, baked in before ANY d0/cal_mult scaling is
+ * applied), so it has to be scaled by the SAME d0_theoretical*cal_mult
+ * factor as the real signal every time it's used, not stored once as a
+ * fixed output-mm constant -- subtracting a fixed mm value was exactly
+ * what broke every time cal_mult changed (the zero_offset_mm
+ * docs/wp10_displacement.md's "should be re-run" note flagged as a
+ * known-but-unfixed hazard, then hit repeatedly in practice). Multiplying
+ * by the derived cal_mult here, at read time, makes a SINGLE zero-cal run
+ * permanently valid across any future sensitivity change -- no more "redo
+ * zero-cal after every gain adjustment." */
+/* nominal/actual -- see svc_displacement.h's declaration comment. Shared
+ * by load_sensor_cal() below, zero_cal_accumulate()'s step2-combination
+ * math, and svc_api.c's zero_cal_apply_if_ready(), so none of them can
+ * drift apart on how a sensitivity value becomes a cal_mult. */
+float svc_displacement_cal_mult_from_sensitivity(int32_t sensitivity_uv_per_um_milli)
+{
+    float sensitivity = (float)sensitivity_uv_per_um_milli / 1000.0f;   /* uV per 0.001mm/m */
+    return (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M / sensitivity;
+}
+
 static void load_sensor_cal(SensorCalF *out, int32_t gain_milli,
-                             int32_t d0_theoretical_um, int32_t cal_mult_milli,
+                             int32_t d0_theoretical_um, int32_t sensitivity_uv_per_um_milli,
                              int32_t zero_offset_um)
 {
+    float cal_mult = svc_displacement_cal_mult_from_sensitivity(sensitivity_uv_per_um_milli);
     out->gain           = (float)gain_milli / 1000.0f;
-    out->d0_mm          = ((float)d0_theoretical_um / 1000.0f) * ((float)cal_mult_milli / 1000.0f);
-    out->zero_offset_mm = (float)zero_offset_um / 1000.0f;
+    out->d0_mm          = ((float)d0_theoretical_um / 1000.0f) * cal_mult;
+    out->zero_offset_mm = ((float)zero_offset_um / 1000.0f) * cal_mult;
 }
 
 /* The values every sensor's computation needs but that don't vary
@@ -553,10 +588,21 @@ static void zero_cal_accumulate(float delta1, float delta2)
         /* zero_error = (step1_avg + step2_avg) / 2 -- see config.h. The
          * NEW absolute offset is the OLD one plus that error: delta_mm
          * already has the old zero_offset subtracted (compute_sensor_delta()),
-         * so the averaged residual bias IS the correction still needed. */
+         * so the averaged residual bias IS the correction still needed.
+         * disp_s1/s2_zero_offset_um is stored in the cal_mult-INDEPENDENT
+         * theoretical domain (load_sensor_cal()'s 2026-09-29 comment), but
+         * avg1/avg2 above are full compute_sensor_delta() outputs -- the
+         * OUTPUT-mm domain, cal_mult already applied. Scale the stored
+         * value up by the CURRENT cal_mult here so this combination happens
+         * in one consistent domain; svc_api.c's zero_cal_apply_if_ready()
+         * scales the finished result back down before persisting it, so
+         * disp_s1/s2_zero_offset_um itself never leaves the theoretical
+         * domain on disk. */
         s_zero_cal_result1_mm = (float)g_device_settings.disp_s1_zero_offset_um / 1000.0f
+                               * svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s1_sensitivity_uv_per_um_milli)
                                + (s_zero_cal_step1_avg1 + avg1) / 2.0f;
         s_zero_cal_result2_mm = (float)g_device_settings.disp_s2_zero_offset_um / 1000.0f
+                               * svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s2_sensitivity_uv_per_um_milli)
                                + (s_zero_cal_step1_avg2 + avg2) / 2.0f;
         s_zero_cal_phase = DISP_ZERO_CAL_RESULT_READY;
     }
@@ -706,10 +752,10 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
 
     SensorCalF s1_cal, s2_cal;
     load_sensor_cal(&s1_cal, g_device_settings.disp_s1_gain_milli,
-                     g_device_settings.disp_s1_d0_theoretical_um, g_device_settings.disp_s1_cal_mult_milli,
+                     g_device_settings.disp_s1_d0_theoretical_um, g_device_settings.disp_s1_sensitivity_uv_per_um_milli,
                      g_device_settings.disp_s1_zero_offset_um);
     load_sensor_cal(&s2_cal, g_device_settings.disp_s2_gain_milli,
-                     g_device_settings.disp_s2_d0_theoretical_um, g_device_settings.disp_s2_cal_mult_milli,
+                     g_device_settings.disp_s2_d0_theoretical_um, g_device_settings.disp_s2_sensitivity_uv_per_um_milli,
                      g_device_settings.disp_s2_zero_offset_um);
 
     SharedCycleTerms shared = {
@@ -810,19 +856,43 @@ DrvStatus svc_displacement_start(void)
     return drv_ads131m04_start();
 }
 
-float svc_displacement_get_delta1_mm(void) { return s_delta1_mm; }
+/* Sign convention is arbitrary at the sensor level -- disp_s1/s2_invert
+ * (system_state.h) let each instrument's FINAL reported reading be flipped
+ * so "front up" can read positive, without touching the gain/zero-cal math
+ * upstream of it. Applied here, at the getter layer, deliberately -- every
+ * external consumer (API Measurements/Topics, the LIVE screen, the
+ * triggered precision measurement's result) reads through one of these
+ * getters, so this is the one place that has to know about the flip.
+ * zero_cal_accumulate()/precision_accumulate() upstream in
+ * process_one_batch() use the UNFLIPPED delta1/delta2 locals directly, not
+ * these getters -- zero-cal and the precision-run's live progress stay
+ * entirely in the sensor's native sign convention; only the finished,
+ * reported numbers flip. */
+static float sensor_sign(uint8_t invert_flag) { return invert_flag ? -1.0f : 1.0f; }
+
+float svc_displacement_get_delta1_mm(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_delta1_mm; }
 float svc_displacement_get_residual1(void) { return s_residual1; }
-float svc_displacement_get_delta2_mm(void) { return s_delta2_mm; }
+float svc_displacement_get_delta2_mm(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_delta2_mm; }
 float svc_displacement_get_residual2(void) { return s_residual2; }
 bool  svc_displacement_get_ok(void)        { return s_disp_ok; }
 
-float svc_displacement_get_delta1_mm_raw(void) { return s_delta1_mm_raw; }
-float svc_displacement_get_delta2_mm_raw(void) { return s_delta2_mm_raw; }
+float svc_displacement_get_delta1_mm_raw(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_delta1_mm_raw; }
+float svc_displacement_get_delta2_mm_raw(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_delta2_mm_raw; }
 
-/* Derived, not separately stored -- see svc_displacement.h's comment on
- * why a boxcar MA's linearity makes this exact, not an approximation. */
-float svc_displacement_get_delta_diff_mm(void)     { return s_delta1_mm - s_delta2_mm; }
-float svc_displacement_get_delta_diff_mm_raw(void) { return s_delta1_mm_raw - s_delta2_mm_raw; }
+/* Recomputed from the already-flipped individual getters above (not simply
+ * `sign * (s_delta1_mm - s_delta2_mm)`), so this is correct even in the
+ * unusual case where S1 and S2 are inverted differently from each other --
+ * the two sensors are independent per system_state.h's comment, even
+ * though in practice (both rigidly mounted in the same housing) they'll
+ * almost always be set the same way. */
+float svc_displacement_get_delta_diff_mm(void)
+{
+    return svc_displacement_get_delta1_mm() - svc_displacement_get_delta2_mm();
+}
+float svc_displacement_get_delta_diff_mm_raw(void)
+{
+    return svc_displacement_get_delta1_mm_raw() - svc_displacement_get_delta2_mm_raw();
+}
 
 bool svc_displacement_get_quality1_ok(void) { return s_quality1_ok; }
 bool svc_displacement_get_quality2_ok(void) { return s_quality2_ok; }
@@ -1322,9 +1392,21 @@ bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_m
     if (s_precision_phase != DISP_PRECISION_DONE) {
         return false;
     }
-    if (delta1_mm_out)      *delta1_mm_out      = s_precision_result1_mm;
-    if (delta2_mm_out)      *delta2_mm_out      = s_precision_result2_mm;
-    if (delta_diff_mm_out)  *delta_diff_mm_out  = s_precision_result_diff_mm;
+    /* Same sign-flip-at-the-output-boundary policy as the getters above --
+     * s_precision_result*_mm are accumulated upstream (precision_accumulate())
+     * in the sensor's native sign convention. delta_diff specifically is
+     * its own dedicated quality-gated accumulator (see this function's own
+     * header comment / svc_displacement.h), not delta1-delta2 -- scaling it
+     * by S1's sign alone is exactly correct when S1/S2 share the same
+     * invert setting (the expected case, both rigidly mounted in one
+     * housing) and is the best available answer if they don't, short of
+     * losing the dedicated accumulator's quality-gating by recomputing it
+     * from the two independent results instead. */
+    float sign1 = sensor_sign(g_device_settings.disp_s1_invert);
+    float sign2 = sensor_sign(g_device_settings.disp_s2_invert);
+    if (delta1_mm_out)      *delta1_mm_out      = sign1 * s_precision_result1_mm;
+    if (delta2_mm_out)      *delta2_mm_out      = sign2 * s_precision_result2_mm;
+    if (delta_diff_mm_out)  *delta_diff_mm_out  = sign1 * s_precision_result_diff_mm;
     if (timed_out_out)      *timed_out_out      = s_precision_timed_out;
     return true;
 }
