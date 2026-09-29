@@ -53,6 +53,19 @@ WP*_prompt.md
 # bulk-capture output
 PythonTestCode/*.csv
 
+# 24h granite-plate test's raw 20Hz stream (2026-09-27): 709MB, well over
+# GitHub's 100MB per-file limit (gzip only gets it to ~140MB, still over) --
+# Testing/README.md's "commit the raw CSV" convention doesn't scale to a
+# 24h/20Hz capture the way it does for shorter tests. findings.md/setup.md/
+# the generated graphs ARE committed; this one raw file stays local-only
+# until the project sets up Git LFS (not done as of this exclusion -- a
+# repo-level decision with its own storage-quota tradeoffs, left for the
+# user rather than made unilaterally). If a future test produces a
+# similarly oversized CSV, add it here explicitly too rather than widening
+# this pattern -- most tests' CSVs are small enough to commit normally and
+# should stay tracked.
+Testing/2026-09-27_24hr_granite_plate_test/data/granite_24hr.csv
+
 # host unit-test binaries (tests/Makefile builds these; sources are tracked)
 tests/test_math_crc
 tests/test_txframe
