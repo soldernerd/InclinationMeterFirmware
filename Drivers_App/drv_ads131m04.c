@@ -67,7 +67,17 @@
  * without also scaling that software constant by the same factor breaks
  * the x=(S/k-B)/(A-B) ratio math, since A/B are read back unscaled.
  * DEFAULT_DISP_S1/S2_GAIN_MILLI were bumped 16x alongside this change --
- * see Config/config.h. */
+ * see Config/config.h.
+ *
+ * Was TEMPORARILY 0x0000 (PGA=1 on all four channels) for a 1-hour
+ * side-by-side drift comparison against the 24h granite-plate run
+ * (2026-09-29, see docs/wp10_displacement.md) -- checked whether the 24h
+ * test's temperature-correlated drift survives with the ADC's own PGA=16
+ * stage taken out of the picture. Reverted back to 0x4004 (this comment)
+ * once that 1-hour run finished; disp_s1/s2_gain_milli were set back to
+ * 160000 via the API to match (both are runtime-settable EEPROM values,
+ * not firmware constants, so that revert didn't need a rebuild on its
+ * own -- only the register value here did). */
 #define GAIN1_REG_VALUE  0x4004U
 
 /* MODE register (datasheet Table 8-16): same as the 0510h reset default

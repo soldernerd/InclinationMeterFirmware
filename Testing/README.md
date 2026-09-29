@@ -31,6 +31,8 @@ past finding still holds, check here before re-testing.
 | `2026-09-27_2hr_charging_drift_test` | 2-hour run: 60min baseline + 60min forced charging | 0.10.49 | Charging raises noise 32-39%; drift does not reduce to a simple temperature coefficient |
 | `2026-09-27_board2_vbat_calibration` | Board 2 (green) battery-ADC calibration against a Keysight PSU + DMM | 0.10.53 | Old calibration under-read by ~15-40mV; new fit sub-mV accurate 3.5-4.2V; 3.0V causes a real, non-self-recovering brownout |
 | `2026-09-27_board1_vbat_calibration` | Board 1 (grey) battery-ADC calibration, same method/session | 0.10.53 | Same ballpark result as board 2 (ratio within 0.13%, similar offset) — sub-1.3mV accurate 3.6-4.2V |
+| `2026-09-27_24hr_granite_plate_test` | 24h unattended monitor on the granite plate: raw displacement + phasors + full error-term set | 0.10.53 | Granite quieter than office desk but not big-jump-free; noise drops ~order of magnitude when operator leaves (common-mode); natural charge event causes a large common-mode jump + 6-10x noise, diff mostly immune; board-side (PGA) implicated for common-mode temp drift, sensor-side implicated for the uncancelled diff drift |
+| `2026-09-29_pga1_drift_comparison` | 1h drift comparison at PGA=1 (vs the 24h test's PGA=16), same method | 0.10.58 | No dramatic difference observed vs PGA=16 quiet periods, but no thermal transient occurred during this run — inconclusive on the original PGA-tempco question, see `findings.md` |
 
 See `docs/wp10_displacement.md` in the repo root for the full narrative writeup of
 each finding in project context; this folder is the raw evidence behind it.
