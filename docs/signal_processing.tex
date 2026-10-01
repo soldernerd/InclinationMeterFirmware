@@ -680,34 +680,100 @@ in the ADC).
 needs to change for this note; it records the intended approach.
 
 In theory $A$ and $B$ are exactly $\SI{180}{\degree}$ apart, and $S_1$ and
-$S_2$ are either in phase with $A$ ($\SI{0}{\degree}$) or in phase with $B$
-($\SI{180}{\degree}$), depending on the direction of tilt.  In the ADC domain
-this is distorted by the input filters (different for the A/B and the S
-paths), by the sensor itself and by further effects such as channel
-timing.  The measured values above show the size of the distortion.
+$S_2$ are either in phase with $A$ or in phase with $B$, depending on the
+direction of tilt.  In the ADC domain this is distorted by the input
+filters (different for the A/B and the S paths), by the sensor itself and by
+further effects such as channel timing.  The measured values above show the
+size of the distortion.  The intended remedy is an \emph{empirical}
+calibration, with the following design decisions.
 
-The intended remedy is an \emph{empirical} calibration of all four phases:
 \begin{itemize}
-  \item \textbf{Convention:} after calibration, $A$ reads
-        $\SI{0}{\degree}$ and $B$ reads $\SI{180}{\degree}$.  Each sensor
-        signal then lies on the real axis: $\SI{0}{\degree}$ for positive
-        tilt (in phase with $A$), $\SI{180}{\degree}$ for negative tilt.
-  \item \textbf{Four constants:} one phase correction per channel
-        ($A$, $B$, $S_1$, $S_2$), determined by measurement and stored in
-        EEPROM as calibration constants.  Each measured phasor is rotated by
-        its constant before further processing.
-  \item \textbf{Determination:} $A$ and $B$ are measured directly (this fixes
-        the reference and the exact $B$--$A$ offset).  For $S_1$ and $S_2$ a
-        clearly non-zero tilt is applied in a known direction, and the
-        constant is chosen so that the signal lands on the real axis with the
-        sign given by that direction.
+  \item \textbf{$A$ and $B$ are rotated by the same amount.}  Their
+        phase difference is not calibrated away.  The measured
+        $\SI{178.9}{\degree}$ (ideal $\SI{180}{\degree}$) is not the
+        inverter's delay: as a unity-gain inverter the AD826 (closed-loop
+        bandwidth about \SI{25}{\mega\hertz}) delays $B$ by only about
+        $\SI{0.006}{\degree}$ at $f_0$, and in the wrong direction (the
+        measured $B$ is $\SI{1.1}{\degree}$ \emph{earlier} than an ideal
+        inversion).  The difference is therefore more likely due to the
+        measurement paths (tolerances of the two input networks, ADC
+        channel timing), but whether it is real or not, it has almost no
+        effect on the tilt: it appears as a static imaginary part of the
+        balance term $\underline{z}$ ($\operatorname{Im}\underline{z}
+        \approx \delta/4 = 4.7\cdot10^{-3}$ for $\delta=\SI{1.07}{\degree}$,
+        matching the logged $-4.65\cdot10^{-3}$) and enters the real part
+        used for the reading only in second order.
+  \item \textbf{The reference is the difference phasor}
+        $\underline{D}=\underline{A}-\underline{B}$, the denominator of the
+        ratio.  It is the excitation the sensor actually sees between its two
+        supply inputs and lies half way between $A$ and $-B$.  Rotating all
+        phasors so that $\underline{D}$ is real makes the projection
+        $\operatorname{Re}[\underline{S}/(k\underline{D})]$ exactly the
+        in-phase component.  The rotation is determined at run time from the
+        measured $\underline{D}$, which removes any dependence on the
+        absolute phase of the sample grid (Section~10.5).
+  \item \textbf{The reference angle is $\SI{90}{\degree}$, not
+        $\SI{0}{\degree}$.}  This changes nothing in the calculation, but
+        the firmware's angle is $90^{\circ}-\varphi$ (Section~11), so
+        $\SI{90}{\degree}$ is exactly a sine with zero phase at the first
+        sample of a period, the natural zero of the convention used here.
+        It also keeps all values away from the $0^{\circ}/360^{\circ}$ wrap:
+        with $\underline{D}$ at $\SI{90}{\degree}$, $A$ reads about
+        $\SI{90.5}{\degree}$, $B$ about $\SI{269.5}{\degree}$ (symmetric,
+        because $\underline{D}$ is the midpoint), and each sensor lies near
+        $\SI{90}{\degree}$ (positive tilt, in phase with $A$) or near
+        $\SI{270}{\degree}$ (negative tilt, in phase with $B$), instead of one
+        value fluctuating around $\SI{0}{\degree}$ and jumping between
+        $\SI{359}{\degree}$ and $\SI{1}{\degree}$.  Near zero tilt the
+        amplitude of $\underline{S}$ vanishes, its phase is undefined and
+        jumps between the two values whatever the reference; the sign of the
+        reading comes from the projection, not from this angle, and the
+        angle should only be displayed above an amplitude threshold.
+  \item \textbf{Constants:} only the phase of each sensor relative to
+        $\underline{D}$, $\delta_1$ and $\delta_2$, needs to be stored in
+        EEPROM.  This is the phase of the complex constant $k=|k|e^{\mathrm{j}\delta}$
+        of Section~12 (one per sensor).  No individual constants for $A$ and
+        $B$ are needed.
+  \item \textbf{Determination:} apply a clearly non-zero tilt in a known
+        direction and choose $\delta$ so that $\underline{S}$ lands on the
+        real axis with the sign given by that direction.  From the 24\,h run
+        (quiet part, $\underline{D}$ at $\SI{90}{\degree}$) both sensors were
+        in phase with $B$ but $\SI{10.5}{\degree}$ ($S_1$, reading
+        $\SI{259.5}{\degree}$) and $\SI{14.3}{\degree}$ ($S_2$, reading
+        $\SI{255.7}{\degree}$) earlier than the ideal $\SI{270}{\degree}$.
+        These are the first estimates of $\delta_1$ and $\delta_2$.
 \end{itemize}
-Because the correction is applied after demodulation, it is independent of
-where in the analog chain each phase shift arises.  The constants are valid
-as long as the filters and the sensor do not change; they need to be
-re-determined after any rework of the input networks, or if the phases turn
-out to drift with temperature.  (Whether the absolute phase of $A$ is itself
-reproducible from run to run is discussed in Section~10.5.)
+\textbf{How much does it matter?}  Less than one might expect.  The complex
+ratio is already invariant against a common rotation of all phasors, so the
+rotation of the reference to $\SI{90}{\degree}$ changes the display only, not
+the result; only $\delta_1$ and $\delta_2$ change the arithmetic.  With a
+phase error $\delta$ of the sensor signal the in-phase reading is reduced by
+$\cos\delta$: $1.7\,\%$ for $\SI{10.5}{\degree}$ and $3.1\,\%$ for
+$\SI{14.3}{\degree}$, a scale factor that the empirical sensitivity
+calibration against a known tilt absorbs anyway.  The other effect is that a
+quadrature disturbance leaks into the reading with the factor $\sin\delta$
+($0.18$ and $0.25$).  In the 24\,h data the quadrature part of
+$\underline{S}/\underline{D}$ is however $6$ to $7$ times quieter than the
+in-phase part (Allan deviation at 1\,min, in equivalent
+\si{\micro\metre}: $S_1$ 0.03 against 0.28, $S_2$ 0.07 against 0.46), so
+this leakage is negligible (about 0.005\,\si{\micro\metre}).  The real
+benefits are therefore a clean diagnostic (the residual becomes a true
+quadrature signal, the phase display is unambiguous) and protection against
+a scale drift when $\delta$ changes ($\approx0.3$ to $0.4\,\%$ per degree),
+which matters for large tilts (about \SI{7}{\micro\metre\per\metre} per
+degree at \SI{2.5}{\milli\metre\per\metre}) but not near zero.  When the
+signal is large (for example above \SI{0.5}{\milli\metre\per\metre}) the
+angle of the residual gives a free online estimate of $\delta$, which can be
+used to monitor the stored constants.  The measure of priority is
+correspondingly lower than that of the imbalance correction (Section~12.7),
+which reduced the drift by a factor of 4 to 8.
+
+The correction is applied after demodulation, so it does not matter where
+in the analog chain each phase shift arises.  The constants are valid as long
+as the filters and the sensor do not change; they must be re-determined
+after any rework of the input networks, or if the phases turn out to drift
+with temperature.
+
 
 % ─────────────────────────────────────────────────────────────
 \section{Sampling}
@@ -891,9 +957,10 @@ acquisition is started, while the ADC keeps converting in between.  In two
 separate runs on two boots the phase of $A$ in this frame came out
 identical ($\SI{122.8}{\degree}$ and $\SI{122.7}{\degree}$), but this has
 not been verified across restarts.  For the planned phase calibration
-(Section~9) this means: phases relative to $A$ are always meaningful, and
-using $A$ as the run-time reference (rotate every phasor so that $A$ is at
-$\SI{0}{\degree}$) removes any dependence on the sample-index alignment.
+(Section~9) this means: phases relative to each other are always
+meaningful, and using the measured difference phasor $\underline{D}=\underline{A}-\underline{B}$
+as the run-time reference (rotate every phasor so that $\underline{D}$ is at
+$\SI{90}{\degree}$) removes any dependence on the sample-index alignment.
 
 % ─────────────────────────────────────────────────────────────
 \section{Amplitude and Phase from the Samples}
@@ -1451,6 +1518,95 @@ online (for example by regression on $\underline{z}$ in a sliding window) is
 not recommended, because real tilt correlates with $z$ as well; a fixed,
 calibrated $\lambda$ is safer.  \textbf{Status: proposal, not implemented.}
 
+\subsection{What ``drop the B term'' and ``fix k'' mean}
+
+The firmware evaluates, per sensor and batch,
+\begin{equation}
+  \underline{x} = \frac{\underline{S}/k - \underline{B}}{\underline{A}-\underline{B}},
+  \qquad \text{tilt} = 2\,d_0\bigl(\operatorname{Re}\underline{x}-\tfrac12\bigr) - \text{zero},
+  \qquad k = \text{attenuator}\times\text{gain} = 3\times160 = 480 .
+\end{equation}
+Expanding, $\underline{x}-\tfrac12 = \underline{S}/(k(\underline{A}-\underline{B})) + \underline{z}$
+with $\underline{z}=-(\underline{A}+\underline{B})/(2(\underline{A}-\underline{B}))$
+(Section~12.3).  The two proposed steps act on different parts of this.
+
+\textbf{Drop the B term.}
+\begin{itemize}
+  \item \emph{What it is:} in the numerator, use $\underline{S}/k$ instead of
+        $\underline{S}/k-\underline{B}$, i.e.\ $\underline{x}'=\underline{S}/(k(\underline{A}-\underline{B}))$
+        and $\text{tilt}=2\,d_0\operatorname{Re}\underline{x}'-\text{zero}$.  In
+        \texttt{compute\_sensor\_delta()} it means removing the two subtractions
+        of the B phasor from the numerator; the shared reciprocal of
+        $\underline{A}-\underline{B}$ stays.  $\underline{B}$ then enters only through
+        the difference $\underline{A}-\underline{B}$.
+  \item \emph{What it does:} it removes the term $\underline{z}$ from the reading, so the
+        reading no longer depends on the balance ($\underline{A}+\underline{B}$) of
+        the two excitation measurements.  That term is what the correction in
+        Section~12.6 removed offline: the drift of $S_2$ dropped by $8\times$ and of
+        $S_1$ by $4\times$, and the 1-minute jitter by $2$ to $4\times$.  The division
+        by $\underline{A}-\underline{B}$ remains, so the reading stays ratiometric in
+        excitation amplitude and phase.
+  \item \emph{What stays the same:} the tilt term is identical, so $d_0$ and the
+        sensitivity constants remain valid.
+  \item \emph{What changes:} the stored zero offsets.  The static value of
+        $\operatorname{Re}\underline{z}$ is about $2500$\,ppm, which at the present
+        calibration ($c=1.42$\,\si{\micro\metre}/ppm) is an offset of roughly
+        $3.6$\,\si{\milli\metre\per\metre} inside the current zero calibration.  After
+        the change the zero calibration must be repeated (the 180$^\circ$
+        reversal), otherwise the readings are off by about that amount.
+  \item \emph{What it gives up:} compensation of a \emph{real} imbalance of the
+        excitation at the sensor, if the sensor passed it through.  The data show that it
+        does not (Section~12.3).  The generalised form with a calibrated weight $\lambda$
+        (Section~12.7) contains both cases: $\lambda=1$ today, $\lambda=0$ here.
+\end{itemize}
+
+\textbf{Fix $k$.}  $k$ is the gain ratio of the S path to the A/B path in the ADC
+domain, needed so that $\underline{S}/k$ is on the same scale as $\underline{A}$ and
+$\underline{B}$.  It has a magnitude and a phase.
+\begin{itemize}
+  \item \emph{Magnitude.}  The firmware value $480$ was built from a nominal
+        attenuator of 3 and an assumed external gain of 10 times the PGA of 16.  The
+        networks give about $68$ on REV~B (and about $47$ with the planned REV~C
+        network, Section~14).  The effect depends on whether the B term is kept:
+        with the B term, $k$ decides how much of a real imbalance is cancelled
+        (14\,\% today, Section~12.5); \emph{without} it, $k$ only multiplies
+        with $d_0$ in $\text{tilt}=(2d_0/k)\operatorname{Re}[\underline{S}/(\underline{A}-\underline{B})]$,
+        so only the ratio $d_0/k$ matters, which the sensitivity calibration sets anyway.
+        Fixing the magnitude of $k$ is then cosmetic: the reading does not change, but
+        the internal quantity $\underline{x}'$ becomes the true fraction and the
+        diagnostics are consistent.
+  \item \emph{Phase.}  This is the part that changes the arithmetic in either case:
+        $k$ becomes complex, $k=|k|e^{\mathrm{j}\delta}$ (one constant per sensor,
+        Section~9), i.e.\ $\underline{S}$ is rotated by $-\delta$ before the division.  The
+        effect is small: a scale of $\cos\delta$ ($1.7$ to $3.1\,\%$, absorbed by the
+        sensitivity calibration) and a leakage of quadrature disturbances by $\sin\delta$,
+        which is negligible here because the quadrature part is $6$ to $7\times$ quieter
+        than the in-phase part.  What it buys is a clean diagnostic and protection
+        against scale drift if $\delta$ changes.
+\end{itemize}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.20\textwidth}p{0.32\textwidth}p{0.20\textwidth}p{0.17\textwidth}@{}}
+\toprule
+Step & Change in the firmware & Effect on the reading & Recalibration \\
+\midrule
+Drop the B term & remove $-\underline{B}$ in the numerator
+  & removes the $\underline{A}$/$\underline{B}$ balance drift ($4$ to $8\times$) and noise
+  & zero calibration \\
+Complex $k$ (phase) & rotate $\underline{S}$ by $-\delta_{1,2}$
+  & small scale change, cleaner diagnostics
+  & phase constants; sensitivity \\
+$k$ magnitude & set gain so that attenuator$\times$gain $=k_{\mathrm{phys}}$
+  & none (with the B term dropped), absorbed by $d_0$
+  & none \\
+\bottomrule
+\end{tabular}
+\end{center}
+Order of priority: dropping the B term (large effect), then the phase constants (small
+effect), then the numerical value of $k$ (cosmetic).  \textbf{Status: proposals, not
+implemented.}
+
 % ─────────────────────────────────────────────────────────────
 \section{Processing After the Ratio}
 % ─────────────────────────────────────────────────────────────
@@ -1593,6 +1749,411 @@ are computed directly from the phasors, independently of $k$, the
 attenuator and $\underline{A}-\underline{B}$.
 
 % ─────────────────────────────────────────────────────────────
+\section{Planned REV C Input Network and Excitation}
+% ─────────────────────────────────────────────────────────────
+
+\textbf{Status: planned for the next hardware revision, not built.}  The goal is that
+all four ADC inputs have the same structure, hence the same phase, and that the
+mismatch and the drift between the A and B measurement paths are small, since those
+paths were found to dominate the zero drift (Section~12).
+
+\subsection{The network}
+
+\begin{figure}[ht]
+\centering
+\begin{tikzpicture}[>=stealth]
+  % ---- A / B ----
+  \draw (-0.3,3.0) node[left,font=\scriptsize,align=right] {\texttt{ExciterA}\\(\texttt{ExciterB})} -- (0.55,3.0);
+  \hcap{1.0}{3.0}{\SI{470}{\nano\farad}}
+  \draw (1.06,3.0) -- (2.15,3.0);
+  \hres{2.6}{3.0}{rt}{\SI{6.67}{\kilo\ohm}}
+  \draw (3.05,3.0) -- (5.6,3.0);
+  \dotnode{4.0}{3.0}\dotnode{5.0}{3.0}
+  \vres{4.0}{1.5}{rb}{}
+  \node[font=\scriptsize,left=2pt of rb] {\SI{3.33}{\kilo\ohm}};
+  \draw (4.0,3.0) -- (rb.north); \draw (rb.south) -- (4.0,0);
+  \vcap{5.0}{1.5}{}{\SI{10}{\nano\farad}\ C0G}
+  \draw (5.0,3.0) -- (5.0,1.56); \draw (5.0,1.44) -- (5.0,0);
+  \draw[->] (5.0,3.0) -- (5.9,3.0) node[right,font=\scriptsize,align=left] {AIN2P (A)\\AIN1P (B)};
+  \draw (4.0,0) -- (5.0,0);
+  \draw (4.5,0) -- (4.5,-0.12); \draw (4.3,-0.12) -- (4.7,-0.12); \draw (4.36,-0.2) -- (4.64,-0.2);
+  \node[font=\scriptsize\bfseries] at (2.4,4.0) {A and B: 1/3 attenuation, $R_{\mathrm{th}}=\SI{2.2}{\kilo\ohm}$};
+\end{tikzpicture}
+
+\vspace{6mm}
+\begin{tikzpicture}[>=stealth]
+  % ---- S1 / S2 ----
+  \draw (-0.3,3.0) node[left,font=\scriptsize,align=right] {\texttt{Sensor1}\\(\texttt{Sensor2})} -- (0.55,3.0);
+  \hcap{1.0}{3.0}{\SI{470}{\nano\farad}}
+  \draw (1.06,3.0) -- (3.55,3.0);
+  \dotnode{2.4}{3.0}
+  \vres{2.4}{1.5}{rp}{}
+  \node[font=\scriptsize,left=2pt of rp] {\SI{10}{\kilo\ohm}};
+  \draw (2.4,3.0) -- (rp.north); \draw (rp.south) -- (2.4,0);
+  \hres{4.0}{3.0}{rs}{\SI{2.2}{\kilo\ohm}}
+  \draw (rs.east) -- (5.0,3.0);
+  \dotnode{5.0}{3.0}
+  \vcap{5.0}{1.5}{}{\SI{10}{\nano\farad}\ C0G}
+  \draw (5.0,3.0) -- (5.0,1.56); \draw (5.0,1.44) -- (5.0,0);
+  \draw[->] (5.0,3.0) -- (5.9,3.0) node[right,font=\scriptsize,align=left] {AIN3P (S1)\\AIN0P (S2)};
+  \draw (2.4,0) -- (5.0,0);
+  \draw (3.7,0) -- (3.7,-0.12); \draw (3.5,-0.12) -- (3.9,-0.12); \draw (3.56,-0.2) -- (3.84,-0.2);
+  \node[font=\scriptsize\bfseries] at (2.4,4.0) {S1 and S2: no attenuation};
+\end{tikzpicture}
+\caption{Planned REV~C input networks.  The 6.67\,k/3.33\,k pair is one matched
+         resistor network (10\,k total, ratio 2:1).  All coupling capacitors are
+         \SI{470}{\nano\farad}, all pin capacitors \SI{10}{\nano\farad} C0G.}
+\label{fig:revc}
+\end{figure}
+
+Both paths use a \SI{470}{\nano\farad} coupling capacitor, a resistive path to ground
+of \SI{10}{\kilo\ohm} (same high-pass corner of \SI{34}{\hertz} for all four) and a
+\SI{10}{\nano\farad} C0G capacitor at the ADC pin.  In the A/B path the resistor network
+is at the same time the ground reference, the $1/3$ attenuator and the filter
+resistor: its Th\'evenin resistance is $6.67\parallel3.33=\SI{2.22}{\kilo\ohm}$, almost
+exactly the \SI{2.2}{\kilo\ohm} series resistor of the S path.  The S signals are not
+attenuated (attenuating a signal only to add gain again would waste resolution).
+
+At $f_0$ (ADC input at gain 1 included):
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+Path & Gain & Delay & Peak at the pin & Remark \\
+\midrule
+A and B & 0.311 & $\SI{19.1}{\degree}$ & \SI{0.88}{\volt} ($74\,\%$ of full scale) & at \SI{2.00}{\volt} RMS excitation \\
+$S_1$, $S_2$ & 0.920 & $\SI{18.6}{\degree}$ & \SI{29.9}{\micro\volt} per \si{\micro\metre\per\metre} & PGA 16: $\pm\SI{2.5}{\milli\metre\per\metre}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The delay difference between the S and the A/B path is $\SI{0.5}{\degree}$, so the
+phase constants of Section~9 reduce to the sensor's own delay (the extra
+$7$ to $11^{\circ}$ found in Section~9 comes from the old electronics in the sensor;
+its output is an op-amp output and therefore low impedance).  The gain ratio between the
+paths is $k_{\mathrm{phys}}=16\cdot0.920/0.311\approx47$.  The attenuation of the A/B path
+above $f_0$ is $-68$\,dB at $f_{\mathrm{MCLK}}$; the corner of the low-pass is \SI{7.2}{\kilo\hertz}.
+
+\subsection{Excitation chain}
+
+\textbf{Status: proposal, nothing built or changed.}  The chain between the DDS and the two
+excitation outputs is proposed as follows (all values E12/E24):
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.38\textwidth}p{0.27\textwidth}p{0.2\textwidth}@{}}
+\toprule
+Function & Value & Series \\
+\midrule
+Coupling capacitor after the DAC & \SI{470}{\nano\farad} & E6 \\
+Ground reference (DC path) & \SI{6.8}{\kilo\ohm} & E12 \\
+First RC low-pass & \SI{680}{\ohm} + \SI{10}{\nano\farad} & E12 \\
+Second RC low-pass & \SI{6.8}{\kilo\ohm} + \SI{1}{\nano\farad} & E12 \\
+Gain stage (OPA2197) & R54 = \SI{3}{\kilo\ohm}, R53 = \SI{27}{\kilo\ohm} ($G=10.0$) & E24 \\
+Inverter & \SI{10}{\kilo\ohm} / \SI{10}{\kilo\ohm} & see below \\
+Output isolation & \SI{22}{\ohm} in series at each output & E24 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Order of the stages.}  The DC block comes first, right after the DAC, so that the
+DAC's offset (\SI{344}{\milli\volt}) is never amplified.  The two RC stages are passive and
+sit in front of the op-amp, whose input is high impedance (FET/CMOS type), so no buffer is
+needed.  At $f_0$ the chain (including the DAC's \SI{200}{\ohm} source and the op-amp input)
+has a gain of $0.909$ and a delay of $\SI{13.8}{\degree}$, a high-pass corner of
+\SI{48}{\hertz}, and attenuates by \SI{97}{\decibel} at $f_{\mathrm{MCLK}}$.
+
+\textbf{How critical is this filter?}  Not very.  The ADC modulator runs at
+$f_{\mathrm{MCLK}}/2$, so the DAC's image at $f_{\mathrm{MCLK}}-f_0$ aliases exactly onto
+$f_0$ in the ADC and cannot be removed digitally.  It is however tiny already: about
+$\SI{-66}{\decibel}$ from the DAC's own sample-and-hold, a further $\SI{-57}{\decibel}$
+(relative to the passband) through the A/B network and about $\SI{-66}{\decibel}$ from the
+modulator's input sampling (an estimate), together below $\SI{-150}{\decibel}$ even without
+any exciter filter.  The RC stages are for cleanliness (less RF into the op-amps and the sensor
+electronics), not for the measurement.  Because the filter sits before the point where the
+excitation is split into $A$, $B$ and the sensor supply, its gain and phase are common to all
+of them and cancel in the ratio.  Precision is needed only after the split: the ratio of the
+inverter, and the A/B input networks (Section~14.1).
+
+\textbf{Why not an active filter.}  A Sallen-Key low-pass has a capacitor from the filter node
+to the op-amp output.  Once the loop gain of the op-amp is gone at high frequency, the output
+resistance $R_0$ of the op-amp forms a divider with the input resistor through that
+capacitor, and the stopband floors at about $R_0/R_1$.  For a 23\,kHz unity-gain Butterworth
+stage (\SI{1}{\kilo\ohm}, \SI{9.8}{\nano\farad}/\SI{4.9}{\nano\farad}) and a \SI{10}{\mega\hertz}
+op-amp, the response at $f_{\mathrm{MCLK}}$ is $\SI{-96}{\decibel}$ for an ideal
+op-amp, but $\SI{-37}{\decibel}$ for $R_0=\SI{30}{\ohm}$ and $\SI{-27}{\decibel}$ for
+$R_0=\SI{100}{\ohm}$.  Two passive RC stages give $\SI{-94}{\decibel}$ independent of the
+op-amp.  The filter therefore stays passive and in front of the op-amp.
+
+\textbf{Gain stage and excitation level.}  With the chain above the excitation is
+$0.306\cdot0.909\cdot G$.  The nominal supply of the sensor is \SI{2}{\volt} RMS
+(\SI{2.83}{\volt} peak); the A/B input network (Section~14.1) has a gain of $0.311$.
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+R53 / R54 & $G$ & Excitation (peak / RMS) & A/B at the pin & Note \\
+\midrule
+27k / 3k   & 10.00 & 2.78\,V / \SI{1.97}{\volt} & 0.87\,V (72\,\%) & OPA2197, preferred \\
+13k / 1k5  & 9.67  & 2.69\,V / \SI{1.90}{\volt} & 0.84\,V (70\,\%) & OPA2197, lower impedance \\
+130k / 15k & 9.67  & 2.69\,V / \SI{1.90}{\volt} & 0.84\,V (70\,\%) & AD826 (see below) \\
+150k / 15k & 11.0  & 3.06\,V / \SI{2.16}{\volt} & 0.95\,V (79\,\%) & rail-to-rail part only \\
+\bottomrule
+\end{tabular}
+\end{center}
+For a bipolar op-amp such as the AD826 (bias current \SI{3.3}{\micro\ampere}) the DC
+resistance seen by the non-inverting input ($6.8+0.68+6.8=\SI{14.3}{\kilo\ohm}$) must be
+matched by $\mathrm{R53}\parallel\mathrm{R54}$; with 15k/130k ($13.5\,\mathrm{k}$) the
+offset is about $\SI{-25}{\milli\volt}$, with 10k/100k it would be $\SI{-185}{\milli\volt}$.  A
+FET or CMOS input op-amp makes this irrelevant (offset in the microvolt range), which allows
+the lower resistances of the first two rows.  The AD826 guarantees only about $\SI{-2.8}{\volt}$
+of swing on the $\SI{-4.5}{\volt}$ rail, so 130k/15k works there with $\approx\SI{80}{\milli\volt}$
+of margin and 150k/15k does not.
+
+\textbf{The inverter ratio.}  $B=-A(1+\varepsilon)$ with $\varepsilon$ the ratio error of the
+two resistors.  The static part scales the tilt by $\varepsilon/2$ and is calibrated away
+($\pm500$\,ppm for a matched network, up to $\pm1000$\,ppm for two $0.1\,\%$ resistors).  Only
+the drift matters: $\Delta\varepsilon/2$ on the tilt scale is about \SI{1}{ppm\per\kelvin} for a
+matched network and $5$ to \SI{12}{ppm\per\kelvin} for discrete resistors, which is below the
+noise floor at any realistic tilt.  If the B term were kept in the ratio
+(Section~12.8), the drift would act through $\underline{z}$ as $\Delta\varepsilon/4$, which would be
+$0.7$ against $4$ to \SI{9}{\micro\metre\per\metre} per kelvin at the present calibration.  So the
+matched network pays off only if the B term is kept; with the B term dropped, two discrete
+$0.1\,\%$ resistors placed next to each other are sufficient, and a matched $1\!:\!1$ network is
+worth using if it costs about a dollar or less.  The finite loop gain of the op-amp adds a
+quadrature imbalance of $2f_0/\mathrm{GBW}$ ($\approx100$\,ppm for \SI{50}{\mega\hertz}, about
+$500$\,ppm for \SI{10}{\mega\hertz}), static and without consequence.
+
+\subsection{Components and tolerances}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.22\textwidth}p{0.42\textwidth}p{0.26\textwidth}@{}}
+\toprule
+Function & Part & Note \\
+\midrule
+Coupling capacitors (4) & \SI{470}{\nano\farad} X7R 50\,V 0805, Samsung CL21B474KBFNNNE,
+  LCSC C13967 & Basic tier; library symbol \texttt{C0805\_470n} \\
+Pin capacitors (4) & \SI{10}{\nano\farad} C0G 50\,V $\pm1\,\%$ 0805, Murata GRM2195C1H103FA01D,
+  LCSC C441760 & Extended tier (one-time fee); \texttt{C0805\_10n\_C0G} \\
+A/B divider (2) & matched resistor network, \SI{10}{\kilo\ohm} total, ratio $2\!:\!1$,
+  ratio tracking about \SI{2}{ppm\per\kelvin} & part to be chosen; one per channel, adjacent \\
+S resistors (2 + 2) & \SI{10}{\kilo\ohm} and \SI{2.2}{\kilo\ohm}, $0.1\,\%$ thin film
+  recommended ($1\,\%$ acceptable) & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Why C0G only at the pin.}  Sensitivity of gain and phase at $f_0$ to a
+$1\,\%$ change of the capacitor (from the corner of its own network):
+\begin{center}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Capacitor & Gain change per 1\,\% & Phase change per 1\,\% \\
+\midrule
+\SI{10}{\nano\farad} at the pin (corner \SI{7.2}{\kilo\hertz}) & $0.12\,\%$ & $0.18^{\circ}$ \\
+\SI{100}{\nano\farad} coupling (corner \SI{159}{\hertz}) & $0.004\,\%$ & $0.007^{\circ}$ \\
+\SI{470}{\nano\farad} coupling (corner \SI{34}{\hertz}) & $0.0002\,\%$ & $0.0075^{\circ}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The pin capacitor is about $700\times$ more sensitive in gain and $24\times$ in phase.
+Its temperature drift also matters most: a drift mismatch of only $0.5\,\%$ between the A and B
+capacitors would change the A/B ratio by about $600$\,ppm, the size of the drift observed on
+REV~B (which uses capacitors of unknown, probably X7R, quality).  The AC voltage across the
+coupling capacitor is only about $1.3\,\%$ of the signal, so the voltage coefficient of X7R
+is irrelevant there.
+
+\textbf{Simulated mismatch} between two nominally identical channels (array ratio $0.1\,\%$,
+absolute $0.1\,\%$, discrete resistors $1\,\%$, pin capacitor C0G $1\,\%$, coupling capacitor
+X7R $10\,\%$):
+\begin{center}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Pair & Phase (SD) & Gain (SD) \\
+\midrule
+A vs B & $0.16^{\circ}$ & $0.11\,\%$ \\
+$S_1$ vs $S_2$ & $0.22^{\circ}$ & $0.21\,\%$ \\
+A vs B, array absolute tolerance $1\,\%$ & $0.23^{\circ}$ & $0.15\,\%$ \\
+all pairs with X7R $10\,\%$ pin capacitors (for comparison) & $1.5^{\circ}$ & $1\,\%$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The expected drift of the A/B ratio between the two channels is about \SI{3}{ppm\per\kelvin}
+(array tracking about 2, capacitor about 1), against about \SI{47}{ppm\per\kelvin} on REV~B
+(an estimate for REV~C, a measurement for REV~B).
+
+\subsection{Alternatives considered}
+
+\begin{itemize}
+  \item \textbf{Attenuating $S_1$ and $S_2$} like A and B (so that all four are identical):
+        possible, and the PGA would give the full $\pm10$\,mm/m range, but it only
+        attenuates in order to add gain again; the phase calibration handles the small
+        difference anyway.
+  \item \textbf{Capacitive divider} (2.2\,k, then a series capacitor of 3.3 or 4.7\,nF into
+        the 10\,nF at the pin): flat wide passband and light load, but the gain depends
+        first-order on the capacitor ratio, which discrete C0G parts track to only about
+        $10$ to \SI{15}{ppm\per\kelvin}, against about $2$ to \SI{5}{ppm\per\kelvin} for a
+        matched resistor array.  Not better on drift.
+  \item \textbf{Analog multiplexers} at the S inputs (route each signal to either ADC channel
+        and polarity): not adopted.  Offsets are removed by the carrier and the demodulation,
+        a gain drift only scales the tilt, and the errors found (the A/B balance, the slow
+        drift of $S_1$) are upstream of any multiplexer at the ADC pins.  The switches would
+        add their own resistance, leakage and charge injection.  A cheaper diagnostic is to swap
+        the two sensor cables once and see whether the drift of $S_1$ follows the sensor or the
+        channel.
+\end{itemize}
+
+\subsection{Op-amp selection (REV C)}
+
+\textbf{Status: shortlist from datasheets, no part ordered.}  The AD826 of REV~B was chosen for
+its output current, which the circuit does not need (a few mA suffice, and the supply current
+does not change when the sensors are attached).  Requirements for the replacement: absolute
+maximum supply of at least \SI{12}{\volt} (the rails are $+\SI{5}{\volt}$ and $-\SI{4.5}{\volt}$,
+\SI{9.5}{\volt} in total, which excludes the many parts limited to \SI{5.5}{\volt}); output swing
+of at least $\pm\SI{3}{\volt}$ into \SI{5}{\kilo\ohm}; input bias current of at most 1\,nA (JFET or
+CMOS input); unity-gain stable; gain-bandwidth of 5 to 30\,MHz (a very fast part invites
+oscillation); quiescent current of at most about \SI{2}{\milli\ampere} per amplifier (the
+instrument is battery powered); output current of at least \SI{10}{\milli\ampere}; dual in
+SOIC-8 with the same pinout as the AD826.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+Part & LCSC & Stock & Price (10) & $I_q$/amp & GBW \\
+\midrule
+\textbf{OPA2197IDR} (TI) & C139363 & 9501  & \$0.71 & 1\,mA   & 10\,MHz \\
+OPA2192IDR (TI)          & C110074 & 44738 & \$1.05 & 1\,mA   & 10\,MHz \\
+OPA2172IDR (TI)          & C545167 & 17    & \$1.17 & 1.6\,mA & 10\,MHz \\
+OPA2156IDR (TI)          & C1850241 & 4745 & \$2.02 & (not checked) & about 25\,MHz \\
+AD826ARZ (reference)     & C652603 & 946   & \$5.19 & up to 7.5\,mA & 50\,MHz \\
+\bottomrule
+\end{tabular}
+\end{center}
+All are Extended tier (a single fee per board; data from jlcsearch, 2026-09-30).  The
+OPA2197 (and its sibling OPA2192) has $\pm5$\,pA input bias, a supply range of $4.5$ to
+\SI{36}{\volt}, an output swing within about \SI{0.1}{\volt} of the rails at
+\SI{10}{\kilo\ohm}, $\pm\SI{65}{\milli\ampere}$ output current, a common-mode range extending
+\SI{0.1}{\volt} beyond both rails, about 5.5\,nV/$\sqrt{\mathrm{Hz}}$ noise, about
+\SI{120}{\decibel} PSRR and capacitive-load drive up to 1\,nF (all from the TI datasheets).  It is
+proposed as the first choice, with the OPA2192 as the alternative with deeper stock.  The values
+for the AD826 are from its datasheet (\SI{7.5}{\milli\ampere} maximum per amplifier).  Rejected:
+parts with a \SI{5.5}{\volt} or \SI{16}{\volt} supply limit, the TL072 (3\,MHz), the OPA2140
+(about 3.6 USD) and the OPA2134 (too much supply current).  Not verified: the overshoot-versus-load
+plots for the intended \SI{22}{\ohm} to \SI{47}{\ohm} isolation resistor.
+
+\subsection{Stability: compensation and layout (REV C)}
+
+\textbf{Status: proposal.}  A small capacitor $C_f$ across the feedback resistor (from the output to
+the \emph{inverting} input) compensates the pole formed by the feedback resistance and the stray
+capacitance at the inverting pin, and restores the phase margin.  (A capacitor from the output to
+the \emph{non-inverting} input would be positive feedback and would make oscillation more
+likely.)  It does not affect the signal: with $\mathrm{R53}=\SI{27}{\kilo\ohm}$ and
+\SI{2.2}{\pico\farad} its pole is at \SI{2.7}{\mega\hertz}, a thousand times above $f_0$.  A usual
+estimate is $C_f\approx\sqrt{C_{\mathrm{in}}/(2\pi R_f\,\mathrm{GBW})}$:
+\begin{center}
+\small
+\begin{tabular}{@{}lrr@{}}
+\toprule
+Op-amp, feedback resistor & $C_{\mathrm{in}}$ (assumed) & $C_f$ \\
+\midrule
+AD826 (50\,MHz), \SI{100}{\kilo\ohm} & 4\,pF & 0.4\,pF \\
+AD826, \SI{27}{\kilo\ohm}            & 4\,pF & 0.7\,pF \\
+OPA2197 (10\,MHz), \SI{27}{\kilo\ohm} & 5\,pF & 1.7\,pF \\
+OPA2197, \SI{13}{\kilo\ohm}          & 5\,pF & 2.5\,pF \\
+\bottomrule
+\end{tabular}
+\end{center}
+The stray capacitances are assumptions, so these are starting values to be tuned on the bench.
+Proposed for the board: pads for $C_f$ across R53 and across R56 (the inverter's feedback),
+0402 C0G, with \SI{2.2}{\pico\farad} populated by default; \SI{22}{\ohm} to \SI{47}{\ohm} in
+series at each output to isolate cable capacitance; \SI{100}{\nano\farad} plus
+\SI{1}{\micro\farad} at each supply pin within a few millimetres; a short trace to the inverting
+input, with no ground plane under that pin.  The OPA2197 is slower and more tolerant than the
+AD826, so these are mainly insurance.
+
+\subsection{The supply-current problem on REV B}
+
+\textbf{Observation.}  On both REV~B boards the supply current is about \SI{80}{\milli\ampere}
+instead of the expected \SI{20}{\milli\ampere}; a thermal image shows that the excess is
+dissipated in the AD826.  The current is essentially unchanged when the sensors are attached.
+The excess of about \SI{60}{\milli\ampere} is far above what two AD826 amplifiers should draw
+(at most about \SI{15}{\milli\ampere} together) and independent of the load, which points to
+an instability, most likely a high-frequency oscillation of one stage (a class-AB output stage
+that oscillates draws and dissipates exactly this kind of current), identical on both boards
+because it is a design property.
+
+\textbf{Probable cause (hypothesis).}  The feedback resistor R53 is \SI{100}{\kilo\ohm}.  With
+R54 \SI{10}{\kilo\ohm} the feedback network has \SI{9.1}{\kilo\ohm} in parallel; with about
+\SI{4}{\pico\farad} of stray capacitance at the inverting pin it forms a pole at
+\SI{4.4}{\mega\hertz}, right at the crossover frequency of the loop ($\mathrm{GBW}/G=\SI{4.5}{\mega\hertz}$),
+and costs about $46^{\circ}$ of phase margin.
+\begin{center}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+R53 / R54 & Output DC (\SI{3.3}{\micro\ampere}) & Feedback pole & Phase margin lost \\
+\midrule
+100k / 10k (now) & $-280$\,mV & 4.4\,MHz & about $46^{\circ}$ \\
+47k / 4k7        & $-460$\,mV & 9.3\,MHz & about $26^{\circ}$ \\
+22k / 2k2        & $-540$\,mV & 20\,MHz  & about $13^{\circ}$ \\
+150k / 15k       & $-120$\,mV & 2.9\,MHz & about $57^{\circ}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+This shows why the resistors cannot simply be lowered on the AD826: lowering R53 removes the
+term of the bias-current compensation, and the output offset gets worse (to \SI{-0.54}{\volt}
+for 22k/2k2, which would clip the negative peaks).
+
+\textbf{Diagnosis (to do, first).}  Look for oscillation with the oscilloscope before changing
+anything.  Probe the outputs (U16 pin~1 ExciterA and pin~7 ExciterB) and the supply pins
+(pin~8 and pin~4, at the decoupling capacitors C67, C68, C73, C74); the inverting input (pin~2)
+should not be probed, because the probe capacitance alone can start or stop an oscillation.  Use a
+$\times10$ probe at full bandwidth (20\,MHz limit off) with a spring ground tip, AC coupling,
+$20$ to \SI{50}{\milli\volt}/div, \SI{100}{\nano\second}/div to see the HF structure and
+\SI{100}{\micro\second}/div to see where on the \SI{2.6}{\kilo\hertz} cycle it occurs
+(peak-detect or persistence), or an FFT of 0 to 50\,MHz.  Typical signs are a thick trace, an HF
+burst of 1 to 30\,MHz on the peaks or the zero crossing, and HF ripple on the supply pins.  Two
+extra checks: whether the extra current stays with the DDS stopped (then the oscillation is
+self-sustaining), and how the current splits between the $+5$\,V and the $-4.5$\,V rail.  If
+the outputs and rails are clean and the current stays high, the cause is elsewhere (for example
+the $-4.5$\,V rail), and the resistor changes below should not be made.
+
+\subsection{REV B rework options (not applied)}
+
+\textbf{Status: analysis only, waiting for the oscilloscope check.}  Only resistor values can be
+changed on the existing boards, and the AD826 stays.  The feedback resistors and the DC
+resistance in front of the non-inverting input must then be changed together: a low feedback
+impedance for stability needs a low DC resistance R50 + R51 (otherwise the bias current
+offset grows).  Candidates (all E24, gain 11.0, R52 stays at \SI{0}{\ohm}):
+\begin{center}
+\small
+\begin{tabular}{@{}lrrrrr@{}}
+\toprule
+R50, R51 / R53, R54 & Exc.\ RMS & DC offset & Pole & PM lost & HP / LP \\
+\midrule
+10k, 6k8 / 100k, 10k (now) & \SI{2.24}{\volt} & $-280$\,mV & 4.4\,MHz & $46^{\circ}$ & 156\,Hz / 21\,kHz \\
+\textbf{1k5, 1k / 27k, 2k7} & \SI{1.95}{\volt} & $-2$\,mV & 16\,MHz & $16^{\circ}$ & 936\,Hz / 145\,kHz \\
+2k2, 1k / 36k, 3k6         & \SI{2.09}{\volt} & $+3$\,mV & 12\,MHz & $20^{\circ}$ & 663\,Hz / 145\,kHz \\
+2k2, 1k5 / 43k, 4k3        & \SI{2.08}{\volt} & $+8$\,mV & 10\,MHz & $24^{\circ}$ & 663\,Hz / 96\,kHz \\
+\bottomrule
+\end{tabular}
+\end{center}
+The first candidate (R50 = \SI{1.5}{\kilo\ohm}, R51 = \SI{1}{\kilo\ohm}, R53 = \SI{27}{\kilo\ohm},
+R54 = \SI{2.7}{\kilo\ohm}) gives a negligible output offset, about $16^{\circ}$ of phase-margin loss
+instead of $46^{\circ}$, an excitation of \SI{1.95}{\volt} RMS (close to the sensor's nominal
+\SI{2}{\volt}) and a load of \SI{30}{\kilo\ohm}.  The prices are a higher high-pass corner
+(\SI{936}{\hertz}: gain $0.82$, phase lead $18.5^{\circ}$ at $f_0$) and a weaker filter
+(\SI{-34}{\decibel} instead of \SI{-48}{\decibel} at $f_{\mathrm{MCLK}}$), both common to $A$,
+$B$ and the sensor supply and therefore harmless, as argued above.  The phase-margin figures
+depend on the assumed \SI{4}{\pico\farad}; the real test is the supply current after the change,
+which should fall towards 20 to \SI{25}{\milli\ampere} if instability is the cause.  Where a
+small capacitor across R53 can be fitted (Section~14.6), it is the least invasive first step: it
+leaves the DC offset at $-0.28$\,V.
+
+% ─────────────────────────────────────────────────────────────
 \section{Status, Open Items and Proposals}
 % ─────────────────────────────────────────────────────────────
 
@@ -1610,6 +2171,19 @@ R48, R49 (A/B filter)    & \SI{680}{\kilo\ohm} (mistake) & \SI{680}{\ohm} \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\subsection{Planned changes for REV C (Section~14)}
+
+Identical input structure for all four channels with a \SI{470}{\nano\farad} coupling
+capacitor and a \SI{10}{\nano\farad} C0G pin capacitor each; A/B through a matched 2:1
+resistor network ($1/3$, \SI{2.2}{\kilo\ohm}), S1/S2 with \SI{10}{\kilo\ohm} to ground and
+\SI{2.2}{\kilo\ohm} in series; a new excitation chain (passive filter in front of a
+low-bias op-amp, OPA2197 proposed, R53/R54 = 27k/3k, excitation about \SI{1.97}{\volt} RMS) with
+compensation pads and output isolation (Sections~14.2, 14.5, 14.6); R46--R49 and R52 as the
+corrected values of Section~15.1 become the schematic values.  Library symbols
+\texttt{C0805\_10n\_C0G} (C441760) and \texttt{C0805\_470n} (C13967) have been added.  The
+excess supply current of the REV~B excitation driver (Section~14.7) is to be diagnosed first;
+resistor rework options are analysed in Section~14.8 but not applied.
 
 \subsection{Implemented and verified}
 
@@ -1641,9 +2215,12 @@ does not carry the imbalance.  Proposal: $\lambda=0$, i.e.\ drop the
 $-\underline{B}$ term, then a complex $k$; verify $\lambda$ with a
 deliberate imbalance.  Zero calibration must be repeated afterwards. \\
 Phase calibration (Sec.\,9) &
-Planned: empirical phase constants, $A$ reads $0^\circ$ (used as run-time
-reference), $B$ $180^\circ$, $S_1$/$S_2$ on the real axis.  The absolute
-phase across restarts is not guaranteed by design (Sec.\,10.5). \\
+Planned: run-time reference $\underline{D}=\underline{A}-\underline{B}$ at
+$90^\circ$ ($A\approx90.5^\circ$, $B\approx269.5^\circ$, $B$--$A$ difference
+kept), $S_1$/$S_2$ near $90^\circ$ or $270^\circ$; only two EEPROM constants
+$\delta_1$, $\delta_2$ (phase of $k$; first estimates $-10.5^\circ$ and
+$-14.3^\circ$).  The absolute phase across restarts is not guaranteed by
+design (Sec.\,10.5). \\
 Sensor phase and impedance (Sec.\,9) &
 After the networks, the sensors add about $+11^\circ$ ($S_1$) and
 $+7^\circ$ ($S_2$) of delay; their output impedance is unspecified. \\
@@ -1656,6 +2233,12 @@ Excitation DC and headroom (Sec.\,6) &
 Residual offset about $\SI{-0.3}{\volt}$ on ExciterA and headroom of about
 $\SI{3.5}{\volt}$ against the AD826's $\pm3.3$ to $\pm\SI{3.8}{\volt}$ swing;
 calculated, not yet measured on the bench. \\
+Excess supply current (Sec.\,14.7) &
+Both REV~B boards draw about \SI{80}{\milli\ampere} instead of \SI{20}{\milli\ampere};
+the AD826 is hot, and the current does not change with the sensors attached.  Probable
+cause: HF oscillation of the gain stage (feedback pole of the \SI{100}{\kilo\ohm} R53 at the
+crossover).  To do: oscilloscope check of the outputs and supply pins (Sec.\,14.7) before any
+rework (Sec.\,14.8). \\
 Sunlight / long-term (Sec.\,12.6) &
 The bump at about 21\,h of the 24\,h run is very likely sunlight on the
 sensors (a real input).  The clean window for the drift analysis is about
