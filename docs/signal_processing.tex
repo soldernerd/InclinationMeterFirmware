@@ -1848,7 +1848,7 @@ Coupling capacitor after the DAC & \SI{470}{\nano\farad} & E6 \\
 Ground reference (DC path) & \SI{6.8}{\kilo\ohm} & E12 \\
 First RC low-pass & \SI{680}{\ohm} + \SI{10}{\nano\farad} & E12 \\
 Second RC low-pass & \SI{6.8}{\kilo\ohm} + \SI{1}{\nano\farad} & E12 \\
-Gain stage (OPA2197) & R54 = \SI{3}{\kilo\ohm}, R53 = \SI{27}{\kilo\ohm} ($G=10.0$) & E24 \\
+Gain stage (OPA2191 or OPA2197) & R54 = \SI{3}{\kilo\ohm}, R53 = \SI{27}{\kilo\ohm} ($G=10.0$) & E24 \\
 Inverter & \SI{10}{\kilo\ohm} / \SI{10}{\kilo\ohm} & see below \\
 Output isolation & \SI{22}{\ohm} in series at each output & E24 \\
 \bottomrule
@@ -1921,7 +1921,8 @@ matched network pays off only if the B term is kept; with the B term dropped, tw
 $0.1\,\%$ resistors placed next to each other are sufficient, and a matched $1\!:\!1$ network is
 worth using if it costs about a dollar or less.  The finite loop gain of the op-amp adds a
 quadrature imbalance of $2f_0/\mathrm{GBW}$ ($\approx100$\,ppm for \SI{50}{\mega\hertz}, about
-$500$\,ppm for \SI{10}{\mega\hertz}), static and without consequence.
+$500$\,ppm for \SI{10}{\mega\hertz}, about $2400$\,ppm or $0.14^{\circ}$ for the \SI{2.2}{\mega\hertz}
+of the OPA2191), static and without consequence.
 
 \subsection{Components and tolerances}
 
@@ -2007,42 +2008,103 @@ The expected drift of the A/B ratio between the two channels is about \SI{3}{ppm
 
 \subsection{Op-amp selection (REV C)}
 
-\textbf{Status: shortlist from datasheets, no part ordered.}  The AD826 of REV~B was chosen for
-its output current, which the circuit does not need (a few mA suffice, and the supply current
-does not change when the sensors are attached).  Requirements for the replacement: absolute
-maximum supply of at least \SI{12}{\volt} (the rails are $+\SI{5}{\volt}$ and $-\SI{4.5}{\volt}$,
-\SI{9.5}{\volt} in total, which excludes the many parts limited to \SI{5.5}{\volt}); output swing
-of at least $\pm\SI{3}{\volt}$ into \SI{5}{\kilo\ohm}; input bias current of at most 1\,nA (JFET or
-CMOS input); unity-gain stable; gain-bandwidth of 5 to 30\,MHz (a very fast part invites
-oscillation); quiescent current of at most about \SI{2}{\milli\ampere} per amplifier (the
-instrument is battery powered); output current of at least \SI{10}{\milli\ampere}; dual in
-SOIC-8 with the same pinout as the AD826.
+\textbf{Status: shortlist verified from the TI datasheets, no part ordered.}  The AD826 of
+REV~B was chosen for its output current, which the circuit does not need (a few mA suffice, and
+the supply current does not change when the sensors are attached).  Requirements for the
+replacement: absolute maximum supply of at least \SI{12}{\volt} (the rails are
+$+\SI{5}{\volt}$ and $-\SI{4.5}{\volt}$, \SI{9.5}{\volt} in total, which excludes the many parts
+limited to \SI{5.5}{\volt}); output swing of at least $\pm\SI{3}{\volt}$ into \SI{5}{\kilo\ohm};
+input bias current of at most 1\,nA (JFET or CMOS input); unity-gain stable; gain-bandwidth of
+about 2\,MHz or more (first set to 5\,MHz, relaxed after the loop-gain analysis below; a very
+fast part invites oscillation); low quiescent current (the instrument is battery powered);
+output current of at least \SI{10}{\milli\ampere}; dual in SOIC-8 with the same pinout as the
+AD826.
 
 \begin{center}
-\small
-\begin{tabular}{@{}lrrrrr@{}}
+\scriptsize
+\begin{tabular}{@{}lrrrrrr@{}}
 \toprule
-Part & LCSC & Stock & Price (10) & $I_q$/amp & GBW \\
+Part & LCSC & Stock & Price (10/100) & $I_q$/amp (typ/max) & GBW & Noise 1\,kHz \\
 \midrule
-\textbf{OPA2197IDR} (TI) & C139363 & 9501  & \$0.71 & 1\,mA   & 10\,MHz \\
-OPA2192IDR (TI)          & C110074 & 44738 & \$1.05 & 1\,mA   & 10\,MHz \\
-OPA2172IDR (TI)          & C545167 & 17    & \$1.17 & 1.6\,mA & 10\,MHz \\
-OPA2156IDR (TI)          & C1850241 & 4745 & \$2.02 & (not checked) & about 25\,MHz \\
-AD826ARZ (reference)     & C652603 & 946   & \$5.19 & up to 7.5\,mA & 50\,MHz \\
+\textbf{OPA2191IDR} (TI) & C543015  & 3239  & \$2.09 / \$1.59 & 0.14 / 0.20\,mA & 2.2--2.5\,MHz & 15\,nV/$\sqrt{\mathrm{Hz}}$ \\
+\textbf{OPA2197IDR} (TI) & C139363  & 9501  & \$0.71 / \$0.57 & 1.0 / 1.3\,mA   & 10\,MHz & 5.5\,nV/$\sqrt{\mathrm{Hz}}$ \\
+OPA2192IDR (TI)          & C110074  & 44738 & \$1.05 / \$0.82 & 1.0 / 1.2\,mA   & 10\,MHz & 5.5\,nV/$\sqrt{\mathrm{Hz}}$ \\
+OPA2172IDR (TI)          & C545167  & 17    & \$1.17 / --     & 1.6 / 1.8\,mA   & 10\,MHz & 7\,nV/$\sqrt{\mathrm{Hz}}$ \\
+OPA2156IDR (TI)          & C1850241 & 4745  & \$2.02 / --     & (not checked)   & about 25\,MHz & (not checked) \\
+AD826ARZ (reference)     & C652603  & 946   & \$5.19 / --     & up to 7.5\,mA   & 50\,MHz & (not checked) \\
 \bottomrule
 \end{tabular}
 \end{center}
-All are Extended tier (a single fee per board; data from jlcsearch, 2026-09-30).  The
-OPA2197 (and its sibling OPA2192) has $\pm5$\,pA input bias, a supply range of $4.5$ to
-\SI{36}{\volt}, an output swing within about \SI{0.1}{\volt} of the rails at
-\SI{10}{\kilo\ohm}, $\pm\SI{65}{\milli\ampere}$ output current, a common-mode range extending
-\SI{0.1}{\volt} beyond both rails, about 5.5\,nV/$\sqrt{\mathrm{Hz}}$ noise, about
-\SI{120}{\decibel} PSRR and capacitive-load drive up to 1\,nF (all from the TI datasheets).  It is
-proposed as the first choice, with the OPA2192 as the alternative with deeper stock.  The values
-for the AD826 are from its datasheet (\SI{7.5}{\milli\ampere} maximum per amplifier).  Rejected:
-parts with a \SI{5.5}{\volt} or \SI{16}{\volt} supply limit, the TL072 (3\,MHz), the OPA2140
-(about 3.6 USD) and the OPA2134 (too much supply current).  Not verified: the overshoot-versus-load
-plots for the intended \SI{22}{\ohm} to \SI{47}{\ohm} isolation resistor.
+All are Extended tier (a single fee per board; from jlcsearch, snapshot 2026-10-01, not
+verified on the JLCPCB part pages).  Common to the OPA2191, OPA2192 and OPA2197 (TI datasheets,
+SBOS701D, SBOS620E, SBOS737C): supply range $4.5$ to \SI{36}{\volt}; input bias
+$\pm5$\,pA typical ($\pm20$\,pA maximum); rail-to-rail input range extending \SI{0.1}{\volt}
+beyond both rails; open-loop gain of 120 dB or more at DC; unity-gain stable with a capacitive
+load of up to 1\,nF directly on the output; standard dual pinout (OUT\,A, $-$IN\,A, +IN\,A, V$-$,
++IN\,B, $-$IN\,B, OUT\,B, V$+$ on pins 1 to 8, confirmed in the OPA2191 datasheet).  Differences:
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{4.6cm}p{5.4cm}p{5.0cm}@{}}
+\toprule
+ & OPA2191 & OPA2192 / OPA2197 \\
+\midrule
+$I_q$ per package (2 amplifiers) & 0.28\,mA typ, 0.40\,mA max & 2.0\,mA typ, 2.4--2.6\,mA max \\
+GBW (typical only) & 2.2\,MHz ($\pm2.25$\,V) to 2.5\,MHz ($\pm18$\,V) & 10\,MHz \\
+Slew rate & 5.5--7.5\,V/\si{\micro\second} & 20\,V/\si{\micro\second} \\
+Output swing from the rail, 10\,k / 2\,k (typ) & 15--50\,mV / 60--200\,mV & 95\,mV / 430\,mV \\
+Short-circuit current & $\pm30$\,mA at $\pm2.25$\,V, $\pm65$\,mA at $\pm18$\,V & $\pm65$\,mA \\
+Open-loop output impedance at 1\,MHz & 700\,\si{\ohm} & 375\,\si{\ohm} \\
+Noise at 1\,kHz & 15\,nV/$\sqrt{\mathrm{Hz}}$ & 5.5\,nV/$\sqrt{\mathrm{Hz}}$ \\
+Offset (typ / max) & 5 / 25\,\si{\micro\volt} & 5 / 25 (192), 25 / 100 (197)\,\si{\micro\volt} \\
+\bottomrule
+\end{tabular}
+\end{center}
+None of the datasheets specifies values at the \SI{9.5}{\volt} in use (the tables are at
+$\pm18$\,V and $\pm2.25$\,V).  Offset and noise are irrelevant for the exciter (AC-coupled,
+and its noise cancels in the ratio).
+
+\textbf{Finite loop gain (single-pole estimate).}  Gain error and phase lag at $f_0$ from the
+closed-loop corner $\mathrm{GBW}/(\text{noise gain})$:
+\begin{center}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Op-amp & Stage 1 ($G=10$) & Stage 2 ($G=-1$) & Total phase lag \\
+\midrule
+OPA2191, 2.2\,MHz & $-0.007\,\%$, $\SI{-0.68}{\degree}$ & $-0.0003\,\%$, $\SI{-0.14}{\degree}$ & about $\SI{0.8}{\degree}$ \\
+OPA2192 / OPA2197, 10\,MHz & $-0.0003\,\%$, $\SI{-0.15}{\degree}$ & about 0, $\SI{-0.03}{\degree}$ & about $\SI{0.2}{\degree}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+The amplitude error is negligible for all of them (below $0.01\,\%$), and the slew rate needed
+for $\SI{2.78}{\volt}$ at \SI{2.6}{\kilo\hertz} is only $0.045$\,V/\si{\micro\second}.  What remains is a
+static phase lag, common to $A$, $B$ and the sensor supply, which the phase calibration
+absorbs as long as the gain-bandwidth does not change with temperature (it is specified as
+typical only and was not verified).  The inverter's lag appears as a static imbalance of $B$
+against $A$ of $0.14^{\circ}$ for the OPA2191.  All three parts have a complementary input pair
+with a transition zone between about $(\mathrm{V}+)-3\,\mathrm{V}$ and $(\mathrm{V}+)-1.5\,\mathrm{V}$ (about $+2$
+to $+3.5$\,V here), where the CMRR drops; the inputs of the exciter stay near 0\,V, in the
+good region, and must not be biased into that zone.
+
+\textbf{Recommendation.}  The OPA2191 is acceptable and is the preferred part where battery
+current has priority: $0.28$\,mA instead of $2$\,mA per package ($1.7$\,mA less, about
+\SI{16}{\milli\watt} from the \SI{9.5}{\volt} rails), with the same 1\,nF output stage, pA bias,
+high open-loop gain and a GBW above the 2\,MHz floor.  The OPA2197 is the fallback and the
+better choice if the supply current is not critical: it is $2.7\times$ cheaper
+(\$0.57 against \$1.59 at 100 pieces), faster ($4$ to $5\times$ the GBW, hence about $4\times$ less
+phase lag), quieter and has the lower output impedance.  The OPA2192 has the same speed as the
+OPA2197 with a tighter offset and the deepest stock (44\,738), at a small premium for a precision
+that is not needed here.  Red flags for the OPA2191: the GBW is typical only (no minimum, no
+temperature spread); the output drive at \SI{9.5}{\volt} is not specified ($\pm30$\,mA at
+$\pm2.25$\,V); the open-loop output impedance of 700\,\si{\ohm} calls for the isolation resistor;
+it is the most expensive and has the least stock of the three; some datasheet table rows
+(offset, drift, PSRR, the isolation-resistor table) were garbled in the text extraction and
+not relied on.  The AD826 oscillation has not been root-caused, so the datasheet claims
+(including the 1\,nF capacitive-load drive) must be confirmed on the bench with the real load,
+cable and isolation resistor, whichever part is chosen.  Rejected: parts with a \SI{5.5}{\volt}
+or \SI{16}{\volt} supply limit, the TL072 (3\,MHz), the OPA2140 (about 3.6 USD) and the OPA2134
+(too much supply current).
 
 \subsection{Stability: compensation and layout (REV C)}
 
@@ -2063,6 +2125,8 @@ AD826 (50\,MHz), \SI{100}{\kilo\ohm} & 4\,pF & 0.4\,pF \\
 AD826, \SI{27}{\kilo\ohm}            & 4\,pF & 0.7\,pF \\
 OPA2197 (10\,MHz), \SI{27}{\kilo\ohm} & 5\,pF & 1.7\,pF \\
 OPA2197, \SI{13}{\kilo\ohm}          & 5\,pF & 2.5\,pF \\
+OPA2191 (2.2\,MHz), \SI{27}{\kilo\ohm} & 5\,pF & 3.7\,pF \\
+OPA2191, \SI{13}{\kilo\ohm}          & 5\,pF & 5.3\,pF \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -2071,8 +2135,9 @@ Proposed for the board: pads for $C_f$ across R53 and across R56 (the inverter's
 0402 C0G, with \SI{2.2}{\pico\farad} populated by default; \SI{22}{\ohm} to \SI{47}{\ohm} in
 series at each output to isolate cable capacitance; \SI{100}{\nano\farad} plus
 \SI{1}{\micro\farad} at each supply pin within a few millimetres; a short trace to the inverting
-input, with no ground plane under that pin.  The OPA2197 is slower and more tolerant than the
-AD826, so these are mainly insurance.
+input, with no ground plane under that pin.  The OPA2191 and OPA2197 are slower and more tolerant
+than the AD826, so these are mainly insurance (the OPA2191 needs the largest $C_f$, because of its
+lower GBW).
 
 \subsection{The supply-current problem on REV B}
 
@@ -2178,7 +2243,7 @@ Identical input structure for all four channels with a \SI{470}{\nano\farad} cou
 capacitor and a \SI{10}{\nano\farad} C0G pin capacitor each; A/B through a matched 2:1
 resistor network ($1/3$, \SI{2.2}{\kilo\ohm}), S1/S2 with \SI{10}{\kilo\ohm} to ground and
 \SI{2.2}{\kilo\ohm} in series; a new excitation chain (passive filter in front of a
-low-bias op-amp, OPA2197 proposed, R53/R54 = 27k/3k, excitation about \SI{1.97}{\volt} RMS) with
+low-bias op-amp, OPA2191 (battery current) or OPA2197 (cost, speed), R53/R54 = 27k/3k, excitation about \SI{1.97}{\volt} RMS) with
 compensation pads and output isolation (Sections~14.2, 14.5, 14.6); R46--R49 and R52 as the
 corrected values of Section~15.1 become the schematic values.  Library symbols
 \texttt{C0805\_10n\_C0G} (C441760) and \texttt{C0805\_470n} (C13967) have been added.  The
