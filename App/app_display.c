@@ -363,9 +363,20 @@ static void draw_screen_indicator(UiScreen current)
  * with battery/temperature as side info, not the other way around (the
  * original layout gave temperature and battery the big logisoso24
  * treatment and buried displacement in a single small line at the
- * bottom). Reuses this screen's previously-proven Y coordinates (76/148
- * for a big-font line, 180 for the line after) just with different
- * content -- same spacing, no new layout risk. */
+ * bottom).
+ *
+ * 2026-09-30, further user feedback: S1/S2/Diff should all be equally
+ * large (Diff was previously a small 7x13 line, reflecting its status as
+ * "derived from S1/S2" rather than an independent reading) and all three
+ * should show 4 decimal digits (S1/S2 previously showed 3 -- see
+ * format_displacement_mm_4dp()'s own comment for why Diff already needed
+ * the finer digit; S1/S2's own noise floor didn't seem to warrant it at
+ * the time, but the user wants visual consistency across all three now
+ * that the B-term-drop fix (svc_displacement.c, same day) made the
+ * readings noticeably more stable). Big-line spacing tightened 72px->36px
+ * to fit a third logisoso24 line in the same vertical budget -- safe for
+ * this glyph set (digits/sign/decimal point only, no descenders), and the
+ * original 72px had generous unused headroom to begin with. */
 static void draw_live_screen(void)
 {
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
@@ -377,29 +388,22 @@ static void draw_live_screen(void)
     u8g2_SetFont(&s_u8g2, u8g2_font_logisoso24_tr);
     u8g2_DrawUTF8(&s_u8g2, 8, 76, s_last.disp1_line);
     if (s_last.disp2_line[0] != '\0') {
-        u8g2_DrawUTF8(&s_u8g2, 8, 148, s_last.disp2_line);
+        u8g2_DrawUTF8(&s_u8g2, 8, 112, s_last.disp2_line);
     }
-
-    /* Differential (S1-S2), added 2026-09-27 -- a small line, not the big
-     * font S1/S2 get, since it's derived from them rather than an
-     * independent reading; still its own line (not folded into the
-     * temp/battery line below) since it's the primary number once both
-     * sensors are connected (see svc_displacement.h's comment). Bottom
-     * line shifted 180->204 to make room -- LCD_HEIGHT is 240, the screen
-     * indicator sits at 232, so 204 keeps the same ~28-32px clearance
-     * pattern the rest of this layout already uses. */
     if (s_last.disp_diff_line[0] != '\0') {
-        u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-        u8g2_DrawUTF8(&s_u8g2, 8, 172, s_last.disp_diff_line);
+        u8g2_DrawUTF8(&s_u8g2, 8, 148, s_last.disp_diff_line);
     }
 
     /* Triggered precision measurement (2026-09-27, right-knob press -- see
      * app_ui.c) temporarily takes over this line instead of the usual
      * temp/battery status -- see PRECISION_RESULT_DISPLAY_MS's comment for
-     * how long the result stays up before this line reverts. */
+     * how long the result stays up before this line reverts. Bottom line
+     * at 176 (was 204) -- moved up to follow the tightened big-line
+     * spacing above; LCD_HEIGHT is 240 and the screen indicator sits at
+     * 232, so 176 keeps well clear of it. */
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     if (s_last.precision_line[0] != '\0') {
-        u8g2_DrawUTF8(&s_u8g2, 8, 204, s_last.precision_line);
+        u8g2_DrawUTF8(&s_u8g2, 8, 176, s_last.precision_line);
     } else {
         char temp_str[16];
         format_temp(temp_str, sizeof temp_str, g_system_state.temperature_cdeg);
@@ -408,7 +412,7 @@ static void draw_live_screen(void)
         char line[48];
         snprintf(line, sizeof line, "%s C   %u%%   %s",
                  temp_str, (unsigned)g_system_state.battery_soc_pct, volt_str);
-        u8g2_DrawUTF8(&s_u8g2, 8, 204, line);
+        u8g2_DrawUTF8(&s_u8g2, 8, 176, line);
     }
 }
 
@@ -686,8 +690,8 @@ static void snapshot_capture(void)
      * See docs/wp10_displacement.md for the full writeup. */
     if (svc_displacement_get_ok()) {
         char d1[16], d2[16], ddiff[16];
-        format_displacement_mm(d1, sizeof d1, svc_displacement_get_delta1_mm());
-        format_displacement_mm(d2, sizeof d2, svc_displacement_get_delta2_mm());
+        format_displacement_mm_4dp(d1, sizeof d1, svc_displacement_get_delta1_mm());
+        format_displacement_mm_4dp(d2, sizeof d2, svc_displacement_get_delta2_mm());
         format_displacement_mm_4dp(ddiff, sizeof ddiff, svc_displacement_get_delta_diff_mm());
         snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "S1 %smm", d1);
         snprintf(s_last.disp2_line, sizeof s_last.disp2_line, "S2 %smm", d2);

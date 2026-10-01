@@ -238,6 +238,16 @@ typedef enum {
  * only cancels the manual override. See Services/svc_battery.h's
  * svc_battery_cancel_force_charge(). */
 #define API2_RES_CMD_END_CHARGING      0x08U
+/* 0x09 Charge inhibit (2026-09-29) -- 1-byte payload: 0=allow charging
+ * again, 1=inhibit (force charging off). Unlike 0x08 above, this works
+ * against charging the auto-policy started on its own, not just an armed
+ * force-charge -- 0x08 discovered the hard way that it has NO effect on
+ * natural (non-forced) charging, which is the common case. Setting
+ * inhibit also clears any armed force-charge. Does NOT self-clear on USB
+ * replug or charge-complete -- stays in effect until explicitly cancelled
+ * with a 0-payload call. See Services/svc_battery.h's
+ * svc_battery_set_charge_inhibit(). */
+#define API2_RES_CMD_CHARGE_INHIBIT    0x09U
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
@@ -255,6 +265,8 @@ typedef enum {
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_PRECISION_MEASURE)
 #define API2_OP_CMD_END_CHARGING \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_END_CHARGING)
+#define API2_OP_CMD_CHARGE_INHIBIT \
+    API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_CHARGE_INHIBIT)
 
 /* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ----------------
  * Only what REV B actually reads today. All are subscribable. */
@@ -323,7 +335,8 @@ typedef enum {
  *   int16  external_temp_cdeg    (LM35, TEMP_SENSE_EXT)
  *   uint8  external_temp_ok      (0 if out of range / no sensor)
  *
- * 0x01 Device status — the "inner workings" (18 B):
+ * 0x01 Device status — the "inner workings" (19 B, was 18 before
+ * charge_inhibited was added 2026-09-29):
  *   uint16 battery_mv
  *   uint8  battery_soc_pct
  *   uint8  battery_state         (battery_state_t)
@@ -331,6 +344,8 @@ typedef enum {
  *   uint8  ble_connected
  *   uint8  charging              (TP4056 CHRG line)
  *   uint8  force_charging        (manual override armed)
+ *   uint8  charge_inhibited      (hard override forcing charging off --
+ *                                 Commands 0x09, svc_battery_is_charge_inhibited())
  *   uint8  rail_3v3_on
  *   uint8  rail_5v_on
  *   uint16 rtc_year

@@ -252,6 +252,20 @@ removing the USB cable. **Does not disable normal (non-forced) charging**
 the automatic policy resumes charging on its own next tick, same as if
 force-charge had never been armed; this only cancels the manual override.
 
+### `EXECUTE 0x1/0x09` — Charge inhibit  → opcode `0x2109`
+Request payload: 1 byte, `0`=allow charging again, `1`=inhibit (force
+charging off). Response: status only (`OK`, or `INVALID_PARAMETER` for a
+payload byte other than 0/1). Added 2026-09-29 because `0x08` above only
+ever cancels a *forced* charge session — it silently does nothing against
+the normal auto-policy charging on its own, which turned out to be the
+common case someone actually wants to stop. Setting inhibit also clears
+any armed force-charge (inhibit wins). **Does not self-clear** on USB
+replug or charge-complete — unlike force-charge's one-shot behavior, this
+is a standing "keep it off" instruction that stays in effect until
+explicitly cleared with a `0` payload. Not persisted to EEPROM — resets to
+"not inhibited" on reboot. Current state readable via `GET 0x5/0x01`
+(Topic status)'s `charge_inhibited` field below.
+
 ---
 
 ## Calibrations (0x2) — GET, SET
@@ -362,7 +376,7 @@ returns `[OK][payload]`. All fields little-endian.
 | 11 | i16 | external temperature, centi-°C (LM35, TEMP_SENSE_EXT) |
 | 13 | u8 | external temperature valid (0 if out of range / no sensor) |
 
-### `0x5/0x01` — Device status  → GET `0x0501`, SUBSCRIBE `0x3501` (18 B payload)
+### `0x5/0x01` — Device status  → GET `0x0501`, SUBSCRIBE `0x3501` (19 B payload, was 18 B before `charge_inhibited` was added 2026-09-29)
 
 | off | type | field |
 |---|---|---|
@@ -373,11 +387,12 @@ returns `[OK][payload]`. All fields little-endian.
 | 5 | u8 | BLE connected |
 | 6 | u8 | charging (TP4056 CHRG) |
 | 7 | u8 | force-charge armed |
-| 8 | u8 | 3V3 rail on |
-| 9 | u8 | 5V rail on |
-| 10 | u16 | RTC year |
-| 12 | u8×5 | RTC month, day, hour, minute, second |
-| 17 | u8 | RTC set (1 once ever set) |
+| 8 | u8 | charge inhibited (`EXECUTE 0x1/0x09` — hard override forcing charging off) |
+| 9 | u8 | 3V3 rail on |
+| 10 | u8 | 5V rail on |
+| 11 | u16 | RTC year |
+| 13 | u8×5 | RTC month, day, hour, minute, second |
+| 18 | u8 | RTC set (1 once ever set) |
 
 ### `0x5/0x02` — Displacement phasors  → GET `0x0502`, SUBSCRIBE `0x3502` (32 B payload)
 

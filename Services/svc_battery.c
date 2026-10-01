@@ -31,6 +31,13 @@ static bool             s_charge_enabled  = false;
  * Self-clears on charge-complete or USB removal — see update_charge_enable(). */
 static bool             s_force_charge    = false;
 
+/* Manual "charge regardless of anything else" INHIBIT (svc_battery_
+ * set_charge_inhibit(), 2026-09-29) -- see svc_battery.h's comment. Checked
+ * first in update_charge_enable(), ahead of both s_force_charge and the
+ * SOC-threshold auto-policy. Does NOT self-clear -- stays in effect across
+ * USB replug/charge-complete until explicitly cancelled. */
+static bool             s_charge_inhibited = false;
+
 /* Shutdown-arm latch — gives the display ~2 s to show a low-battery
  * warning before actually entering low power. Re-checked against USB
  * presence every tick (see update_shutdown_arm()), not just when armed. */
@@ -240,8 +247,15 @@ static void update_charge_enable(void)
      * mid-charge) until the TP4056 reports complete or USB disappears.
      * s_force_charge (a menu/API override) bypasses the SOC gate but not
      * the USB-present / not-complete guards, and clears itself once
-     * either of those goes away — a one-shot "top off now". */
-    if (!s_usb_connected || s_charge_complete) {
+     * either of those goes away — a one-shot "top off now". s_charge_inhibited
+     * (2026-09-29) is checked FIRST, ahead of everything else -- a standing
+     * "keep it off" instruction that beats both the auto-policy and an
+     * armed force_charge, and does NOT self-clear the way force_charge
+     * does (svc_battery.h's comment on it has the full reasoning). */
+    if (s_charge_inhibited) {
+        s_charge_enabled = false;
+        s_force_charge   = false;
+    } else if (!s_usb_connected || s_charge_complete) {
         s_charge_enabled = false;
         s_force_charge   = false;
     } else if (s_force_charge) {
@@ -381,3 +395,15 @@ void svc_battery_cancel_force_charge(void)
     s_force_charge = false;
     svc_log(API2_LOG_INFO, "battery: force-charge cancelled");
 }
+
+void svc_battery_set_charge_inhibit(bool inhibit)
+{
+    /* Just set the flag -- same "let update_charge_enable() re-evaluate
+     * next tick" reasoning as cancel_force_charge() above. Logged on both
+     * edges (not just "on"), since silently un-inhibiting is exactly the
+     * kind of state change worth a log line. */
+    s_charge_inhibited = inhibit;
+    svc_log(API2_LOG_INFO, inhibit ? "battery: charging inhibited" : "battery: charge inhibit cleared");
+}
+
+bool svc_battery_is_charge_inhibited(void) { return s_charge_inhibited; }

@@ -191,14 +191,15 @@ def decode_topic_env(d: bytes):
 
 
 def decode_topic_status(d: bytes):
-    if len(d) < 18:
+    if len(d) < 19:
         return None
-    (mv, soc, st, usb, ble, chg, fchg, r3, r5,
-     yr, mo, da, hh, mm, ss, rset) = struct.unpack("<HBBBBBBBBHBBBBBB", d[:18])
+    (mv, soc, st, usb, ble, chg, fchg, cinh, r3, r5,
+     yr, mo, da, hh, mm, ss, rset) = struct.unpack("<HBBBBBBBBBHBBBBBB", d[:19])
     names = {0: "NORMAL", 1: "LOW", 2: "CRITICAL", 3: "CHARGING", 4: "FULL"}
     return dict(battery_mV=mv, soc_pct=soc, state=names.get(st, st),
                 usb=bool(usb), ble=bool(ble), charging=bool(chg),
-                force_charging=bool(fchg), rail_3v3=bool(r3), rail_5v=bool(r5),
+                force_charging=bool(fchg), charge_inhibited=bool(cinh),
+                rail_3v3=bool(r3), rail_5v=bool(r5),
                 rtc=(f"{yr:04d}-{mo:02d}-{da:02d} {hh:02d}:{mm:02d}:{ss:02d}"
                      + ("" if rset else " (not set)")))
 

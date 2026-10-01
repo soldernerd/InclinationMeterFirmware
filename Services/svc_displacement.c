@@ -518,7 +518,6 @@ static void load_sensor_cal(SensorCalF *out, int32_t gain_milli,
  * Cortex-M0+; multiplication is much cheaper). */
 typedef struct {
     float atten;
-    float iB, qB;
     float inv_den_re, inv_den_im;   /* 1 / (A - B) */
 } SharedCycleTerms;
 
@@ -527,23 +526,46 @@ typedef struct {
  * way instead of two hand-duplicated copies. Cannot fail -- the only
  * degenerate case (A-B exactly zero) is checked once in
  * process_one_batch() before this is called, since it's identical for
- * both sensors. */
+ * both sensors.
+ *
+ * The B subtraction dropped 2026-09-30 (docs/signal_processing.tex
+ * Section 12, "drop the B term") -- x used to be (S/k - B)/(A-B), which
+ * expands to S/(k(A-B)) + z, z = -(A+B)/(2(A-B)) being an "imbalance
+ * term" meant to auto-cancel a real A/B excitation imbalance AT THE
+ * SENSOR, assuming the sensor's own output carries the excitation
+ * midpoint. The 24h granite-plate run's natural charging-start heating
+ * event showed the sensor does NOT carry that midpoint (S barely moved
+ * while z jumped sharply) -- so z was never cancelling a real imbalance,
+ * it was injecting A/B MEASUREMENT-PATH drift (temperature-dependent
+ * channel mismatch) straight into the reading. Removing it cut S1's
+ * drift ~4x and S2's ~8x on that dataset, with S1-S2 unchanged (z is
+ * common-mode, already cancelled there). d0/sensitivity stay valid (the
+ * tilt term x=S/(k(A-B)) is unchanged); zero-cal has to be redone since
+ * the static Re(z) baseline was folded into the old zero offset. */
 static void compute_sensor_delta(float iS, float qS, const SensorCalF *cal,
                                   const SharedCycleTerms *shared,
                                   float *delta_out, float *residual_out)
 {
-    /* S/k - B -- S*inv_k is a real-scalar reciprocal-multiply (k =
-     * atten*gain has no imaginary part), not a complex operation. */
+    /* S/k -- a real-scalar reciprocal-multiply (k = atten*gain has no
+     * imaginary part), not a complex operation. */
     float inv_k = 1.0f / (shared->atten * cal->gain);
-    float num_re = (iS * inv_k) - shared->iB;
-    float num_im = (qS * inv_k) - shared->qB;
+    float num_re = iS * inv_k;
+    float num_im = qS * inv_k;
 
-    /* x = num * (1/den) -- complex multiply by the precomputed shared
+    /* x' = num * (1/den) -- complex multiply by the precomputed shared
      * reciprocal, equivalent to num/den but without a division here. */
     float x_re = num_re * shared->inv_den_re - num_im * shared->inv_den_im;
     float x_im = num_re * shared->inv_den_im + num_im * shared->inv_den_re;
 
-    *delta_out    = 2.0f * cal->d0_mm * (x_re - 0.5f) - cal->zero_offset_mm;
+    /* No "- 0.5" here (2026-09-30, alongside the B-term drop above): that
+     * offset existed because the OLD x = (S/k-B)/(A-B) sits near 0.5 at
+     * true zero tilt (B contributes a baseline the old formula had to
+     * re-center). x' = S/(k(A-B)) has no such baseline -- it's naturally
+     * near 0 at zero tilt (docs/signal_processing.tex Section 12.7's
+     * "tilt = 2*d0*Re(x') - zero", no 1/2 term). Leaving "-0.5" in after
+     * dropping B would subtract a spurious d0-sized constant from every
+     * reading -- exactly the ~1.1-1.4m bogus offset this was caught by. */
+    *delta_out    = 2.0f * cal->d0_mm * x_re - cal->zero_offset_mm;
     *residual_out = x_im;
 }
 
@@ -760,8 +782,6 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
 
     SharedCycleTerms shared = {
         .atten      = (float)g_device_settings.disp_atten_milli / 1000.0f,
-        .iB         = iB,
-        .qB         = qB,
         .inv_den_re = inv_den_re,
         .inv_den_im = inv_den_im,
     };

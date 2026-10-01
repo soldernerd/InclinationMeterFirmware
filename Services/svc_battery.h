@@ -41,6 +41,25 @@ bool         svc_battery_is_force_charging(void);
  * as if force_charge had never been armed. */
 void         svc_battery_cancel_force_charge(void);
 
+/* Hard override: forces charging OFF regardless of what would otherwise
+ * enable it -- the auto SOC-threshold policy AND an armed force_charge
+ * both included. Added 2026-09-29 at the user's explicit request, after
+ * discovering svc_battery_cancel_force_charge() above has no effect on a
+ * charge cycle the auto-policy started on its own (the common case, not a
+ * force-charge) -- that command only ever cancelled a *forced* session,
+ * so it silently did nothing against natural charging, which is exactly
+ * the gap this closes. Setting the inhibit also clears any armed
+ * force_charge (inhibit wins over force, not the other way round).
+ * update_charge_enable() checks this FIRST, ahead of both other paths.
+ * Deliberately does NOT self-clear on USB removal/reconnect or on
+ * charge-complete -- unlike force_charge's one-shot "top off now"
+ * semantics, this is a standing "leave charging off" instruction that
+ * stays in effect until explicitly cancelled, so re-plugging USB doesn't
+ * silently resume charging behind the user's back. No EEPROM persistence
+ * -- resets to "not inhibited" on reboot, same as force_charge. */
+void         svc_battery_set_charge_inhibit(bool inhibit);
+bool         svc_battery_is_charge_inhibited(void);
+
 /* Disables the LEDs and the 3.3V/5V rails, then enters STM32 Standby mode.
  * Does not return — Standby mode resets the MCU on wake (see
  * HAL_App/hal_power.h). Public so a later work package's user-initiated

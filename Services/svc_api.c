@@ -68,6 +68,7 @@ typedef struct {
     uint8_t  ble_connected;
     uint8_t  charging;
     uint8_t  force_charging;
+    uint8_t  charge_inhibited;  /* 2026-09-29 -- see svc_battery_is_charge_inhibited() */
     uint8_t  rail_3v3_on;
     uint8_t  rail_5v_on;
     uint16_t rtc_year;
@@ -436,6 +437,20 @@ static void cmd_end_charging(ApiTransport t, uint16_t opcode,
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
+static void cmd_charge_inhibit(ApiTransport t, uint16_t opcode,
+                               const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    uint8_t action = pl[0];
+    if (action > 1U) {
+        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+        return;
+    }
+    svc_battery_set_charge_inhibit(action != 0U);
+    svc_logf(API2_LOG_INFO, "cmd: charge inhibit %s", action ? "set" : "cleared");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
 static void cmd_power_test(ApiTransport t, uint16_t opcode,
                            const uint8_t *pl, uint16_t paylen)
 {
@@ -561,6 +576,7 @@ static const CommandDesc s_commands[] = {
     { API2_RES_CMD_REBOOT_DFU,      0U, cmd_reboot_dfu      },
     { API2_RES_CMD_PRECISION_MEASURE, 1U, cmd_precision_measure },
     { API2_RES_CMD_END_CHARGING,      0U, cmd_end_charging     },
+    { API2_RES_CMD_CHARGE_INHIBIT,    1U, cmd_charge_inhibit   },
 };
 #define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
 
@@ -1160,6 +1176,7 @@ static uint16_t build_topic_status(uint8_t *buf)
     p.ble_connected   = g_system_state.ble_connected     ? 1U : 0U;
     p.charging        = svc_battery_is_charging()        ? 1U : 0U;
     p.force_charging  = svc_battery_is_force_charging()  ? 1U : 0U;
+    p.charge_inhibited = svc_battery_is_charge_inhibited() ? 1U : 0U;
     p.rail_3v3_on     = hal_power_rail_3v3_on()          ? 1U : 0U;
     p.rail_5v_on      = hal_power_rail_5v_on()           ? 1U : 0U;
 
