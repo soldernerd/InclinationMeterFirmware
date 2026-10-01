@@ -33,6 +33,7 @@ past finding still holds, check here before re-testing.
 | `2026-09-27_board1_vbat_calibration` | Board 1 (grey) battery-ADC calibration, same method/session | 0.10.53 | Same ballpark result as board 2 (ratio within 0.13%, similar offset) — sub-1.3mV accurate 3.6-4.2V |
 | `2026-09-27_24hr_granite_plate_test` | 24h unattended monitor on the granite plate: raw displacement + phasors + full error-term set | 0.10.53 | Granite quieter than office desk but not big-jump-free; noise drops ~order of magnitude when operator leaves (common-mode); natural charge event causes a large common-mode jump + 6-10x noise, diff mostly immune; board-side (PGA) implicated for common-mode temp drift, sensor-side implicated for the uncancelled diff drift |
 | `2026-09-29_pga1_drift_comparison` | 1h drift comparison at PGA=1 (vs the 24h test's PGA=16), same method | 0.10.58 | No dramatic difference observed vs PGA=16 quiet periods, but no thermal transient occurred during this run — inconclusive on the original PGA-tempco question, see `findings.md` |
+| `2026-09-30_bulk_adc_30s_interval` | 24h monitor via periodic (every 30s) full-rate raw-ADC bulk captures instead of a continuous stream | 0.10.62 | In progress — see `setup.md`. Raw data file intentionally not committed (`*.bin`, too large) |
 
 See `docs/wp10_displacement.md` in the repo root for the full narrative writeup of
 each finding in project context; this folder is the raw evidence behind it.
