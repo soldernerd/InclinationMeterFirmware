@@ -806,7 +806,13 @@
  * as part of the margin-hardening below it -- decimation dropped
  * 8->2 to land on the same ~40.7 Hz/~12.6 s target as before, not a
  * 4x-longer capture by accident). */
-#define DISPLACEMENT_PHASOR_LOG_DECIMATION    2U
+/* SET TO 1 2026-10-03 (was 2): store EVERY completed batch, i.e. a
+ * contiguous 40.7 Hz series (512 entries = ~12.6 s) instead of every other
+ * one. Every-other-batch (20.35 Hz) puts the ~20 Hz pendulum right at the
+ * sampling rate, which aliases it to <1 Hz and defeats the purpose of this
+ * log (see Testing/2026-09-30_bulk_adc_30s_interval/findings.md): a
+ * contiguous batch series is what the smoothing-filter design needs. */
+#define DISPLACEMENT_PHASOR_LOG_DECIMATION    1U
 
 /* 512 entries x 34 B (8 floats + a u16 seq, packed) = 17408 B (~17 KB) --
  * at the ~40.7 Hz effective rate above, ~12.6 s of history. Picked to

@@ -122,7 +122,7 @@ BULK_PHASORS                       = 0x01
 OP_BULK_PHASORS_START              = opcode(START_BULK,  CAT_BULK, BULK_PHASORS)
 OP_BULK_PHASORS_CANCEL             = opcode(CANCEL_BULK, CAT_BULK, BULK_PHASORS)
 DISPLACEMENT_PHASOR_LOG_DEPTH         = 512   # must match Config/config.h
-DISPLACEMENT_PHASOR_LOG_DECIMATION    = 8     # must match Config/config.h
+DISPLACEMENT_PHASOR_LOG_DECIMATION    = 1     # must match Config/config.h
 DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES = 3     # must match Config/config.h
 DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES   = 34    # 8x float32 (32) + u16 seq (2), packed
 
