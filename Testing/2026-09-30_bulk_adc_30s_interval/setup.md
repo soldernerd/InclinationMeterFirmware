@@ -41,11 +41,7 @@ intentionally not committed** -- `*.bin` is already covered by
 `.gitignore`'s blanket binary-file rule, consistent with how the 24h
 granite-plate test's oversized raw CSV was excluded.
 
-## Status (as of this commit)
+## Status
 
-Still running. 1141+ captures so far, zero gaps, zero truncated captures.
-One early transient noted (first capture's S2 RMS was an outlier,
-settling immediately to a stable baseline by capture 1 -- likely residual
-thermal/electrical settling from the flurry of reflashes immediately
-before this test started, not a real finding). `findings.md` to be
-written once the run completes.
+Complete: 2880 captures over 23.99 h, zero gaps, zero truncated captures. See
+`findings.md` for the analysis (`analysis/` holds the code and graphs).
