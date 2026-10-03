@@ -1,8 +1,10 @@
 # Contiguous 64-cycle phasor capture (planned 2026-10-04)
 
-**Firmware:** 0.10.63 (built 2026-10-03, **not yet flashed** -- the board was not attached
-to the build PC; the ST-Link read 0.00 V). The only firmware change vs 0.10.62 is
-`DISPLACEMENT_PHASOR_LOG_DECIMATION` 2 -> 1 in `Config/config.h` (store every batch).
+**Firmware:** 0.10.64 (built 2026-10-03, **not yet flashed** -- the board was not attached
+to the build PC; the ST-Link read 0.00 V). Changes vs 0.10.62: `DISPLACEMENT_PHASOR_LOG_DECIMATION`
+2 -> 1 in `Config/config.h` (store every batch, 0.10.63) and the per-position int32 batch
+accumulation in the demodulation hot path (0.10.64; bit-identical I/Q, see
+`docs/wp10_displacement.md`) -- flash this one and compare the readings/counters against 0.10.62.
 Flash with `powershell -ExecutionPolicy Bypass -File flash.ps1` (build is in `build/Debug`).
 
 ## Purpose

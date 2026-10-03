@@ -1053,3 +1053,48 @@ tilt -- consistent with earlier session findings); `theoretical_tilt1/2` compute
 alongside `delta1/2_mm` for direct comparison, exactly as intended. **Visually confirmed
 on the physical panel by the user 2026-09-27** -- the DIAGNOSTICS screen renders
 correctly.
+
+## Per-position batch accumulation (fw 0.10.64, 2026-10-03)
+
+**What changed.** The demodulation hot path (`on_sample()` in `Services/svc_displacement.c`,
+run from the SysTick frame drain at the 20.8 kHz ADC rate) no longer multiplies each sample by its
+Q14 DFT weight into 64-bit I/Q sums. It now does one plain `int32` add per channel per sample into
+`s_pos_sum[channel][position]`, where `position = sample index mod 8`, over a whole batch of
+`DISPLACEMENT_BATCH_CYCLES` (64) cycles. When the 64th cycle completes, the 32 sums (+ the seq of the
+batch's last cycle, 130 B) are pushed into a small SPSC ring (`DISPLACEMENT_BATCH_RING_DEPTH` = 4
+batches). `svc_displacement_update()` applies the weights once per batch with
+`math_phasor_combine()` (`Math/math_phasor.c`):
+
+    I = 16384*(s0 - s4) + 11585*(s1 - s3 - s5 + s7)
+    Q = 16384*(s2 - s6) + 11585*(s1 + s3 - s5 - s7)
+
+in int64, then hands the unchanged `BatchSums` to `process_one_batch()` (or the phasor log).
+
+**Why.** The Cortex-M0+ has no 64-bit multiply: every `(int64_t)sample * weight` was a ~50 cycle
+`__aeabi_lmul` library call, 8 per ADC sample (verified in the disassembly) = roughly 12.5 M cycles/s,
+~20% of the 64 MHz core, the biggest term in the displacement CPU budget (see the "~18%-marginal"
+discussion in `Config/config.h`). The new sample path is ~10 cycles per sample; the two remaining
+64-bit multiplies per channel run once per batch.
+
+**Result is bit-identical.** The weighting is linear integer arithmetic, so the combined I/Q equal
+the old per-sample accumulation exactly (checked against the reference `math_phasor_accumulate()` on
+2005 random and full-scale cases in a Python model; the C host test `tests/test_math_phasor.c` does
+the same but could not be run on the dev box, which has no host compiler -- run `make` in `tests/`
+where one is available).
+
+**Why int32 is enough.** A position sum adds 64 signed 24-bit codes: |sum| <= 64*2^23 = 2^29 (fits
+int32 for up to 256 cycles per batch; `_Static_assert` on `DISPLACEMENT_BATCH_CYCLES`). Deterministic,
+so no overflow handling is needed; the 4-term groups in the combine can reach 2^31 and are formed in int64.
+
+**Behavioural differences:**
+* The input ring now holds batches, not cycles: 4 batches = ~98 ms of slack (was 128 cycles = ~49 ms)
+  for 520 B of RAM instead of 8.4 KB (RAM 90.8% -> 84.9%).
+* No partial batches. If the ring is full when a batch completes, the whole batch is dropped and
+  `input_drop_count` is incremented by 64 (still counted in cycles); `seq` still advances per cycle, so a
+  drop appears as a seq jump of a multiple of 64 (the phasor-log `gap_cycles` column).
+* `DISPLACEMENT_MAX_CYCLES_PER_TICK` (64 cycles/tick) became `DISPLACEMENT_MAX_BATCHES_PER_TICK`
+  (2 batches/tick), the same livelock guard expressed in batches.
+* `math_phasor_accumulate()` is kept only as the test oracle.
+
+**Not yet verified on hardware** (the board was not attached when this was written): flash fw 0.10.64
+and compare `Raw data 0x7/0x02` (clip/drop counters, max update gap) and the readings against 0.10.62/63.

@@ -40,16 +40,20 @@
  * Does NOT convert delta to inclination angle -- that needs empirical
  * pendulum/flexure calibration and is later work.
  *
- * Same ISR/task-context split WP8 established, but running every single
- * carrier cycle (~2.6 kHz) instead of batched: the per-sample callback
+ * Same ISR/task-context split WP8 established: the per-sample callback
  * (on_sample(), which runs inside Drivers_App/drv_ads131m04.c's SysTick
- * frame drain, not a raw ISR) does cheap per-sample integer I/Q
- * accumulation and pushes one raw snapshot per completed cycle into a
- * ring buffer; svc_displacement_update() (task context, called every
- * scheduler tick) folds config.h's DISPLACEMENT_BATCH_CYCLES consecutive
- * cycles into one coherent I/Q sum before running the float phasor/
- * complex-division/delta math once per batch there -- not once per raw
- * cycle; see config.h's DISPLACEMENT_BATCH_CYCLES comment for why
+ * frame drain, not a raw ISR) does one plain int32 add per channel per
+ * sample into a sum for that sample's position in the 8-sample carrier
+ * cycle, over a whole config.h DISPLACEMENT_BATCH_CYCLES-cycle batch
+ * (2026-10-03: this replaced a weighted 64-bit multiply-accumulate per
+ * sample -- see config.h's "Per-position batch accumulation" comment), and
+ * pushes one entry per completed BATCH into a small ring buffer;
+ * svc_displacement_update() (task context, called every scheduler tick)
+ * applies the Q14 DFT weights to the position sums once per batch
+ * (math_phasor_combine(), exactly the integers the per-sample weighting
+ * gave) and then runs the float phasor/complex-division/delta math once
+ * per batch there -- not once per raw cycle; see config.h's
+ * DISPLACEMENT_BATCH_CYCLES comment for why
  * (root-caused 2026-09-24: the division-heavy math alone can't sustain
  * 2.6 kHz once its result is stored anywhere, and doing so unbatched
  * livelocked the whole scheduler). Each batch's result is pushed into a
@@ -69,13 +73,14 @@ typedef struct {
     float    residual2;    /* Im(x2) */
     uint16_t seq;           /* Rolling per-CYCLE counter (not per-batch) --
                               * assigned in on_sample() to every completed
-                              * 8-sample cycle, including ones later dropped
-                              * by a full input ring or a bounded-drain
-                              * cap -- and copied here as the LAST raw
-                              * cycle folded into this batch, so a consumer
-                              * that isn't draining every single entry can
-                              * still detect gaps (missing cycles between
-                              * consecutive batches' seq values) by their
+                              * 8-sample cycle, including those of a batch
+                              * later dropped by a full input ring -- and
+                              * copied here as the LAST cycle of this
+                              * batch, so a consumer that isn't draining
+                              * every single entry can still detect gaps
+                              * (consecutive batches' seq values differing
+                              * by more than DISPLACEMENT_BATCH_CYCLES;
+                              * always a whole number of batches) by their
                               * absence from the sequence. Wraps every
                               * 65536 cycles (~25 s at ~2.6 kHz) --
                               * consumers doing gap detection MUST use
@@ -133,9 +138,11 @@ DrvStatus svc_displacement_start(void);
 void      svc_displacement_stop(void);
 bool      svc_displacement_is_running(void);
 
-/* Drains every carrier cycle queued since the last call (the raw-I/Q
- * ISR-adjacent ring buffer), computing x1/x2/delta1/delta2 for each and
- * pushing the result into the output ring buffer svc_displacement_pop()
+/* Drains the completed batches queued since the last call (the
+ * per-position-sum ISR-adjacent ring buffer; at most
+ * DISPLACEMENT_MAX_BATCHES_PER_TICK per call), computing
+ * x1/x2/delta1/delta2 for each and pushing the result into the output ring
+ * buffer svc_displacement_pop()
  * reads, and into this module's own latest-value snapshot (the
  * svc_displacement_get_*() getters below). Call every scheduler tick --
  * see the .c file for why this can't wait for a slower task period the
@@ -242,9 +249,10 @@ void svc_displacement_check_integrity(void);
  * high-rate stream is deferred) -- reserved for that follow-up. */
 bool svc_displacement_pop(DisplacementCycle *out);
 
-/* Saturating counts (CLAUDE.md 7.6) -- input_drop: a completed carrier
- * cycle was dropped because the raw-I/Q ring buffer was full (consumer
- * not keeping up). output_drop: a computed result was dropped because
+/* Saturating counts (CLAUDE.md 7.6) -- input_drop: carrier cycles lost
+ * because the batch ring was full when a batch completed (consumer not
+ * keeping up); counted in cycles, DISPLACEMENT_BATCH_CYCLES per dropped
+ * whole batch (there are no partial batches). output_drop: a computed result was dropped because
  * the output ring buffer was full (nothing has called
  * svc_displacement_pop() in a while -- expected on this port until a
  * stream consumer exists). degenerate: a cycle's complex division had an

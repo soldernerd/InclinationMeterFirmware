@@ -944,9 +944,10 @@ or duplicated.  Every frame is therefore checked:
 \end{itemize}
 Any of these latches a fault, logs an error and stops the acquisition; a
 measurement never continues silently with a shifted sample grid.  (This is
-different from the cycle-level input and output drop counters seen in the
-test logs: those count whole 8-sample cycles dropped by the software batch
-ring, which reduces averaging but keeps the sample grid intact.)
+different from the input and output drop counters seen in the test logs:
+the input counter counts carrier cycles lost when a whole 64-cycle batch is
+dropped because the software batch ring was full, which loses averaging time
+but keeps the sample grid intact.)
 
 \textbf{Phase reference.}  Within one acquisition run the phase of each
 channel in the digital frame is stable (standard deviation of the phase of
@@ -1106,18 +1107,48 @@ What does matter:
 
 \subsection{Implementation}
 
-Every ADC sample of all four channels is multiplied by the two weights for
-its position $n \bmod 8$ and added into 64-bit accumulators (this is
-done as each sample arrives).  After eight samples one period is complete
-and its $(I,Q)$ pairs are queued; the batch stage adds up 64 periods.  The
-result per channel and batch is a pair $(I,Q)$ with magnitude
-$|I+\mathrm{j}Q| = 65536\cdot N\cdot X_{\mathrm{code}}$, where
-$X_{\mathrm{code}}$ is the peak amplitude in ADC codes ($65536=4\cdot16384$
-is the weight scale times the factor $M/2=4$ per period); converting to volts uses
-the LSB of the channel's PGA setting (Section~10.3).  Dropping a whole period
-under load reduces the averaging but never shifts the sample grid.  The
-ratio stage that follows uses the complex numbers $(I,Q)$ directly and does
-not need the angle or the amplitude separately.
+\textbf{Sample level (integer, one add per sample).}  Every ADC sample of all
+four channels is added into a plain 32-bit sum for its position $n \bmod 8$ in
+the carrier cycle, over a whole batch of $N=64$ cycles:
+$s_n=\sum_{c=0}^{N-1} x[8c+n]$, $n=0\ldots7$, one accumulator per position and
+channel.  There is no multiplication, no sign handling and no 64-bit
+arithmetic in the sample path.  (Until fw 0.10.64 each sample was multiplied by
+its Q14 weight and added to a 64-bit I/Q sum; on the Cortex-M0+, which has no
+64-bit multiply, that was eight library calls per ADC sample and about a fifth
+of the CPU.)
+
+\textbf{Why 32 bits are enough.}  A position sum adds $N$ signed 24-bit codes,
+$|s_n|\le N\cdot2^{23}$, which fits a 32-bit signed integer for any
+$N\le256$ (checked at compile time against \texttt{DISPLACEMENT\_BATCH\_CYCLES}).
+The bound is deterministic, so no further headroom is needed.  With the 64-cycle
+batch the worst case is $2^{29}$.
+
+\textbf{Batch level (integer, exact).}  When the 64th cycle is complete the 32
+sums are queued, and the task applies the weights once per batch.  The Q14
+weights are $\cos\theta n=\{16384,11585,0,-11585,-16384,-11585,0,11585\}$
+and $\sin\theta n=\{0,11585,16384,11585,0,-11585,-16384,-11585\}$, so by
+linearity
+\begin{equation}
+  I = 16384\,(s_0-s_4) + 11585\,(s_1-s_3-s_5+s_7),\qquad
+  Q = 16384\,(s_2-s_6) + 11585\,(s_1+s_3-s_5-s_7),
+\end{equation}
+evaluated in 64-bit integers (the four-term groups can reach $2^{31}$ and the
+products about $2^{45}$; there are two real 64-bit multiplications per channel
+per \emph{batch}).  This gives bit-for-bit the same integers as the
+per-sample weighting it replaced (verified on random and full-scale data), so
+nothing downstream changes.  The result per channel and batch is a pair
+$(I,Q)$ with magnitude $|I+\mathrm{j}Q| = 65536\cdot N\cdot X_{\mathrm{code}}$,
+where $X_{\mathrm{code}}$ is the peak amplitude in ADC codes
+($65536=4\cdot16384$ is the weight scale times the factor $M/2=4$ per period);
+converting to volts uses the LSB of the channel's PGA setting
+(Section~10.3).  The ratio stage that follows uses the complex numbers $(I,Q)$
+directly and does not need the angle or the amplitude separately.
+
+\textbf{Dropped data.}  The queue holds 4 batches (about \SI{98}{\milli\second}).
+If the task falls further behind, the newest \emph{whole batch} is dropped and
+counted (64 cycles); there are no partial batches.  The per-cycle sequence
+counter advances regardless, so a drop shows up downstream as a jump of a whole
+number of batches, and the sample grid is never shifted.
 
 % ─────────────────────────────────────────────────────────────
 \section{From Phasors to Tilt: the Complex Ratio}
@@ -1624,20 +1655,21 @@ and is started over the API (\texttt{Commands}, resource \texttt{0x01}).
 Stage & Unit & Rate & Notes \\
 \midrule
 ADC sample (all four channels) & 1 sample & \SI{20.83}{\kilo\hertz} & Section~10 \\
-Cycle & 8 samples & \SI{2.604}{\kilo\hertz} & $(I,Q)$ per channel, 64-bit \\
-Batch & 64 cycles & \SI{40.7}{\hertz} & \SI{24.6}{\milli\second}; ratio and delta computed here \\
+Cycle & 8 samples & \SI{2.604}{\kilo\hertz} & counted only; samples summed per cycle position (32-bit) \\
+Batch & 64 cycles & \SI{40.7}{\hertz} & \SI{24.6}{\milli\second}; weights applied, ratio and delta computed here \\
 Moving average & 8 batches & \SI{40.7}{\hertz} & \SI{197}{\milli\second} window \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The cycle results are queued in a ring buffer.  If the consumer falls behind,
-a whole cycle (8 samples) is dropped and counted; this lowers the averaging
-but never shifts the sample grid (Section~10.5).  The expensive part (the
-complex division) runs only once per batch; the coherent sum over 64 cycles
-before the division costs only integer additions and gives the same noise as
-many small batches averaged afterwards, because the ratio is effectively
-linear at this operating point ($x$ stays within $10^{-5}$ of $0.5$).
+The completed batches (32 position sums each) are queued in a small ring buffer
+of four entries.  If the consumer falls behind, a whole batch (64 cycles) is
+dropped and counted; this lowers the averaging but never shifts the sample grid
+(Section~10.5).  The expensive part (the complex division) runs only once per
+batch; the 64-cycle sum before the division costs only integer additions and
+gives the same noise as many small batches averaged afterwards, because the
+ratio is effectively linear at this operating point ($x$ stays within
+$10^{-5}$ of $0.5$).
 
 \subsection{Plausibility checks}
 

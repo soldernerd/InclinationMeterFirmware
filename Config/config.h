@@ -347,6 +347,9 @@
 #define ADC_FRAME_RING_FRAMES          64U
 
 /* --- Displacement demodulation (WP10, Services/svc_displacement.c) ---
+ * [2026-10-03: this depth now sizes only the OUTPUT ring (computed
+ * results); the input side is the batch ring, DISPLACEMENT_BATCH_RING_DEPTH
+ * below. The text that follows describes the original per-cycle input ring.]
  * Producer (the per-sample callback, called from the SysTick frame
  * drain above) -> consumer (svc_displacement_update(), every scheduler
  * tick) ring depth, one entry per completed 8-sample carrier cycle
@@ -403,7 +406,8 @@
  *     instead of once per single cycle. Cuts the division-heavy work by
  *     this factor (and, as a bonus, is a longer coherent integration --
  *     better SNR, not just a workaround).
- *  2. DISPLACEMENT_MAX_CYCLES_PER_TICK -- defensive cap on how many raw
+ *  2. DISPLACEMENT_MAX_CYCLES_PER_TICK (now DISPLACEMENT_MAX_BATCHES_PER_TICK,
+ *     2026-10-03, below) -- defensive cap on how many raw
  *     cycles svc_displacement_update() will dequeue in one call,
  *     regardless of backlog, so a future transient overload (scheduler
  *     jitter, a slow tick elsewhere) can degrade to dropped cycles
@@ -424,7 +428,8 @@
  * division-heavy work rate to a quarter (~81 updates/s, still ample for
  * a mechanical displacement reading -- WP8's old signal-analysis module
  * ran its own per-batch finalize at just 40 Hz), and doubling
- * DISPLACEMENT_MAX_CYCLES_PER_TICK alongside the doubled
+ * DISPLACEMENT_MAX_CYCLES_PER_TICK (since replaced by
+ * DISPLACEMENT_MAX_BATCHES_PER_TICK, see below) alongside the doubled
  * DISPLACEMENT_RING_DEPTH above keeps recovery-from-backlog just as fast
  * proportionally. Needs the same re-verification the original fix got
  * (a long soak watching input_drop_count) before being trusted as
@@ -483,7 +488,37 @@
  * pending -- this is explicitly an experiment ("let's see if this makes
  * things better"), not a settled tuning. */
 #define DISPLACEMENT_BATCH_CYCLES          64U
-#define DISPLACEMENT_MAX_CYCLES_PER_TICK  64U
+
+/* --- Per-position batch accumulation (2026-10-03) ---
+ * The demodulation hot path no longer does a weighted 64-bit multiply-
+ * accumulate per sample (8 library calls to __aeabi_lmul per ADC sample on
+ * the FPU-less, 64-bit-multiply-less Cortex-M0+: ~20% of the core). Instead
+ * on_sample() adds each sample into a plain int32 sum for its position in
+ * the 8-sample cycle (s[channel][n] += code, one add, no sign logic), over
+ * the whole DISPLACEMENT_BATCH_CYCLES-cycle batch; the 14-bit DFT weights are
+ * applied once per batch by math_phasor_combine() (I = 16384*(s0-s4) +
+ * 11585*(s1-s3-s5+s7), Q likewise) -- exactly the same integers as before.
+ * Each position sum adds BATCH_CYCLES signed 24-bit codes: |sum| <=
+ * BATCH_CYCLES * 2^23, which fits int32 for BATCH_CYCLES <= 256 (static-
+ * asserted in svc_displacement.c). The producer->consumer ring therefore
+ * carries one entry per completed BATCH (4 channels x 8 sums x int32 + seq =
+ * 130 B), not one per cycle:
+ *   DISPLACEMENT_BATCH_RING_DEPTH -- batches of slack between the sample
+ *       callback and svc_displacement_update() (power of two). 4 batches =
+ *       4 x 24.6 ms = ~98 ms (the old 128-cycle input ring gave ~49 ms) for
+ *       520 B of RAM (the old ring was 128 x 66 B = 8.4 KB). If the task falls
+ *       further behind, the whole newest batch is dropped (input_drop_count
+ *       += BATCH_CYCLES; the seq counter still advances, so a gap shows up as
+ *       a seq jump of a multiple of BATCH_CYCLES) -- there are no partial
+ *       batches any more.
+ *   DISPLACEMENT_MAX_BATCHES_PER_TICK -- the bounded-drain cap that replaces
+ *       DISPLACEMENT_MAX_CYCLES_PER_TICK (see the ROOT-CAUSED comment above
+ *       for why a cap exists): batches processed per svc_displacement_update()
+ *       call. Each costs a few thousand soft-float cycles, so a transient
+ *       backlog degrades to dropped batches instead of ever livelocking the
+ *       scheduler. */
+#define DISPLACEMENT_BATCH_RING_DEPTH     4U
+#define DISPLACEMENT_MAX_BATCHES_PER_TICK 2U
 
 /* --- Post-division moving average (2026-09-26) --- a second, independent
  * smoothing stage on top of DISPLACEMENT_BATCH_CYCLES' pre-division

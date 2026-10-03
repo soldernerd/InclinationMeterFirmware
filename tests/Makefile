@@ -12,7 +12,7 @@ CC     ?= cc
 CFLAGS ?= -std=c17 -Wall -Wextra -Werror -O1 -g \
           -I. -I../Config -I../Math -I../Services -I../Drivers_App -I../HAL_App
 
-SUITES := test_math_crc test_txframe test_transfer
+SUITES := test_math_crc test_math_phasor test_txframe test_transfer
 
 .PHONY: all clean $(addprefix run-,$(SUITES))
 

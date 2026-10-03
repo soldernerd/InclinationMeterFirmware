@@ -33,11 +33,11 @@
  *   S_adc/(G*atten) = x*A_adc + (1-x)*B_adc
  *   x = (S_adc/(G*atten) - B_adc) / (A_adc - B_adc) = (S_adc/k - B_adc)/(A_adc-B_adc)
  * with k = atten*G. Every channel is demodulated by the identical
- * per-sample transform (math_phasor_accumulate(), same
- * MATH_PHASOR_SAMPLES_PER_CYCLE/Q14 scale for all four), so that shared
- * digital scale factor cancels in this ratio -- the raw int64 I/Q sums
- * can be used directly (just cast to float), no separate normalization
- * step needed. */
+ * per-sample transform (per-position sums combined by
+ * math_phasor_combine(), same MATH_PHASOR_SAMPLES_PER_CYCLE/Q14 scale for
+ * all four), so that shared digital scale factor cancels in this ratio --
+ * the raw int64 I/Q sums can be used directly (just cast to float), no
+ * separate normalization step needed. */
 
 #define RING_MASK  (DISPLACEMENT_RING_DEPTH - 1U)
 #if (DISPLACEMENT_RING_DEPTH & RING_MASK) != 0
@@ -58,18 +58,38 @@ static inline bool code_is_clipped(int32_t code)
     return code >= ADS131M04_CLIP_THRESHOLD || code <= -ADS131M04_CLIP_THRESHOLD;
 }
 
+/* One completed batch as the sample callback hands it to the task
+ * (2026-10-03): for each of the 4 ADC channels (index = ADC channel, not the
+ * signal: 0=S2, 1=B, 2=A, 3=S1), the plain int32 sum of all samples that
+ * fell on each of the 8 positions of the carrier cycle over the batch's
+ * DISPLACEMENT_BATCH_CYCLES cycles (config.h's "Per-position batch
+ * accumulation" comment has the derivation and the range proof). The DFT
+ * weights are applied later, once per batch, by math_phasor_combine().
+ * seq = the per-cycle sequence number of the batch's LAST cycle. */
 typedef struct {
-    int64_t  iB, qB, iA, qA, iS1, qS1, iS2, qS2;
+    int32_t  pos_sum[4][MATH_PHASOR_SAMPLES_PER_CYCLE];
     uint16_t seq;
-} RawCycle;
+} RawBatch;
+
+#define BATCH_RING_MASK  (DISPLACEMENT_BATCH_RING_DEPTH - 1U)
+#if (DISPLACEMENT_BATCH_RING_DEPTH & BATCH_RING_MASK) != 0
+#error "DISPLACEMENT_BATCH_RING_DEPTH must be a power of two"
+#endif
+
+/* A position sum adds DISPLACEMENT_BATCH_CYCLES signed 24-bit codes
+ * (|code| <= 2^23), so |sum| <= BATCH_CYCLES * 2^23 must fit int32. */
+_Static_assert(DISPLACEMENT_BATCH_CYCLES <= MATH_PHASOR_POS_SUM_MAX_CYCLES,
+               "DISPLACEMENT_BATCH_CYCLES too large for int32 per-position sums");
+_Static_assert(DISPLACEMENT_BATCH_CYCLES >= 1U && DISPLACEMENT_BATCH_CYCLES <= 255U,
+               "DISPLACEMENT_BATCH_CYCLES must fit the uint8_t cycle counter");
 
 /* Producer (sample callback) -> consumer (task) handoff, one entry per
- * completed carrier cycle -- lock-free SPSC, power-of-two size,
- * drop-new-on-full (CLAUDE.md 8.3). head is producer-owned (only
- * on_sample() writes it), tail is task-owned (only
- * svc_displacement_update() writes it); each side only reads the other's
- * index, so no locking is needed beyond the volatile qualifier. */
-static RawCycle          s_in_ring[DISPLACEMENT_RING_DEPTH];
+ * completed BATCH -- lock-free SPSC, power-of-two size, drop-new-on-full
+ * (CLAUDE.md 8.3). head is producer-owned (only on_sample() writes it),
+ * tail is task-owned (only svc_displacement_update() writes it); each side
+ * only reads the other's index, so no locking is needed beyond the
+ * volatile qualifier. */
+static RawBatch          s_in_ring[DISPLACEMENT_BATCH_RING_DEPTH];
 static volatile uint16_t s_in_head = 0;
 static volatile uint16_t s_in_tail = 0;
 
@@ -86,8 +106,9 @@ static volatile uint16_t s_out_tail = 0;
  * always called from the same context (drv_ads131m04.c's SysTick frame
  * drain), so no volatile/locking needed here (same reasoning as WP8's
  * svc_signal_analysis.c). */
-static uint8_t s_sample_idx = 0;
-static int64_t s_iB, s_qB, s_iA, s_qA, s_iS1, s_qS1, s_iS2, s_qS2;
+static uint8_t  s_sample_idx   = 0;                 /* position within the cycle, 0..7 */
+static uint8_t  s_batch_cycles = 0;                 /* cycles completed in the batch in progress */
+static int32_t  s_pos_sum[4][MATH_PHASOR_SAMPLES_PER_CYCLE];   /* [ADC channel][position] */
 
 /* s_input_drop_count is written from on_sample() and read from
  * svc_displacement_get_input_drop_count() (task context) -- volatile,
@@ -141,7 +162,7 @@ static uint32_t s_last_elapsed_ms = 0;
  * (An early investigation into a real 2026-09-24 hang suspected these
  * writes specifically -- they were moved out of g_system_state while
  * chasing it. The actual root cause turned out to be unrelated
- * (DISPLACEMENT_MAX_CYCLES_PER_TICK's comment has the full story, a
+ * (config.h's ROOT-CAUSED comment, DISPLACEMENT_MAX_BATCHES_PER_TICK, has the full story, a
  * livelock, not a memory bug) and g_system_state would very likely have
  * been fine -- but the getter pattern is a reasonable fit regardless,
  * so it stayed.) Task context only (process_one_batch(), same context
@@ -275,8 +296,8 @@ static uint16_t s_gap_over_threshold_count = 0;
 
 /* Same reasoning as s_sample_idx above -- assigned in on_sample() to
  * every completed 8-sample cycle *before* the input-ring-full check, so
- * a cycle dropped there (consumer not keeping up) still consumes a seq
- * value and shows up as a gap downstream.
+ * a batch dropped there (consumer not keeping up) still consumes its
+ * DISPLACEMENT_BATCH_CYCLES seq values and shows up as a gap downstream.
  *
  * Rolls over at 65536 cycles (~25 s at ~2.6 kHz) -- a future stream
  * consumer doing gap detection MUST compare seq values with
@@ -284,22 +305,22 @@ static uint16_t s_gap_over_threshold_count = 0;
  * expected) != 0`, not a naive `seq != prev + 1` or `seq < prev`. */
 static uint16_t s_cycle_seq = 0;
 
-/* Task-context batch accumulator -- touched only from
- * svc_displacement_update(), which sums DISPLACEMENT_BATCH_CYCLES
- * consecutive dequeued RawCycles here before handing the total to
- * process_one_batch() (config.h's DISPLACEMENT_BATCH_CYCLES comment has
- * the root-caused reason this exists). s_batch_seq is the most recent
- * cycle folded into the batch so far -- used as the batch's seq. */
-static int64_t s_batch_iB, s_batch_qB, s_batch_iA, s_batch_qA;
-static int64_t s_batch_iS1, s_batch_qS1, s_batch_iS2, s_batch_qS2;
-static uint8_t  s_batch_count = 0;
-static uint16_t s_batch_seq   = 0;
-
-static void batch_reset(void)
+/* Clears the sample callback's accumulation state and both input-side
+ * indices. Task context, and only while the driver's trigger is NOT armed
+ * (on_sample() runs only then) -- same reasoning as svc_displacement_start()'s
+ * comment. s_cycle_seq restarts too so a fresh run's seq starts at
+ * DISPLACEMENT_BATCH_CYCLES-1 for the first batch. */
+static void accum_reset(void)
 {
-    s_batch_iB = s_batch_qB = s_batch_iA = s_batch_qA = 0;
-    s_batch_iS1 = s_batch_qS1 = s_batch_iS2 = s_batch_qS2 = 0;
-    s_batch_count = 0;
+    s_sample_idx   = 0;
+    s_batch_cycles = 0;
+    s_cycle_seq    = 0;
+    for (uint8_t ch = 0; ch < 4U; ++ch) {
+        for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+            s_pos_sum[ch][n] = 0;
+        }
+    }
+    s_in_head = s_in_tail = 0;
 }
 
 static void ma_reset(void)
@@ -379,11 +400,17 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
         note_saturating(&s_clip_count);
     }
 
-    /* ch0=S2, ch1=B, ch2=A, ch3=S1 -- see this file's top comment. */
-    math_phasor_accumulate(ch1, s_sample_idx, &s_iB,  &s_qB);
-    math_phasor_accumulate(ch2, s_sample_idx, &s_iA,  &s_qA);
-    math_phasor_accumulate(ch3, s_sample_idx, &s_iS1, &s_qS1);
-    math_phasor_accumulate(ch0, s_sample_idx, &s_iS2, &s_qS2);
+    /* One plain 32-bit add per channel per sample into the sum for this
+     * sample's position within the 8-sample carrier cycle (ch0=S2, ch1=B,
+     * ch2=A, ch3=S1 -- see this file's top comment). No multiply, no sign
+     * logic, no 64-bit math: the DFT weights are applied once per batch by
+     * math_phasor_combine() (config.h's "Per-position batch accumulation"
+     * comment). Cannot overflow: DISPLACEMENT_BATCH_CYCLES signed 24-bit codes
+     * per position (static-asserted above). */
+    s_pos_sum[0][s_sample_idx] += ch0;
+    s_pos_sum[1][s_sample_idx] += ch1;
+    s_pos_sum[2][s_sample_idx] += ch2;
+    s_pos_sum[3][s_sample_idx] += ch3;
 
     s_sample_idx++;
     if (s_sample_idx < MATH_PHASOR_SAMPLES_PER_CYCLE) {
@@ -392,26 +419,41 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     s_sample_idx = 0;
     uint16_t seq = s_cycle_seq++;
 
+    if (++s_batch_cycles < DISPLACEMENT_BATCH_CYCLES) {
+        return;
+    }
+    s_batch_cycles = 0;
+
+    /* Batch complete: hand the 32 sums to the task. */
     uint16_t head = s_in_head;
-    uint16_t next = (uint16_t)((head + 1U) & RING_MASK);
+    uint16_t next = (uint16_t)((head + 1U) & BATCH_RING_MASK);
     if (next == s_in_tail) {
-        /* Consumer isn't keeping up -- drop this cycle rather than
+        /* Consumer isn't keeping up -- drop this whole batch rather than
          * overwrite one it hasn't read yet. DELIBERATELY the opposite
          * policy from push_output() below: s_in_tail is task-owned (only
          * svc_displacement_update() writes it), so evicting it from here
          * would violate this ring's single-writer invariant for the tail
-         * index. */
-        note_saturating(&s_input_drop_count);
+         * index. Counted in cycles (the unit this counter always had); the
+         * seq counter already advanced for these cycles, so downstream sees
+         * a seq jump of DISPLACEMENT_BATCH_CYCLES per dropped batch. */
+        uint32_t dropped = (uint32_t)s_input_drop_count + DISPLACEMENT_BATCH_CYCLES;
+        s_input_drop_count = (dropped > UINT16_MAX) ? UINT16_MAX : (uint16_t)dropped;
     } else {
-        s_in_ring[head].iB  = s_iB;  s_in_ring[head].qB  = s_qB;
-        s_in_ring[head].iA  = s_iA;  s_in_ring[head].qA  = s_qA;
-        s_in_ring[head].iS1 = s_iS1; s_in_ring[head].qS1 = s_qS1;
-        s_in_ring[head].iS2 = s_iS2; s_in_ring[head].qS2 = s_qS2;
-        s_in_ring[head].seq = seq;
+        RawBatch *slot = &s_in_ring[head];
+        for (uint8_t ch = 0; ch < 4U; ++ch) {
+            for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+                slot->pos_sum[ch][n] = s_pos_sum[ch][n];
+            }
+        }
+        slot->seq = seq;
         s_in_head = next;
     }
 
-    s_iB = s_qB = s_iA = s_qA = s_iS1 = s_qS1 = s_iS2 = s_qS2 = 0;
+    for (uint8_t ch = 0; ch < 4U; ++ch) {
+        for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+            s_pos_sum[ch][n] = 0;
+        }
+    }
 }
 
 static void push_output(uint16_t seq, float delta1, float residual1, float delta2, float residual2)
@@ -809,9 +851,7 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
 
 DrvStatus svc_displacement_init(void)
 {
-    s_sample_idx = 0;
-    s_iB = s_qB = s_iA = s_qA = s_iS1 = s_qS1 = s_iS2 = s_qS2 = 0;
-    s_in_head  = s_in_tail  = 0;
+    accum_reset();
     s_out_head = s_out_tail = 0;
     s_input_drop_count  = 0;
     s_output_drop_count = 0;
@@ -820,12 +860,9 @@ DrvStatus svc_displacement_init(void)
     s_amplitude_fault_count  = 0;
     s_clip_logged            = false;
     s_amplitude_fault_logged = false;
-    s_cycle_seq         = 0;
     s_disp_ok           = false;
-    batch_reset();
     ma_reset();
     quality_reset();
-    s_batch_seq = 0;
 
     /* drv_ads131m04_init() resets its callback pointer to NULL as its
      * first action (Drivers_App/drv_ads131m04.c) -- must register AFTER
@@ -843,16 +880,13 @@ DrvStatus svc_displacement_init(void)
 
 DrvStatus svc_displacement_start(void)
 {
-    /* Reset both rings and the sample-callback accumulator so the first
+    /* Reset the rings and the sample-callback accumulators so the first
      * cycles after a start are clean, not a stale mix left over from a
      * previous run -- on_sample() only ever runs while the driver's
      * trigger is armed, so it's safe to touch its state here (task
      * context) before arming it. */
-    s_sample_idx = 0;
-    s_iB = s_qB = s_iA = s_qA = s_iS1 = s_qS1 = s_iS2 = s_qS2 = 0;
-    s_in_head  = s_in_tail  = 0;
+    accum_reset();
     s_out_head = s_out_tail = 0;
-    s_cycle_seq = 0;
     s_fault_reported = false;
     s_clip_count             = 0;
     s_amplitude_fault_count  = 0;
@@ -863,10 +897,8 @@ DrvStatus svc_displacement_start(void)
     s_max_gap_at_uptime_ms   = 0;
     s_gap_over_threshold_count = 0;
     s_disp_ok = false;
-    batch_reset();
     ma_reset();
     quality_reset();
-    s_batch_seq = 0;
     /* A fresh start invalidates any in-progress zero-cal run -- its
      * averaging assumed a continuous demod session, not one straddling a
      * stop/start. Same for a precision measurement -- its averaging
@@ -973,9 +1005,7 @@ void svc_displacement_stop(void)
      * disarming it. Without this, cycles already queued before the stop
      * get drained by the next task_displacement tick, complete a batch,
      * and re-set s_disp_ok = true right after the line below clears it. */
-    s_in_head = s_in_tail = 0;
-    batch_reset();
-    s_batch_seq = 0;
+    accum_reset();
     /* disp_ok reports "have a currently-valid measurement", not just
      * "the last batch before stop succeeded" -- clear it so a host
      * reading Measurements 0x0D right after a stop doesn't see a stale
@@ -1043,47 +1073,42 @@ void svc_displacement_update(void)
     s_last_update_call_ms  = now_ms;
     s_last_update_call_set = true;
 
-    /* Drain what's queued since the last call, folding
-     * DISPLACEMENT_BATCH_CYCLES raw cycles into one coherent sum before
-     * running process_one_batch()'s division-heavy math once per batch
+    /* Drain the completed batches queued since the last call. Each carries
+     * the per-position int32 sums of one DISPLACEMENT_BATCH_CYCLES-cycle
+     * batch (accumulated by on_sample(), one add per sample); the DFT
+     * weights are applied here, once per batch, by math_phasor_combine(),
+     * and process_one_batch()'s division-heavy math then runs once per batch
      * (config.h's DISPLACEMENT_BATCH_CYCLES comment has the full
      * root-caused reasoning). Bounded to at most
-     * DISPLACEMENT_MAX_CYCLES_PER_TICK dequeues per call -- a real,
-     * reproduced bug (2026-09-24, see the same comment) was this loop
-     * running unbounded: if on_sample() (ISR context, ~2.6 kHz) ever
-     * queues cycles faster than this can drain them, an unbounded
-     * `while (s_in_tail != s_in_head)` never exits, and the scheduler's
-     * main loop never returns to run anything else again -- confirmed
-     * with a debugger, not a HardFault, a genuine livelock. This cap
-     * turns that failure mode into ordinary graceful drops
-     * (s_input_drop_count, already handled) instead. */
+     * DISPLACEMENT_MAX_BATCHES_PER_TICK batches per call -- a real,
+     * reproduced bug (2026-09-24, see config.h's ROOT-CAUSED comment) was
+     * this loop running unbounded: if on_sample() ever queues work faster
+     * than this can drain it, an unbounded `while (s_in_tail != s_in_head)`
+     * never exits, and the scheduler's main loop never returns to run
+     * anything else again -- confirmed with a debugger, not a HardFault, a
+     * genuine livelock. This cap turns that failure mode into ordinary
+     * graceful drops (s_input_drop_count, already handled) instead. */
     uint8_t drained = 0;
-    while (s_in_tail != s_in_head && drained < DISPLACEMENT_MAX_CYCLES_PER_TICK) {
-        const RawCycle *c = &s_in_ring[s_in_tail];
-        s_batch_iB  += c->iB;  s_batch_qB  += c->qB;
-        s_batch_iA  += c->iA;  s_batch_qA  += c->qA;
-        s_batch_iS1 += c->iS1; s_batch_qS1 += c->qS1;
-        s_batch_iS2 += c->iS2; s_batch_qS2 += c->qS2;
-        s_batch_seq  = c->seq;
-        s_in_tail = (uint16_t)((s_in_tail + 1U) & RING_MASK);
+    while (s_in_tail != s_in_head && drained < DISPLACEMENT_MAX_BATCHES_PER_TICK) {
+        const RawBatch *rb = &s_in_ring[s_in_tail];
+        BatchSums sums;
+        math_phasor_combine(rb->pos_sum[1], &sums.iB,  &sums.qB);    /* ch1 = B  */
+        math_phasor_combine(rb->pos_sum[2], &sums.iA,  &sums.qA);    /* ch2 = A  */
+        math_phasor_combine(rb->pos_sum[3], &sums.iS1, &sums.qS1);   /* ch3 = S1 */
+        math_phasor_combine(rb->pos_sum[0], &sums.iS2, &sums.qS2);   /* ch0 = S2 */
+        const uint16_t batch_seq = rb->seq;
+        s_in_tail = (uint16_t)((s_in_tail + 1U) & BATCH_RING_MASK);
         drained++;
 
-        if (++s_batch_count >= DISPLACEMENT_BATCH_CYCLES) {
-            BatchSums sums = {
-                .iB = s_batch_iB, .qB = s_batch_qB, .iA = s_batch_iA, .qA = s_batch_qA,
-                .iS1 = s_batch_iS1, .qS1 = s_batch_qS1, .iS2 = s_batch_iS2, .qS2 = s_batch_qS2,
-            };
-            /* A phasor-log capture (svc_displacement_phasor_log_begin(),
-             * config.h's "Displacement phasor diagnostics" comment) wants
-             * the raw batch sums stored, not demodulated -- same
-             * accumulation/batching pipeline either way, this is the only
-             * fork point. */
-            if (s_phasor_log_active) {
-                store_phasor_log_entry(&sums, s_batch_seq);
-            } else {
-                process_one_batch(&sums, s_batch_seq);
-            }
-            batch_reset();
+        /* A phasor-log capture (svc_displacement_phasor_log_begin(),
+         * config.h's "Displacement phasor diagnostics" comment) wants the
+         * raw batch sums stored, not demodulated -- same
+         * accumulation/batching pipeline either way, this is the only
+         * fork point. */
+        if (s_phasor_log_active) {
+            store_phasor_log_entry(&sums, batch_seq);
+        } else {
+            process_one_batch(&sums, batch_seq);
         }
     }
 
@@ -1250,12 +1275,7 @@ DrvStatus svc_displacement_phasor_log_begin(void)
     /* Same rationale as svc_displacement_start()'s reset: on_sample()
      * only runs once the driver's trigger is armed below, so it's safe
      * to clear the accumulation state here first. */
-    s_sample_idx = 0;
-    s_iB = s_qB = s_iA = s_qA = s_iS1 = s_qS1 = s_iS2 = s_qS2 = 0;
-    s_in_head  = s_in_tail  = 0;
-    s_cycle_seq = 0;
-    batch_reset();
-    s_batch_seq = 0;
+    accum_reset();
 
     s_phasor_log_idx         = 0;
     s_phasor_log_done        = false;

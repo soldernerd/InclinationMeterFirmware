@@ -6,22 +6,44 @@
 
 #define MATH_PHASOR_SAMPLES_PER_CYCLE 8U
 
-/* Accumulates one sample's contribution to a running I/Q sum, using the
- * trivial 8-point DFT-bin coefficient set {0, +-1, +-0.707} (Q14-scaled,
- * so accumulation stays pure-integer) for a carrier sampled at exactly
- * MATH_PHASOR_SAMPLES_PER_CYCLE samples/cycle. sample_idx is the sample's
- * position within the current cycle (0..7) -- caller owns advancing and
- * wrapping it, and resetting *i_sum / *q_sum to 0 at the start of each
- * cycle. No-ops (leaves *i_sum / *q_sum untouched) if sample_idx is out of
- * range.
+/* Combines ONE channel's per-position batch sums into the batch's I/Q
+ * phasor (2026-10-03, replaces per-sample weighted accumulation in the hot
+ * path).
  *
- * The result is NOT normalized to a physical amplitude -- every channel
- * demodulated this way carries the same Q14/N-samples scale factor, so
- * for computations that take a RATIO across channels (e.g.
- * Services/svc_displacement.c's x = (S/k - B)/(A - B)) that factor
- * cancels and the raw sums can be used directly (just cast to float).
- * Only convert to true physical units if a caller needs an absolute
- * amplitude/phase on its own. */
+ * pos_sum[n] is the plain sum of every sample that fell on position n
+ * (0..7) of the 8-sample carrier cycle over one whole batch -- i.e. the
+ * hot path just does `pos_sum[idx] += sample` (one 32-bit add per sample,
+ * no multiply, no sign logic, no 64-bit math). The eight weights are the
+ * Q14 8-point DFT-bin coefficients {0, +-1, +-0.707}:
+ *   cos: {16384, 11585, 0, -11585, -16384, -11585, 0, 11585}
+ *   sin: {0, 11585, 16384, 11585, 0, -11585, -16384, -11585}
+ * so, by linearity and exactly (integer arithmetic), the weighted sum over
+ * the batch is
+ *   I = 16384*(s0 - s4) + 11585*(s1 - s3 - s5 + s7)
+ *   Q = 16384*(s2 - s6) + 11585*(s1 + s3 - s5 - s7)
+ * -- bit-for-bit what summing sample*weight per sample (the old
+ * math_phasor_accumulate()) gives, at ~1/30 of the cycles on a Cortex-M0+
+ * (which has no 64-bit multiply: every int64 product was a ~50 cycle
+ * library call, 8 per ADC sample).
+ *
+ * Range: each pos_sum[n] is a sum of batch_cycles signed 24-bit codes, so
+ * |pos_sum| <= batch_cycles * 2^23 -- fits int32 for batch_cycles <= 256
+ * (MATH_PHASOR_POS_SUM_MAX_CYCLES; Services/svc_displacement.c static-asserts
+ * its batch size against it). The combination below is done in int64 (the
+ * 4-term groups can reach 2^31 and the products ~2^45).
+ *
+ * Scale: |I + jQ| = 65536 * N * X_code for a peak amplitude X_code over N
+ * cycles, same as before; like before it is NOT a physical unit and cancels
+ * in the cross-channel ratio. */
+#define MATH_PHASOR_POS_SUM_MAX_CYCLES 256U
+
+void math_phasor_combine(const int32_t pos_sum[MATH_PHASOR_SAMPLES_PER_CYCLE],
+                         int64_t *i_out, int64_t *q_out);
+
+/* REFERENCE implementation, not used by the firmware's hot path any more
+ * (kept as the oracle for tests/test_math_phasor.c): adds one sample's
+ * weighted contribution to a running I/Q sum. sample_idx is the sample's
+ * position within the cycle (0..7); no-ops if out of range. */
 void math_phasor_accumulate(int32_t sample, uint8_t sample_idx,
                              int64_t *i_sum, int64_t *q_sum);
 

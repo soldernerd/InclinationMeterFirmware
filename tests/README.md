@@ -6,6 +6,7 @@ parts that are only otherwise exercised by flashing a board:
 | suite | covers |
 |-------|--------|
 | `test_math_crc.c`  | `Math/math_crc.c` — CRC-16/CCITT-FALSE (spec check value, edge cases, the real API- and ADS131M04-frame uses) |
+| `test_math_phasor.c` | `Math/math_phasor.c` — per-position batch accumulation + `math_phasor_combine()` vs the per-sample reference (exact equality on random and full-scale data, int32 bound) |
 | `test_txframe.c`   | `Services/svc_txframe.c` — the SPSC frame FIFO: FIFO order, wrap, the 64-byte urgent reserve, oversized-frame refusal, reset |
 | `test_transfer.c`  | the extracted fixed-point transfer / decode functions: `drv_tmp236_mv_to_cdeg` (two-segment fit, boundary continuity, negative °C), `drv_lm35_mv_to_cdeg`, `drv_encoder_quad_step` (all 16 Gray-code transitions) |
 
