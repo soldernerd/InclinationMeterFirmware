@@ -169,6 +169,82 @@ are *capture-level* numbers (0.3 s integration), not the 1.6 s precision measure
 * The 04:33 event and the 07:00 -> evening noise onset were not correlated with other
   logs.
 
+## 8. Follow-up analysis (same data): where the per-cycle fluctuation comes from, 80->64 trimming, raw spectrum
+
+Scripts: `analysis/varbands.py`, `trim80.py`, `rawspec.py`, `rawspec2.py`, `plots3.py`; graphs 14-16.
+
+**Per-cycle fluctuation of the sensor phasors.** Rotating S into the A-B frame (Re = in-phase =
+the tilt axis, Im = quadrature), per-cycle std in ADC counts:
+
+| | white floor (>300 Hz) | night, Re / Im | day, Re / Im |
+|---|---|---|---|
+| S1 | 2.0 k | 3.4 k / 1.9 k | 9.4 k / 2.2 k |
+| S2 | 3.3 k | 8.1 k / 3.4 k | 25.7 k / 5.2 k |
+
+Im is essentially the white floor (isotropic noise); Re has the same floor **plus the 15-26 Hz
+pendulum**, which is 64 % (S1) / 84 % (S2) of the Re variance at night and 92-99 % by day
+(graph 15). Nothing else is large: <6 Hz drift is 0.2-0.3 %, 26-200 Hz is a few %. The A/B
+channels are different and unrelated: 213 counts (50 ppm), 55 % white, the rest 1/f, no
+pendulum, identical day and night. (The earlier `|S|` amplitude statistics mix Re and Im, and
+because the sensor phasor is not in line with the tilt axis the 40 Hz line that appears in
+`|S|` is a second-order mixing artifact; in Re it is -25 dB below the 20 Hz line. Weak
+48/60/71 Hz features, -17 to -25 dB, look like further mechanical modes.)
+
+**Take 80 cycles, drop the 8 highest and 8 lowest, average the other 64: no gain.** 30 s scatter of
+the capture estimate / live batch jitter (um nominal; S2 and S1-S2, the pendulum-dominated ones):
+
+| per batch | night jitter S2 | day jitter S2 | day estimate S2 | day estimate S1-S2 |
+|---|---|---|---|---|
+| plain 64 (now) | 0.368 | 1.550 | 0.265 | 0.179 |
+| plain 80 | 0.303 | 1.303 | 0.262 | 0.176 |
+| 80 -> trim 8+8 by amplitude -> 64 | 0.310 | 1.395 | 0.411 | 0.353 |
+| 80 -> trim 8+8 by in-phase part -> 64 | 0.309 | 1.416 | 0.289 | 0.197 |
+| plain 96 | 0.216 | 0.932 | 0.267 | 0.181 |
+
+The apparent jitter gain of trimming over the current 64 is just the longer window (plain 80 is
+as good or better). Trimming by amplitude makes the capture-level estimate ~1.5-2x worse by day
+(selection by `|S|` correlates with the pendulum phase). Reason: there are essentially no
+outliers to trim (A/B per-cycle |z|>4 rate 3e-4 vs Gaussian 6e-5, sensor deviations are smooth
+ring-down), and the pendulum is a coherent oscillation, not an outlier -- a linear window
+(section 5) is the right tool. The only genuine single-cycle outlier is the stale first cycle
+after start (section 1), which needs a discard rule, not a trim.
+
+**Raw ADC spectrum (all 4 channels, 0-10.4 kHz, graph 14).** Below the 2604 Hz carrier there is
+*nothing discrete*: no 50/100/150 Hz mains, no display (5 Hz) or switching lines (anything
+>9 dB above the local floor would have been listed; none exist), on any channel, day or night.
+The floor is smooth and falls with frequency (S2: -54 dBc/bin at 300 Hz to -81 at 10 kHz), with
+a high-pass roll-off below ~150 Hz from the AC coupling. Only structure near the carrier is the
++/-20 Hz pendulum AM sidebands on S1/S2 (S2: -32 dBc night, -21 dBc day; S1: -54 / -43; weaker
+at +/-10 and +/-30 Hz; A/B: -100 dBc and identical day/night), and harmonics at 5208 and 7812 Hz
+(2nd/3rd): S2 -21/-15 dBc, S1 -37/-32 dBc, A/B -50/-58 dBc, 4th (Nyquist) S2 -28 dBc. Noise floor
+near the carrier relative to the carrier: A/B -114 dBc/bin, S1 -77, S2 -60. **Caveat:** the sensor
+channels carry large 2nd-4th harmonics (S2 3rd = -15 dBc); the 7th and 9th harmonics fold exactly onto
+the carrier in an 8-sample demodulator and cannot be seen in this data, so the "harmonics are
+negligible" statement in signal_processing.tex Section 11.3 is unchecked for the sensor channels.
+
+**Why not 128-cycle batches (one 20.35 Hz period)?** (`analysis/box128.py`.) A 128-cycle boxcar nulls
+20.35 Hz exactly (-72 dB) but the pendulum is at 19.9 Hz (18-21.5): gain -14.5/-17.9/-23/-33/-72/-30/-25/-23 dB at
+17/18/19/19.9/20.35/21/21.5/22 Hz. Batch-to-batch jitter does fall ~9x (S2 day 5.25 -> 0.58 um, S1 1.68 -> 0.24).
+But (1) the current 8-batch MA is already one 512-cycle boxcar with the same null, so the *smoothed* reading
+gains nothing (capture estimate, S2 day: 11x64 = 0.265 um, 5x128 = 0.295 um); (2) 128-cycle batches
+decimate to 20.35 Hz, so what the boxcar leaves of the pendulum (-18..-25 dB over most of its band) folds to
+a 0.1-2 Hz wander that no later low-pass can remove, whereas at 64 cycles (40.7 Hz) it folds to ~20 Hz
+where a second averaging stage removes it (64 batch, MA8, MA8: -38.7 dB worst 17-23 Hz; measured ~2x better
+by day). (2) is from sampling theory, not measured (captures are too short). 128 does halve the division
+load (CPU margin). To get the 128-cycle null without the aliasing, use MA2 on the 64-cycle batches.
+
+**What the 24 h / 20 Hz granite stream can and cannot say** (`analysis/precision_window.py`, `stream_psd.py`,
+`decimation_test.py`). That stream is the latest batch value pushed every ~57 ms (17.45 Hz mean), i.e. the 40.7 Hz batch
+series decimated by ~2.3 with irregular gaps. The pendulum passes the 64-cycle batch at only -3.7 dB, so it is
+aliased into 0-8.7 Hz instead of being cancelled. Evidence: in the quiet 200-245 min window the stream PSD is nearly flat
+(0.03-0.12 um^2/Hz over 0.01-8 Hz) and the repeatability of T-second means follows white-noise sqrt(N) within 1.6x up to 3 s.
+Decimating our contiguous captures the same way makes the plain mean 2.5-9x worse (30 s scatter, night S1/S2/diff
+0.07/0.12/0.07 -> 0.17/0.50/0.35; day 0.14/0.27/0.18 -> 0.73/2.27/1.57 um nominal). Consequences: (1) repeatability
+numbers derived from the stream (incl. earlier "SE plateaus" conclusions below ~10 s) are pessimistic for the firmware's
+contiguous averaging; (2) robust estimators (median/trim/flag-filter) help on the stream (-30..-50 % with operator
+present) because aliased ring-down bursts look like outliers there, but not on contiguous batches (section 5);
+(3) future long tests should push every batch (event-driven) or log the phasor stream contiguously.
+
 ## Reproducing
 
 ```
