@@ -415,7 +415,18 @@ typedef enum {
 #define API2_RES_TOPIC_PHASORS          0x02U
 #define API2_RES_TOPIC_RAW_DISPLACEMENT 0x03U
 #define API2_RES_TOPIC_SIGNAL_DIAG      0x04U
-#define API2_TOPIC_SLOTS        5U          /* direct-indexed by resource id */
+/* 0x05 "Phasor batch stream" (fw 0.10.65): EVERY completed 64-cycle batch,
+ * event-driven (not the interval snapshot of the topics above). SUBSCRIBE
+ * (the 4-byte interval payload is required but ignored) starts the ADC and
+ * routes batches into a FIFO instead of the demod; UNSUBSCRIBE / disconnect
+ * stops it. Refused with BUSY_EXCLUSIVE while the demod or a bulk capture
+ * runs. GET is not supported. One push per batch:
+ *   [status][issue_seq:1][page:1=0] + 34 B (8 x float32 LE iB,qB,iA,qA,
+ *   iS1,qS1,iS2,qS2, then u16 seq = the batch's last cycle counter).
+ * A lost batch shows as a jump in the cycle seq (multiple of 64); a lost
+ * frame as a jump in issue_seq. */
+#define API2_RES_TOPIC_PHASOR_STREAM    0x05U
+#define API2_TOPIC_SLOTS        6U          /* direct-indexed by resource id */
 
 /* ---------------- Calibrations (0x2: GET, SET) ----------------
  * Sensor-correction constants — structurally identical to Settings

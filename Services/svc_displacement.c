@@ -218,6 +218,19 @@ static bool     s_phasor_log_active      = false;
 static bool     s_phasor_log_done        = false;
 static uint8_t  s_phasor_log_decim_count = 0;
 
+/* Continuous phasor batch stream: FIFO filled by svc_displacement_update(),
+ * drained by the API layer (svc_displacement.h "Continuous phasor batch
+ * stream"). Both sides run in task context, so no locking is needed. */
+#define PSTREAM_MASK (DISPLACEMENT_PHASOR_STREAM_DEPTH - 1U)
+#if (DISPLACEMENT_PHASOR_STREAM_DEPTH & PSTREAM_MASK) != 0
+#error "DISPLACEMENT_PHASOR_STREAM_DEPTH must be a power of two"
+#endif
+static DisplacementPhasorLogEntry s_pstream[DISPLACEMENT_PHASOR_STREAM_DEPTH];
+static uint16_t s_pstream_head   = 0;
+static uint16_t s_pstream_tail   = 0;
+static uint16_t s_pstream_drops  = 0;
+static bool     s_pstream_active = false;
+
 /* --- Zero calibration state (2026-09-25) --- see svc_displacement.h's
  * comment. Task context only, same reasoning as the phasor log state
  * above (the "producer" is process_one_batch(), the "consumer" is
@@ -1053,6 +1066,24 @@ static void store_phasor_log_entry(const BatchSums *s, uint16_t seq)
     }
 }
 
+/* Queues one completed batch for the continuous stream. A full FIFO drops
+ * the NEWEST batch (counted) -- the consumer sees the loss as a seq jump. */
+static void store_phasor_stream_entry(const BatchSums *s, uint16_t seq)
+{
+    uint16_t next = (uint16_t)((s_pstream_head + 1U) & PSTREAM_MASK);
+    if (next == s_pstream_tail) {
+        if (s_pstream_drops < UINT16_MAX) s_pstream_drops++;
+        return;
+    }
+    DisplacementPhasorLogEntry *e = &s_pstream[s_pstream_head];
+    e->iB  = (float)s->iB;  e->qB  = (float)s->qB;
+    e->iA  = (float)s->iA;  e->qA  = (float)s->qA;
+    e->iS1 = (float)s->iS1; e->qS1 = (float)s->qS1;
+    e->iS2 = (float)s->iS2; e->qS2 = (float)s->qS2;
+    e->seq = seq;
+    s_pstream_head = next;
+}
+
 void svc_displacement_update(void)
 {
     /* Scheduler-gap diagnostic -- see s_max_update_gap_ms's comment.
@@ -1105,7 +1136,9 @@ void svc_displacement_update(void)
          * raw batch sums stored, not demodulated -- same
          * accumulation/batching pipeline either way, this is the only
          * fork point. */
-        if (s_phasor_log_active) {
+        if (s_pstream_active) {
+            store_phasor_stream_entry(&sums, batch_seq);
+        } else if (s_phasor_log_active) {
             store_phasor_log_entry(&sums, batch_seq);
         } else {
             process_one_batch(&sums, batch_seq);
@@ -1308,6 +1341,54 @@ uint16_t svc_displacement_phasor_log_count(void)
 uint16_t svc_displacement_phasor_log_progress(void)
 {
     return s_phasor_log_idx;
+}
+
+DrvStatus svc_displacement_phasor_stream_begin(void)
+{
+    if (s_pstream_active || s_phasor_log_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    accum_reset();   /* same reasoning as svc_displacement_phasor_log_begin() */
+    s_pstream_head   = 0;
+    s_pstream_tail   = 0;
+    s_pstream_drops  = 0;
+    s_pstream_active = true;   /* svc_displacement_update() now routes batches here */
+    DrvStatus rc = drv_ads131m04_start();
+    if (rc != DRV_OK) {
+        s_pstream_active = false;
+    }
+    return rc;
+}
+
+void svc_displacement_phasor_stream_end(void)
+{
+    if (!s_pstream_active) return;
+    s_pstream_active = false;
+    drv_ads131m04_stop();
+}
+
+bool svc_displacement_phasor_stream_active(void)
+{
+    return s_pstream_active;
+}
+
+bool svc_displacement_phasor_stream_peek(DisplacementPhasorLogEntry *out)
+{
+    if (s_pstream_tail == s_pstream_head) return false;
+    *out = s_pstream[s_pstream_tail];
+    return true;
+}
+
+void svc_displacement_phasor_stream_consume(void)
+{
+    if (s_pstream_tail != s_pstream_head) {
+        s_pstream_tail = (uint16_t)((s_pstream_tail + 1U) & PSTREAM_MASK);
+    }
+}
+
+uint16_t svc_displacement_phasor_stream_drops(void)
+{
+    return s_pstream_drops;
 }
 
 DrvStatus svc_displacement_zero_cal_step1_begin(void)

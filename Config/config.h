@@ -857,6 +857,17 @@
  * allocation trade, not a runtime one). */
 #define DISPLACEMENT_PHASOR_LOG_DEPTH          512U
 
+/* Continuous phasor batch stream FIFO (API Topic 0x5 / res 0x05, added
+ * 2026-10-04): 64 entries x 34 B = 2176 B, ~1.57 s of batches at 40.7 Hz.
+ * It only has to ride out main-loop stalls and UART back-pressure (the
+ * transport drains ~11 kB/s against a ~1.75 kB/s stream); a LIVE-screen
+ * redraw stalls the loop for ~8 batches. Power of two (index mask). */
+#define DISPLACEMENT_PHASOR_STREAM_DEPTH       64U
+
+/* Stream frames handed to the transport per svc_api_update() tick, upper
+ * bound (the transport's ready hook limits it further). */
+#define DISPLACEMENT_PHASOR_STREAM_PER_TICK    4U
+
 /* Entries per bulk chunk packet. Payload is [page:1][entry:34]xN; the
  * whole API2 packet must fit API2_PACKET_MAX_SIZE (128): 4 (frame) + 1
  * (status) + 1 (page) + 34*N + 2 (crc) <= 128 -> N <= 3. */

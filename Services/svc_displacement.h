@@ -380,6 +380,26 @@ uint16_t                          svc_displacement_phasor_log_count(void);   /* 
  * on Raw data (0x7) GET API2_RES_RAW_DISPLACEMENT_DIAG. */
 uint16_t svc_displacement_phasor_log_progress(void);
 
+/* --- Continuous phasor batch stream (API Topic 0x5 / resource 0x05) ---
+ * Added 2026-10-04 (fw 0.10.65). Unlike the one-shot phasor log above (512
+ * entries, then a pause while it is sent out), this delivers EVERY completed
+ * batch: svc_displacement_update() pushes each batch's raw phasors into a
+ * FIFO (DISPLACEMENT_PHASOR_STREAM_DEPTH entries) and the API layer drains
+ * it one frame per batch. Same exclusivity contract as the log/capture
+ * (refused while the real-time demod runs; the demod math is bypassed while
+ * the stream is active). Entries carry the cycle seq, so a lost batch shows
+ * as a seq jump; batches the FIFO had no room for are counted separately.
+ * Task context only. */
+DrvStatus svc_displacement_phasor_stream_begin(void);
+void      svc_displacement_phasor_stream_end(void);
+bool      svc_displacement_phasor_stream_active(void);
+/* Oldest queued entry without removing it (false if empty); consume()
+ * drops it once it has been handed to the transport. */
+bool      svc_displacement_phasor_stream_peek(DisplacementPhasorLogEntry *out);
+void      svc_displacement_phasor_stream_consume(void);
+/* Batches discarded because the FIFO was full, since stream_begin(). */
+uint16_t  svc_displacement_phasor_stream_drops(void);
+
 /* --- Zero calibration (180-degree reversal test) ---
  * Added 2026-09-25 -- see Config/config.h's "Displacement zero
  * calibration" comment for the math. A two-step procedure driven by the

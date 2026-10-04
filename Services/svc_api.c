@@ -1259,11 +1259,68 @@ static const TopicResourceDesc *find_topic_resource(uint8_t res)
     return 0;
 }
 
+/* Phasor batch stream (Topic 0x05, svc_api.h): SUBSCRIBE arms the ADC +
+ * the per-batch FIFO, UNSUBSCRIBE stops it. The push itself is event-driven
+ * from svc_api_update(), not the interval loop. */
+static void dispatch_phasor_stream(ApiTransport t, uint16_t opcode, uint8_t verb,
+                                   const uint8_t *frame, uint16_t paylen)
+{
+    if (verb == API2_VERB_GET) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    if (!check_crc(t, opcode, frame, paylen)) return;
+    MeasurementSubSlot *slot = &s_t[t].topic[API2_RES_TOPIC_PHASOR_STREAM];
+
+    if (verb == API2_VERB_SUBSCRIBE) {
+        if (paylen != 4U) {   /* interval field kept for wire-compat with the other topics; ignored */
+            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+            return;
+        }
+        if (slot->active) {
+            send_response(t, opcode, API2_STATUS_OK, 0, 0);
+            return;
+        }
+        if (s_bulk.active || svc_displacement_is_running() || !g_system_state.ads_ok) {
+            send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
+            return;
+        }
+        if (svc_displacement_phasor_stream_begin() != DRV_OK) {
+            send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+            return;
+        }
+        slot->active    = true;
+        slot->issue_seq = 0;
+        svc_log(API2_LOG_INFO, "stream: phasor batch stream started");
+        send_response(t, opcode, API2_STATUS_OK, 0, 0);
+        return;
+    }
+
+    /* UNSUBSCRIBE */
+    if (paylen != 0U) {
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
+    if (!slot->active) {
+        send_response(t, opcode, API2_STATUS_NOT_SUBSCRIBED, 0, 0);
+        return;
+    }
+    slot->active = false;
+    svc_displacement_phasor_stream_end();
+    svc_logf(API2_LOG_INFO, "stream: phasor batch stream stopped (%u FIFO drops)",
+             (unsigned)svc_displacement_phasor_stream_drops());
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
 static void dispatch_topic_groups(ApiTransport t, uint16_t opcode, uint8_t verb,
                                   uint8_t res, const uint8_t *frame, uint16_t paylen)
 {
     if (verb != API2_VERB_GET && verb != API2_VERB_SUBSCRIBE && verb != API2_VERB_UNSUBSCRIBE) {
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    if (res == API2_RES_TOPIC_PHASOR_STREAM) {
+        dispatch_phasor_stream(t, opcode, verb, frame, paylen);
         return;
     }
     const TopicResourceDesc *desc = find_topic_resource(res);
@@ -1678,6 +1735,9 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
 static void clear_subs(ApiTransport t)
 {
     if (t >= API_TRANSPORT_COUNT) return;
+    if (s_t[t].topic[API2_RES_TOPIC_PHASOR_STREAM].active) {
+        svc_displacement_phasor_stream_end();   /* subscriber gone: stop the ADC */
+    }
     memset(s_t[t].meas, 0, sizeof s_t[t].meas);
     memset(s_t[t].topic, 0, sizeof s_t[t].topic);
     memset(&s_t[t].dbg, 0, sizeof s_t[t].dbg);
@@ -1840,9 +1900,37 @@ static void zero_cal_apply_if_ready(void)
  * BLE link isn't flooded in one tick. */
 #define DEBUG_PUSH_PER_TICK 4U
 
+/* Phasor batch stream pump: one frame per queued batch, only while the
+ * transport's TX ring has headroom -- an entry is consumed only once handed
+ * to the transport, so back-pressure leaves it in the FIFO. */
+static void phasor_stream_pump(void)
+{
+    for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
+        MeasurementSubSlot *slot = &s_t[t].topic[API2_RES_TOPIC_PHASOR_STREAM];
+        if (!s_t[t].connected || !slot->active) continue;
+        const ApiReadyFn ready = s_t[t].ready_fn;
+
+        for (uint8_t k = 0; k < DISPLACEMENT_PHASOR_STREAM_PER_TICK; ++k) {
+            if (ready != 0 && !ready()) break;
+            DisplacementPhasorLogEntry e;
+            if (!svc_displacement_phasor_stream_peek(&e)) break;
+
+            uint8_t push[2U + sizeof e];
+            push[0] = slot->issue_seq++;
+            push[1] = 0U;   /* page */
+            memcpy(&push[2], &e, sizeof e);
+            send_framed(t, API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_TOPIC_GROUPS,
+                                       API2_RES_TOPIC_PHASOR_STREAM),
+                        API2_STATUS_OK, push, (uint16_t)sizeof push, false);
+            svc_displacement_phasor_stream_consume();
+        }
+    }
+}
+
 void svc_api_update(void)
 {
     bulk_pump();
+    phasor_stream_pump();
     zero_cal_apply_if_ready();
 
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
