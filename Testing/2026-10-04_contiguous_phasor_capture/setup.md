@@ -62,3 +62,21 @@ Keep the instrument on one screen (note which) -- the LIVE-screen redraw is know
 
 Routine written and verified against a simulated device only (CSV format, gap detection,
 first-batch handling, analysis run). **Not yet tested on hardware.**
+
+## Update 2026-10-04 evening: gapless stream (fw 0.10.65) -- supersedes the bulk routine
+
+The back-to-back bulk captures above leave a ~2.6 s hole every 12.6 s (UART transfer while
+no capture runs, ~83 % duty). fw 0.10.65 adds API Topic 0x05 / resource 0x05, an
+**event-driven stream of every 64-cycle batch** (FIFO of 64 entries in `svc_displacement`,
+one frame per batch, ~1.75 kB/s on the wired UART). `phasor_stream.py` logs it:
+`python phasor_stream.py --duration-min 1440 --label day24h`.
+
+* 1-minute smoke test on hardware: 2443 batches in 60.0 s (40.71/s, ideal 40.69/s), every
+  step exactly 64 cycles, 0 gap cycles, 0 lost frames, 0 bad frames.
+* CSV columns: `cycles` (unwrapped device cycle count, exact time = cycles/2604.1667 s),
+  `gap_cycles` (device-side loss, multiple of 64), `frame_gap` (wire-side loss),
+  `first_batch` (drop it), slow fields polled every 60 s.
+* `auto_poweroff_s` left at 0 (device never powers off). Charging is left to the firmware,
+  but the script inhibits it (Commands 0x09) after 3 h of continuous charging
+  (`--max-charge-h`) and clears the inhibit when the script exits.
+* `data/` is git-ignored for this test (CSVs are large and not committed).

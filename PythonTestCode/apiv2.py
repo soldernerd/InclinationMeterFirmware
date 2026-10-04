@@ -174,6 +174,7 @@ TOPIC_STATUS  = 0x01   # battery / connections / charging / rails / RTC
 TOPIC_PHASORS = 0x02   # WP10 displacement demod's raw batch phasors
 TOPIC_RAW_DISPLACEMENT = 0x03   # pre-moving-average delta/residual + differential, ~40.7 Hz (2026-09-26/27)
 TOPIC_SIGNAL_DIAG = 0x04   # amplitude/phase, all 4 channels + Wyler theoretical tilt (2026-09-27)
+TOPIC_PHASOR_STREAM = 0x05   # EVERY 64-cycle batch, event-driven; push = [issue_seq][page][34 B log entry] (fw 0.10.65)
 
 
 def build_interval(ms: int) -> bytes:

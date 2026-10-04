@@ -12,7 +12,8 @@
 
 param(
     [switch]$Build,
-    [string]$Elf = "build\Debug\InclinationMeterFirmware.elf"
+    [string]$Elf = "build\Debug\InclinationMeterFirmware.elf",
+    [string]$Sn = ""   # ST-Link serial; needed when several probes are attached
 )
 
 $ErrorActionPreference = "Stop"
@@ -45,5 +46,7 @@ Write-Host "==> flashing $Elf" -ForegroundColor Cyan
 # where a plain hot-plug SWD attach fails. -rst runs the new image afterwards, so
 # no manual halt/run in the GUI. If NRST is wired to the ST-Link, adding
 # "reset=HWrst" makes the under-reset connect more reliable still.
-& $cli -c port=SWD mode=UR -d $Elf -v -rst
+$conn = @("-c", "port=SWD", "mode=UR")
+if ($Sn) { $conn += "sn=$Sn" }
+& $cli @conn -d $Elf -v -rst
 exit $LASTEXITCODE

@@ -1098,3 +1098,19 @@ so no overflow handling is needed; the 4-term groups in the combine can reach 2^
 
 **Not yet verified on hardware** (the board was not attached when this was written): flash fw 0.10.64
 and compare `Raw data 0x7/0x02` (clip/drop counters, max update gap) and the readings against 0.10.62/63.
+
+## Continuous phasor batch stream (2026-10-04, fw 0.10.65)
+
+The one-shot phasor log (512 batches, then a ~2.6 s transfer pause) cannot give a gapless
+40.7 Hz series, and the interval-based Topic streams only snapshot the latest value at
+<= 20 Hz (aliasing the ~20 Hz pendulum). New API Topic 0x05 / resource 0x05 pushes **every**
+completed 64-cycle batch: `svc_displacement_update()` routes batches into a 64-entry FIFO
+(`DISPLACEMENT_PHASOR_STREAM_DEPTH`, 34 B each, `store_phasor_stream_entry()`, drops the
+newest on overflow and counts it) instead of the demod/log, and `svc_api.c`'s
+`phasor_stream_pump()` hands one frame per batch to the transport, only while its TX ring has
+headroom (`ready_fn`); an entry leaves the FIFO only once sent. Subscribe = start the ADC
+(refused with BUSY_EXCLUSIVE while the demod or a bulk capture runs), unsubscribe or a
+disconnect = stop. A lost batch shows as a cycle-`seq` jump (multiple of 64), a lost frame as
+an `issue_seq` jump. Frame = `[status][issue_seq][page=0]` + the 34-byte log entry, ~1.75 kB/s.
+Bench (UART, 1 min): 2443 batches, 40.71/s, zero gaps/losses. Host logger:
+`Testing/2026-10-04_contiguous_phasor_capture/phasor_stream.py`.
