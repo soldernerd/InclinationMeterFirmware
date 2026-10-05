@@ -117,9 +117,8 @@ static void task_input(void)
 {
     /* ENC_1SW/ENC_2SW aren't EXTI-capable on this pinout (see
      * pin_config.h) so they need polling; also mirrors the EXTI-driven
-     * encoder rotation counts into g_system_state. Runs every tick so
-     * task_ui (slower, task_display_ms) doesn't miss a button press
-     * latched between its ticks. */
+     * encoder rotation counts into g_system_state. Runs every tick,
+     * immediately before task_ui, so an input is acted on in the same tick. */
     svc_input_update();
 }
 
@@ -193,7 +192,7 @@ static SchedulerEntry s_tasks[] = {
     { task_uart,            NULL,                                  EVERY_TICK,             0 },  /* RX latency + TX drain; no EEPROM setting */
     { task_api,             NULL,                                  EVERY_TICK,             0 },  /* subscription timing accuracy */
     { task_displacement,    NULL,                                  EVERY_TICK,             0 },  /* ~2.6 kHz cycle production (svc_displacement.c) needs draining every tick, not a slower period */
-    { task_ui,              &g_device_settings.task_display_ms,     0,                      0 },
+    { task_ui,              NULL,                                  EVERY_TICK,             0 },  /* input is event-driven: react in the tick the encoder/button event was latched (task_input runs just before). Cheap when idle. The task_display_ms setting no longer paces this. */
     { task_display,         NULL,                                  EVERY_TICK,             0 },  /* renders DISPLAY_PAGES_PER_TICK bands/call (app_display.c); pump every tick to finish a redraw promptly */
     { task_leds,            NULL,                                  DEFAULT_TASK_LED_MS,    0 },  /* not user/BLE-configurable */
     { task_bme280,          NULL,                                  DEFAULT_TASK_BME280_MS, 0 },  /* not user/BLE-configurable */

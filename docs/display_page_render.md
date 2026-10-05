@@ -78,3 +78,31 @@ RAM: **−11.2 KB** (78.6 % → 71.1 %) — the 12 KB `_f` framebuffer is gone,
   LIVE / STATUS / SETTINGS / measuring overlay / low-battery.
 - Freezing structural selectors / a proper render snapshot for
   zero-tear fast screens — a WP5 compositor concern.
+
+## Event-driven redraw and partial updates (2026-10-05)
+
+Build-verified only (clean, `-Wall -Wextra -Werror`); **not yet bench-tested**.
+
+* `task_ui` now runs every scheduler tick (it only consumes counters), directly after
+  `task_input`; an encoder turn or press is acted on in the same tick. The
+  `task_display_ms` setting no longer paces the UI (the setting still exists, it is inert).
+* Two frame kinds in `app_display_update()`: *urgent* (`redraw_needed`, set by `app_ui.c`):
+  full redraw, `DISPLAY_URGENT_PAGES_PER_TICK` bands per tick, and it abandons a frame
+  still being rendered (stale snapshot). *Periodic* (`snapshot_changed()`): only the bands
+  whose content changed (`bands_to_render()`; LIVE: top bar, the three value lines, the
+  status line), `DISPLAY_PAGES_PER_TICK` per tick. LIVE refreshes every 250 ms,
+  DIAGNOSTICS every 2 s, STATUS once a second (full redraw).
+* Bands are rendered individually (`u8g2_SetBufferCurrTileRow` + `u8g2_NextPage`) so
+  unchanged bands cost nothing.
+* `drv_sharp_lcd_write_row()` compares each row with the framebuffer and marks it dirty;
+  `drv_sharp_lcd_flush_dirty()` sends only dirty rows as up to 8 runs (gaps of <= 8 clean
+  rows merged; more runs collapse to one span), each its own CS-framed write
+  (cmd, rows, 8 dummy clocks, carved out of the one buffer by temporarily patching the
+  byte before the run and the 8 bytes after it). A flush with nothing dirty touches no bus.
+  Init, a drain timeout and a refused flush all leave/force rows dirty, so they self-heal.
+* SPI2 prescaler 64 -> 32: 1 MHz -> 2 MHz (the panel's maximum). `Core/Src/spi.c` and
+  `WylerLeveltronic.ioc` changed together. A full frame is now ~50 ms on the wire (was
+  ~100 ms); a LIVE value update sends roughly 100 rows (~20 ms) or less.
+* To verify on the bench: input latency (knob -> new screen), `input_drop_count` /
+  max update gap (API Raw data 0x7/0x02) on LIVE at 250 ms, and that no stale pixels
+  remain after screen changes, charging/USB badge changes and the precision line.

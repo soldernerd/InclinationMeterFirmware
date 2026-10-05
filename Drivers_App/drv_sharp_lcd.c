@@ -25,7 +25,7 @@
 /* SCS timing margins: datasheet asks for t_sSCS >= 3 us setup and
  * t_hSCS >= 1 us hold. 2x the datasheet minimum is comfortable headroom
  * without being needlessly long — both of these run in thread context
- * (drv_sharp_lcd_flush_full() / drv_sharp_lcd_update(), never an ISR), but
+ * (drv_sharp_lcd_flush_dirty() / drv_sharp_lcd_update(), never an ISR), but
  * task_display() pumps drv_sharp_lcd_update() from the single-threaded
  * scheduler loop, so every microsecond here delays every other task. */
 #define SCS_SETUP_US     6U
@@ -45,6 +45,41 @@
 static uint8_t s_tx_buf[TX_BUFFER_SIZE];
 
 static volatile bool s_busy = false;
+
+/* Dirty-row tracking (partial updates). drv_sharp_lcd_write_row() compares
+ * every incoming row with what is already in s_tx_buf and sets a bit only
+ * when it differs, so the App layer needs no knowledge of which rows it
+ * actually changed. A flush sends just those rows. The panel is a memory LCD
+ * and keeps its contents, so unchanged rows never need re-sending.
+ * Bits are cleared when a flush starts; they are set for the whole panel at
+ * init and whenever a flush is known to have been disturbed. */
+#define DIRTY_WORDS      ((LCD_HEIGHT + 31U) / 32U)
+static uint32_t s_dirty[DIRTY_WORDS];
+
+/* A flush is a list of row runs, each sent as its own CS-framed
+ * transaction (cmd, rows, 8 dummy clocks). Clean gaps of up to
+ * RUN_MERGE_GAP_ROWS rows are sent along with the run rather than costing a
+ * transaction of their own (a row is ~208 us at 2 MHz; a transaction costs
+ * about one scheduler tick). More than MAX_RUNS runs collapse to one span. */
+#define MAX_RUNS            8U
+#define RUN_MERGE_GAP_ROWS  8U
+typedef struct { uint16_t first; uint16_t last; } RowRun;
+static RowRun   s_runs[MAX_RUNS];
+static uint8_t  s_run_count = 0;
+static uint8_t  s_run_idx   = 0;
+
+/* A run's DMA span is carved out of the one contiguous buffer: the byte
+ * before the first row (previous row's trailing dummy, or the real command
+ * byte for row 0) is temporarily set to the write-line command, and the
+ * 8 bytes after the last row's dummy byte (next row's address and first
+ * data bytes, or the real trailer after row 239) are temporarily zeroed.
+ * Both are restored when the run has drained. Nothing touches the buffer
+ * while s_busy is set (the App layer refuses to render then). */
+#define RUN_TRAILER_BYTES  TRAILER_BYTES
+static uint16_t s_saved_cmd_idx   = 0;
+static uint8_t  s_saved_cmd       = 0;
+static uint16_t s_saved_tail_idx  = 0;
+static uint8_t  s_saved_tail[RUN_TRAILER_BYTES];
 
 /* Panel health, private to this driver (thread context only — no ISR
  * touches it, unlike s_busy). false once a flush drained-timeout forced a
@@ -108,6 +143,53 @@ static void on_dma_complete(HalSpiInstance instance, bool success)
     }
 }
 
+static inline bool row_is_dirty(uint16_t r)
+{
+    return (s_dirty[r >> 5] >> (r & 31U)) & 1U;
+}
+
+static void restore_run_bytes(void)
+{
+    s_tx_buf[s_saved_cmd_idx] = s_saved_cmd;
+    memcpy(&s_tx_buf[s_saved_tail_idx], s_saved_tail, RUN_TRAILER_BYTES);
+}
+
+/* Start the DMA for run s_runs[i]: CS, setup time, then cmd + rows + 8
+ * dummy clocks. See the comment on s_saved_cmd_idx for the buffer carving. */
+static void start_run(uint8_t i)
+{
+    uint16_t first = s_runs[i].first;
+    uint16_t last  = s_runs[i].last;
+
+    s_saved_cmd_idx  = (uint16_t)(first * ROW_PACKET_SIZE);
+    s_saved_tail_idx = (uint16_t)((last + 1U) * ROW_PACKET_SIZE + 1U);
+    s_saved_cmd      = s_tx_buf[s_saved_cmd_idx];
+    memcpy(s_saved_tail, &s_tx_buf[s_saved_tail_idx], RUN_TRAILER_BYTES);
+    s_tx_buf[s_saved_cmd_idx] = CMD_WRITE_LINE;
+    memset(&s_tx_buf[s_saved_tail_idx], TRAILER, RUN_TRAILER_BYTES);
+
+    uint16_t len = (uint16_t)((last - first + 1U) * ROW_PACKET_SIZE + 1U + RUN_TRAILER_BYTES);
+    hal_spi_cs_assert(HAL_SPI_DISPLAY);
+    /* SCS setup time before the first clock -- generous margin. */
+    hal_systick_delay_us(SCS_SETUP_US);
+    hal_spi_write_dma(HAL_SPI_DISPLAY, &s_tx_buf[s_saved_cmd_idx], len);
+}
+
+void drv_sharp_lcd_mark_all_dirty(void)
+{
+    for (uint8_t w = 0; w < DIRTY_WORDS; ++w) {
+        s_dirty[w] = 0xFFFFFFFFU;
+    }
+}
+
+bool drv_sharp_lcd_has_dirty(void)
+{
+    for (uint16_t r = 0; r < LCD_HEIGHT; ++r) {
+        if (row_is_dirty(r)) return true;
+    }
+    return false;
+}
+
 void drv_sharp_lcd_update(void)
 {
     if (s_pending_power_settle) {
@@ -120,7 +202,7 @@ void drv_sharp_lcd_update(void)
         }
         s_pending_power_settle = false;
         s_busy                 = false;
-        return;   /* next drv_sharp_lcd_flush_full() call proceeds normally */
+        return;   /* next drv_sharp_lcd_flush_dirty() call proceeds normally */
     }
 
     if (!s_awaiting_drain) {
@@ -147,7 +229,19 @@ void drv_sharp_lcd_update(void)
     hal_systick_delay_us(SCS_HOLD_US);
     hal_spi_cs_deassert(HAL_SPI_DISPLAY);
     s_awaiting_drain = false;
-    s_busy           = false;
+    restore_run_bytes();
+    if (timed_out) {
+        /* The panel may have received a partial frame: resend everything. */
+        drv_sharp_lcd_mark_all_dirty();
+        s_busy = false;
+        return;
+    }
+    ++s_run_idx;
+    if (s_run_idx < s_run_count) {
+        start_run(s_run_idx);   /* s_busy stays set until the last run drains */
+        return;
+    }
+    s_busy = false;
 }
 
 static void prime_tx_buffer(void)
@@ -168,6 +262,7 @@ void drv_sharp_lcd_init(void)
     s_busy                 = true;    /* held busy until the settle wait clears it */
     s_awaiting_drain       = false;
     prime_tx_buffer();
+    drv_sharp_lcd_mark_all_dirty();   /* panel contents unknown at power-up */
 
     hal_spi_init(HAL_SPI_DISPLAY);
     hal_spi_register_dma_callback(HAL_SPI_DISPLAY, on_dma_complete);
@@ -193,17 +288,54 @@ void drv_sharp_lcd_init(void)
 void drv_sharp_lcd_write_row(uint16_t row, const uint8_t *src)
 {
     if (row >= LCD_HEIGHT || src == 0) return;
-    memcpy(row_pixels(row), src, LCD_STRIDE);
+    uint8_t *dst = row_pixels(row);
+    if (memcmp(dst, src, LCD_STRIDE) != 0) {
+        memcpy(dst, src, LCD_STRIDE);
+        s_dirty[row >> 5] |= 1UL << (row & 31U);
+    }
 }
 
-DrvStatus drv_sharp_lcd_flush_full(void)
+DrvStatus drv_sharp_lcd_flush_dirty(void)
 {
     if (s_busy) return DRV_ERR_NOT_READY;
-    s_busy = true;
-    hal_spi_cs_assert(HAL_SPI_DISPLAY);
-    /* SCS setup time before the first clock -- generous margin. */
-    hal_systick_delay_us(SCS_SETUP_US);
-    hal_spi_write_dma(HAL_SPI_DISPLAY, s_tx_buf, (uint16_t)TX_BUFFER_SIZE);
+
+    /* Build the run list from the dirty bitmap, merging small clean gaps. */
+    uint8_t  n    = 0;
+    uint16_t r    = 0;
+    uint16_t lo   = LCD_HEIGHT;   /* overall span, for the collapse case */
+    uint16_t hi   = 0;
+    while (r < LCD_HEIGHT) {
+        if (!row_is_dirty(r)) { ++r; continue; }
+        uint16_t first = r;
+        uint16_t last  = r;
+        uint16_t gap   = 0;
+        for (++r; r < LCD_HEIGHT; ++r) {
+            if (row_is_dirty(r)) { last = r; gap = 0; }
+            else if (++gap > RUN_MERGE_GAP_ROWS) { break; }
+        }
+        r = (uint16_t)(last + 1U);
+        if (first < lo) lo = first;
+        if (last  > hi) hi = last;
+        if (n < MAX_RUNS) {
+            s_runs[n].first = first;
+            s_runs[n].last  = last;
+        }
+        ++n;
+    }
+    if (n == 0) return DRV_OK;          /* nothing changed: nothing to send */
+    if (n > MAX_RUNS) {
+        s_runs[0].first = lo;
+        s_runs[0].last  = hi;
+        n = 1;
+    }
+
+    for (uint8_t w = 0; w < DIRTY_WORDS; ++w) {
+        s_dirty[w] = 0;
+    }
+    s_run_count = n;
+    s_run_idx   = 0;
+    s_busy      = true;
+    start_run(0);
     return DRV_OK;
 }
 

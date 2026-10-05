@@ -11,7 +11,16 @@
 
 void      drv_sharp_lcd_init(void);
 void      drv_sharp_lcd_write_row(uint16_t row, const uint8_t *src);
-DrvStatus drv_sharp_lcd_flush_full(void);
+
+/* write_row() tracks which rows actually changed. flush_dirty() sends only
+ * those rows (merged into a few runs, one CS-framed transaction each) and
+ * returns DRV_OK without touching the bus if nothing changed;
+ * DRV_ERR_NOT_READY if a previous flush is still on the wire (rows stay
+ * dirty). mark_all_dirty() forces the whole panel to be resent;
+ * has_dirty() lets the App layer retry a flush that was refused. */
+DrvStatus drv_sharp_lcd_flush_dirty(void);
+void      drv_sharp_lcd_mark_all_dirty(void);
+bool      drv_sharp_lcd_has_dirty(void);
 bool      drv_sharp_lcd_is_busy(void);
 
 /* Panel health: false after a flush drain-timeout forced an SPI2 re-init;

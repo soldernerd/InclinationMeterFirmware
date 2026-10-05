@@ -21,8 +21,16 @@
  * this many bands per call, so no single call blocks the cooperative
  * scheduler with a full 400x240 render (~100 ms at -O0, still tens of ms
  * at -O2). 3 bands/tick -> a full redraw completes in ~5 scheduler ticks;
- * on a Sharp LCD the top-to-bottom fill is imperceptible. */
+ * on a Sharp LCD the top-to-bottom fill is imperceptible.
+ *
+ * Event-driven redraws: a frame started by a user input (urgent) renders
+ * DISPLAY_URGENT_PAGES_PER_TICK bands per tick so the response is as fast as
+ * possible (and is restarted if another input arrives meanwhile); a
+ * periodic frame (new measurement, clock, battery) renders only the bands
+ * whose content changed, DISPLAY_PAGES_PER_TICK per tick, so it never
+ * starves the measurement pipeline. */
 #define DISPLAY_PAGES_PER_TICK          3
+#define DISPLAY_URGENT_PAGES_PER_TICK   5
 
 /* --- Battery ---
  * Voltage-based thresholds (2026-09-01, user-specified):

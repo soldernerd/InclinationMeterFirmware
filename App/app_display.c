@@ -102,7 +102,16 @@
  * the LIVE screen's large logisoso24 S1/S2 glyphs), not this interval;
  * see the RE-INVESTIGATED paragraph above for why a shorter interval
  * would only make things worse until that's found. */
-#define LIVE_DISPLACEMENT_REFRESH_MS  2000U
+/* 2026-10-05: redraws are now event-driven and partial (see
+ * app_display_update()): a periodic frame renders only the bands whose
+ * content changed (LIVE: the three value lines) and sends only the changed
+ * rows over SPI2 at 2 MHz, so the LIVE readout is refreshed at 250 ms as
+ * the user wants. The per-redraw cost measured in the investigation above
+ * should be re-checked on the bench against input_drop_count (Raw data
+ * 0x7 resource 0x02) with this cadence. The DIAGNOSTICS screen is a full
+ * redraw and stays at the old 2 s. */
+#define LIVE_REFRESH_MS               250U
+#define DIAG_REFRESH_MS               2000U
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
  * config. At -O0 a full banded render is tens of ms and the per-tick
@@ -154,8 +163,8 @@ typedef struct {
                                      * shown — same "redraw on a clock
                                      * tick, not on the underlying value"
                                      * shape as uptime_s, at
-                                     * LIVE_DISPLACEMENT_REFRESH_MS instead
-                                     * of 1000 ms. */
+                                     * LIVE_REFRESH_MS (DIAG_REFRESH_MS on the
+                                     * DIAGNOSTICS screen) instead of 1000 ms. */
     char disp1_line[24];   /* pre-formatted once per redraw in
                               * snapshot_capture() -- see that function's
                               * comment for why this can't just be
@@ -198,6 +207,15 @@ static bool            s_have_last = false;
 typedef enum { DISP_IDLE, DISP_RENDER } DisplayPhase;
 static DisplayPhase s_phase     = DISP_IDLE;
 static uint32_t     s_render_ms = 0;
+
+/* Bands (16 px = 2 u8g2 tile rows, 15 per frame) still to render in the
+ * current frame, and whether the frame was started by a user input
+ * (urgent: full redraw, more bands per tick) or by a periodic change. */
+#define DISPLAY_BANDS       15U
+#define DISPLAY_BAND_PX     16U
+#define ALL_BANDS_MASK      ((uint16_t)((1UL << DISPLAY_BANDS) - 1UL))
+static uint16_t s_band_mask    = 0;
+static bool     s_frame_urgent = false;
 
 /* Triggered precision measurement (2026-09-27) -- see app_ui.c's LIVE-screen
  * right-knob-press handler. svc_displacement's own DISP_PRECISION_DONE phase
@@ -652,9 +670,53 @@ static bool snapshot_changed(void)
         || s_last.edit_value       != g_ui_state.edit_value
         || (g_ui_state.current_screen == UI_SCREEN_STATUS
             && s_last.uptime_s != hal_systick_get_ms() / 1000U)
-        || ((g_ui_state.current_screen == UI_SCREEN_LIVE
-             || g_ui_state.current_screen == UI_SCREEN_DIAGNOSTICS)
-            && s_last.displacement_tick != hal_systick_get_ms() / LIVE_DISPLACEMENT_REFRESH_MS);
+        || (g_ui_state.current_screen == UI_SCREEN_LIVE
+            && s_last.displacement_tick != hal_systick_get_ms() / LIVE_REFRESH_MS)
+        || (g_ui_state.current_screen == UI_SCREEN_DIAGNOSTICS
+            && s_last.displacement_tick != hal_systick_get_ms() / DIAG_REFRESH_MS);
+}
+
+/* Bands covering pixel rows y0..y1 (inclusive). */
+static uint16_t bands_for_rows(uint16_t y0, uint16_t y1)
+{
+    uint16_t b0 = y0 / DISPLAY_BAND_PX;
+    uint16_t b1 = y1 / DISPLAY_BAND_PX;
+    if (b1 >= DISPLAY_BANDS) b1 = DISPLAY_BANDS - 1U;
+    uint16_t m = 0;
+    for (uint16_t b = b0; b <= b1; ++b) m |= (uint16_t)(1U << b);
+    return m;
+}
+
+/* Which bands must be re-rendered, given the snapshot the panel was last
+ * rendered from (prev) and the one just captured (cur)? Anything not known
+ * to be local returns every band. Rows of the LIVE layout (draw_live_screen,
+ * draw_top_bar): top bar 0-18, value lines at baselines 76/112/148 in the
+ * 24 px font (ascent+descent about -30..+8), status line at baseline 176 in
+ * the 13 px font. Over-covering is harmless (the driver only sends rows that
+ * really changed); under-covering would leave stale pixels. */
+static uint16_t bands_to_render(const DisplaySnapshot *prev, const DisplaySnapshot *cur, bool urgent)
+{
+    if (urgent || prev->screen != cur->screen || cur->screen != UI_SCREEN_LIVE
+        || cur->battery_low != prev->battery_low
+        || cur->battery_critical != prev->battery_critical) {
+        return ALL_BANDS_MASK;
+    }
+    uint16_t m = 0;
+    if (cur->battery_soc_pct != prev->battery_soc_pct
+        || cur->battery_charging != prev->battery_charging
+        || cur->usb_connected != prev->usb_connected) {
+        m |= bands_for_rows(0, 19);
+    }
+    if (strcmp(cur->disp1_line, prev->disp1_line) != 0)     m |= bands_for_rows(46, 84);
+    if (strcmp(cur->disp2_line, prev->disp2_line) != 0)     m |= bands_for_rows(82, 120);
+    if (strcmp(cur->disp_diff_line, prev->disp_diff_line) != 0) m |= bands_for_rows(118, 156);
+    if (strcmp(cur->precision_line, prev->precision_line) != 0
+        || cur->temperature_cdeg != prev->temperature_cdeg
+        || cur->battery_mv_bucket != prev->battery_mv_bucket
+        || cur->battery_soc_pct != prev->battery_soc_pct) {
+        m |= bands_for_rows(160, 182);
+    }
+    return m;
 }
 
 static void snapshot_capture(void)
@@ -671,9 +733,10 @@ static void snapshot_capture(void)
     s_last.settings_editing = g_ui_state.settings_editing;
     s_last.edit_value       = g_ui_state.edit_value;
     s_last.uptime_s         = s_render_ms / 1000U;
-    s_last.displacement_tick = s_render_ms / LIVE_DISPLACEMENT_REFRESH_MS;
+    s_last.displacement_tick = s_render_ms /
+        (g_ui_state.current_screen == UI_SCREEN_DIAGNOSTICS ? DIAG_REFRESH_MS : LIVE_REFRESH_MS);
 
-    /* INVESTIGATED 2026-09-25 (see this file's LIVE_DISPLACEMENT_REFRESH_MS
+    /* INVESTIGATED 2026-09-25 (see this file's LIVE_REFRESH_MS
      * comment for the full bisection): this float->string formatting used
      * to live inline in draw_live_screen(), which u8g2's page-mode
      * renderer calls once per band (~15x per redraw, clipping non-visible
@@ -835,40 +898,68 @@ static void draw_active_screen(void)
     }
 }
 
+/* Event-driven redraw (2026-10-05).
+ *
+ * Two kinds of frame:
+ *  - urgent: g_ui_state.redraw_needed, set by app_ui.c in the tick a user
+ *    input was processed. Full redraw, DISPLAY_URGENT_PAGES_PER_TICK bands
+ *    per tick. It also abandons a frame that is still being rendered: that
+ *    frame was drawn from a snapshot the input has just made stale, so
+ *    finishing it would only delay the response (the old behaviour).
+ *  - periodic: snapshot_changed() (new measurement tick, clock, battery,
+ *    temperature). Only the bands whose content changed are rendered
+ *    (bands_to_render()), DISPLAY_PAGES_PER_TICK per tick.
+ * Either way the finished frame is sent with drv_sharp_lcd_flush_dirty(),
+ * which transmits only the rows whose pixels differ from the panel. */
 void app_display_update(void)
 {
     if (drv_sharp_lcd_is_busy()) {
-        return;   /* previous frame's DMA blit still on the wire */
+        return;   /* previous frame's DMA still on the wire */
+    }
+
+    if (s_phase == DISP_RENDER && g_ui_state.redraw_needed) {
+        s_phase = DISP_IDLE;   /* stale frame: restart from the new state below */
     }
 
     if (s_phase == DISP_IDLE) {
         if (!g_ui_state.redraw_needed && !snapshot_changed()) {
+            /* Nothing to draw. Retry a flush that was refused earlier. */
+            if (drv_sharp_lcd_has_dirty()) {
+                (void)drv_sharp_lcd_flush_dirty();
+            }
             return;
         }
-        /* Commit to a full frame. Freeze the time base and capture the
-         * value snapshot now so the ~5-tick band render stays coherent;
-         * u8g2_FirstPage clears the first band (is_auto_page_clear). */
+        /* Commit to a frame. Freeze the time base and capture the value
+         * snapshot now so the multi-tick band render stays coherent. */
+        static DisplaySnapshot s_prev;
+        s_frame_urgent = g_ui_state.redraw_needed || !s_have_last;
+        s_prev = s_last;
         g_ui_state.redraw_needed = false;
         s_render_ms = hal_systick_get_ms();
         snapshot_capture();
-        u8g2_FirstPage(&s_u8g2);
+        s_band_mask = bands_to_render(&s_prev, &s_last, s_frame_urgent);
         s_phase = DISP_RENDER;
     }
 
-    for (uint8_t n = 0; n < DISPLAY_PAGES_PER_TICK; ++n) {
-        draw_active_screen();
-        if (u8g2_NextPage(&s_u8g2) == 0) {
-            /* Final band written into drv_sharp_lcd's framebuffer — one
-             * DMA blit pushes the whole image to the panel atomically.
-             * Return ignored deliberately: the only failure is
-             * DRV_ERR_NOT_READY (a blit already in flight), and the
-             * drv_sharp_lcd_is_busy() guard at the top of this function —
-             * plus the fact that nothing else issues a flush — means that
-             * can't happen here. A dropped frame would self-heal on the
-             * next snapshot_changed() pass regardless. */
-            (void)drv_sharp_lcd_flush_full();
-            s_phase = DISP_IDLE;
-            return;
+    uint8_t budget = s_frame_urgent ? DISPLAY_URGENT_PAGES_PER_TICK : DISPLAY_PAGES_PER_TICK;
+    for (uint8_t band = 0; band < DISPLAY_BANDS && s_band_mask != 0U && budget != 0U; ++band) {
+        if ((s_band_mask & (1U << band)) == 0U) {
+            continue;
         }
+        u8g2_ClearBuffer(&s_u8g2);
+        u8g2_SetBufferCurrTileRow(&s_u8g2, (uint8_t)(band * 2U));   /* 2 tile rows per band */
+        draw_active_screen();
+        (void)u8g2_NextPage(&s_u8g2);   /* sends the band to the framebuffer (dirty-tracked) */
+        s_band_mask &= (uint16_t)~(1U << band);
+        --budget;
+    }
+
+    if (s_band_mask == 0U) {
+        /* All bands rendered: send the changed rows. A refusal
+         * (DRV_ERR_NOT_READY) cannot happen here because of the busy guard
+         * at the top, and the dirty rows would be retried by the idle path
+         * above anyway. */
+        (void)drv_sharp_lcd_flush_dirty();
+        s_phase = DISP_IDLE;
     }
 }
