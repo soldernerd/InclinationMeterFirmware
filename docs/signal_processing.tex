@@ -44,7 +44,7 @@
 \title{Signal Processing of the Inclination Meter\\
        from DDS Excitation to Displacement Readout}
 \author{}
-\date{Draft --- work in progress}
+\date{Draft --- work in progress (reflects firmware up to 0.10.65, 2026-10-05)}
 
 \begin{document}
 
@@ -621,7 +621,8 @@ much wider and much less attenuating than that of A and B
   \item \textbf{Gain:} $|H_S|=0.903$ holds only if the sensor output
         impedance is small.  A series source resistance of \SI{1}{\kilo\ohm}
         already lowers it to $0.81$.  The sensor's output impedance is not
-        specified in the manual.
+        specified in the manual; the output is an op-amp output (low
+        impedance), so the assumption is reasonable but not measured.
   \item \textbf{Phase:} the S network lags by $\SI{2.6}{\degree}$, the A/B
         network by $\SI{23.7}{\degree}$.  In the ADC domain the sensor
         signal therefore carries a phase offset of
@@ -668,16 +669,64 @@ so the S signals should arrive $\SI{21}{\degree}$ \emph{earlier} than $B$
 ($-\SI{21}{\degree}$).  Measured are $-\SI{10}{\degree}$ and
 $-\SI{14}{\degree}$, so about $\SI{+11}{\degree}$ ($S_1$) and
 $\SI{+7}{\degree}$ ($S_2$) of additional delay remain that must come from
-the sensor itself (its own phase lag or output impedance).
-\textbf{Open:} this needs to be characterised; also the
+the sensor itself: its output is a low-impedance op-amp output, so the extra
+delay comes from the old electronics inside the sensor, not from loading.
+\textbf{Open:} the delay needs to be characterised; also the
 $\SI{1}{\degree}$ deviation of $B$ from exactly $\SI{180}{\degree}$ relative
 to $A$ is unexplained (candidates: resistor ratio, channel-to-channel timing
-in the ADC).
+in the ADC).  It is, however, \emph{stable}: in three separate runs it came out
+$178.94^{\circ}$, $178.96^{\circ}$ and $179.00^{\circ}$ (the absolute phase of $A$
+in the same runs was not stable, Section~10.5), so it behaves as a fixed property
+of the measurement paths.
 
 \subsection{Phase calibration (planned)}
 
-\textbf{Status: planned, not implemented.}  Nothing in the current firmware
-needs to change for this note; it records the intended approach.
+\textbf{Status: approach decided (approach~2 below), not implemented.}  The
+firmware still uses a real $k$; this subsection records the intended design.
+
+\textbf{Two approaches were considered} (Table~\ref{tab:approaches}).
+\begin{table}[ht]
+\centering
+\small
+\begin{tabular}{@{}p{0.2\textwidth}p{0.36\textwidth}p{0.36\textwidth}@{}}
+\toprule
+ & Approach 1: fixed absolute constants & Approach 2: run-time reference $\underline{D}$ \\
+\midrule
+Idea & Store one common phase constant for $A$ and $B$, plus one each for
+  $S_1$ and $S_2$, so that $A$ lands at $\SI{90}{\degree}$ and $B$ at
+  $\SI{270}{\degree}$ in the ADC frame.
+& Measure $\underline{D}=\underline{A}-\underline{B}$ in every batch and rotate
+  all phasors so that it sits at $\SI{90}{\degree}$; store only the phase of
+  each sensor relative to $\underline{D}$ ($\delta_1$, $\delta_2$). \\
+Constants & 3 (common $A/B$, $S_1$, $S_2$) & 2 ($\delta_1$, $\delta_2$) \\
+Needs a reproducible absolute phase & \textbf{Yes.}  The constants are only valid if the
+  sample-grid alignment is the same at every start.
+& No: the rotation is taken from the measured $\underline{D}$, so any grid
+  alignment drops out. \\
+Observed & The absolute phase of $A$ was $122.85^{\circ}$, $122.67^{\circ}$ and
+  $334.39^{\circ}$ in three runs (Section~10.5): not reproducible.
+& With $\underline{D}$ at $\SI{90}{\degree}$, $A$ read $90.50$--$90.53^{\circ}$ and $B$
+  $269.47$--$269.50^{\circ}$ in all three runs. \\
+Drift of the common $A/B$ path & Not followed (a fixed constant).
+& Followed automatically; only the \emph{sensor-versus-excitation} phase remains
+  calibrated. \\
+Calibration effort & Needs a calibration after every grid-alignment change, or a
+  firmware change that makes the alignment reproducible.
+& Once per sensor and after any rework of the input networks. \\
+Cost & Simple arithmetic.
+& One complex division per batch for $\underline{D}$, which the ratio already
+  computes. \\
+\bottomrule
+\end{tabular}
+\caption{Phase calibration: fixed absolute constants against a run-time reference.}
+\label{tab:approaches}
+\end{table}
+\textbf{Decision: approach 2.}  Its decisive advantage is that it does not rely on
+a property that was measured not to hold (a reproducible absolute phase), it needs
+fewer constants, and it costs nothing extra since $\underline{D}$ is the
+denominator of the ratio anyway.  Approach~1 would only become attractive if the
+sample-grid alignment were made reproducible by a firmware change, which has no
+other benefit.  The remainder of this subsection describes approach~2.
 
 In theory $A$ and $B$ are exactly $\SI{180}{\degree}$ apart, and $S_1$ and
 $S_2$ are either in phase with $A$ or in phase with $B$, depending on the
@@ -736,12 +785,22 @@ calibration, with the following design decisions.
         $B$ are needed.
   \item \textbf{Determination:} apply a clearly non-zero tilt in a known
         direction and choose $\delta$ so that $\underline{S}$ lands on the
-        real axis with the sign given by that direction.  From the 24\,h run
-        (quiet part, $\underline{D}$ at $\SI{90}{\degree}$) both sensors were
-        in phase with $B$ but $\SI{10.5}{\degree}$ ($S_1$, reading
-        $\SI{259.5}{\degree}$) and $\SI{14.3}{\degree}$ ($S_2$, reading
-        $\SI{255.7}{\degree}$) earlier than the ideal $\SI{270}{\degree}$.
-        These are the first estimates of $\delta_1$ and $\delta_2$.
+        real axis with the sign given by that direction.  The best estimate
+        uses the \emph{change} of $\underline{S}$ between two tilt states (for
+        example the 180$^{\circ}$ reversal): the direction of the change
+        $\Delta\underline{S}$ is the direction of $\underline{k}\,\underline{D}$
+        and is independent of any static offset (the quadrature zero offset
+        and the leakage of the sensor midpoint, which are of order $10$ to
+        $\SI{30}{\micro\metre\per\metre}$ equivalent).  Using the phase of
+        $\underline{S}$ itself, as was done first, mixes in these offsets.
+        From the 24\,h run (quiet part, $\underline{D}$ at $\SI{90}{\degree}$)
+        both sensors were in phase with $B$ but $\SI{10.5}{\degree}$ ($S_1$,
+        reading $\SI{259.5}{\degree}$) and $\SI{14.3}{\degree}$ ($S_2$, reading
+        $\SI{255.7}{\degree}$) earlier than the ideal $\SI{270}{\degree}$; the
+        later contiguous phasor stream gives about $-10^{\circ}$ for $S_1$ and
+        $-10.6^{\circ}$ to $-14.3^{\circ}$ for $S_2$ (the range depends on the
+        estimate used).  These are estimates of $\delta_1$ and $\delta_2$ only;
+        a proper determination from a controlled tilt change is still to do.
 \end{itemize}
 \textbf{How much does it matter?}  Less than one might expect.  The complex
 ratio is already invariant against a common rotation of all phasors, so the
@@ -947,17 +1006,21 @@ measurement never continues silently with a shifted sample grid.  (This is
 different from the input and output drop counters seen in the test logs:
 the input counter counts carrier cycles lost when a whole 64-cycle batch is
 dropped because the software batch ring was full, which loses averaging time
-but keeps the sample grid intact.)
+but keeps the sample grid intact.  Since fw 0.10.64 the unit dropped is always
+a whole batch; before that it was a single 8-sample cycle.)
 
 \textbf{Phase reference.}  Within one acquisition run the phase of each
 channel in the digital frame is stable (standard deviation of the phase of
 $A$ over an hour: below $\SI{0.1}{\degree}$).  Across runs it is \emph{not
 guaranteed} by design: the running sample index that defines the phase
 reference is reset when the firmware initialises, not each time the
-acquisition is started, while the ADC keeps converting in between.  In two
-separate runs on two boots the phase of $A$ in this frame came out
-identical ($\SI{122.8}{\degree}$ and $\SI{122.7}{\degree}$), but this has
-not been verified across restarts.  For the planned phase calibration
+acquisition is started, while the ADC keeps converting in between.  Two
+runs on two boots gave nearly the same phase of $A$ in this frame
+($\SI{122.85}{\degree}$ and $\SI{122.67}{\degree}$), but a third run gave
+$\SI{334.39}{\degree}$: \textbf{the absolute phase is not reproducible across
+runs}, as the design implies, and nothing may depend on it.  (The phase of
+$B$ relative to $A$ was the same in all three, $\approx\SI{179}{\degree}$.)
+For the planned phase calibration
 (Section~9) this means: phases relative to each other are always
 meaningful, and using the measured difference phasor $\underline{D}=\underline{A}-\underline{B}$
 as the run-time reference (rotate every phasor so that $\underline{D}$ is at
@@ -1095,8 +1158,14 @@ What does matter:
         \emph{not} rejected by the formula (the simulation shows them passing
         with full weight).  They are suppressed only by the analog filters
         and the ADC's sinc filter ($\SI{-51}{\decibel}$ and
-        $\SI{-58}{\decibel}$ at 7th and 9th).  The excitation is a DDS sine,
-        and the harmonics are small, so this is negligible in practice.
+        $\SI{-58}{\decibel}$ at 7th and 9th).  The excitation is a DDS sine
+        and the A/B channels are clean (2nd/3rd harmonic $-50$/$-58$\,dBc),
+        but the \emph{sensor} channels carry large low harmonics in the 24\,h
+        raw-ADC capture ($S_2$: 2nd $-21$, 3rd $-15$\,dBc; $S_1$: $-37$, $-32$\,dBc).
+        The 2nd to 6th are rejected exactly, but the 7th and 9th cannot be seen
+        in an 8-sample capture, so whether they matter for the sensors is
+        \textbf{unchecked}; ``negligible'' is shown only for $A$ and $B$.  A
+        capture with a faster sample clock (or a scope) would settle it.
   \item \textbf{Integer weights.}  The firmware uses 14-bit fixed-point
         weights ($16384$ and $11585\approx16384/\sqrt{2}$).  The table
         sums are exactly zero, so DC is still rejected exactly.  The rounding
@@ -1164,7 +1233,13 @@ phasors (Section~11).  The obvious method is:
   \item take $|\underline{S}|$ and divide by the sensitivity
         (\SI{20}{\micro\volt} RMS per $\si{\micro\metre\per\metre}$).
 \end{enumerate}
-The firmware instead evaluates a complex division per sensor:
+\textbf{Firmware status.}  Up to fw 0.10.61 the firmware evaluated the full
+complex ratio below, including the $-\underline{B}$ term.  From fw 0.10.62 it
+evaluates the projection $\operatorname{Re}[\underline{S}/(k(\underline{A}-\underline{B}))]$
+(the $\lambda=0$ estimator of Section~12.7), because the $-\underline{B}$ term
+injected the A/B balance drift into the reading.  Sections 12.1 to 12.6
+describe and compare the original ratio, which explains why the change was made.
+The original firmware evaluated a complex division per sensor:
 \begin{equation}
   \underline{x} = \frac{\underline{S}/k - \underline{B}}{\underline{A}-\underline{B}},
   \qquad
@@ -1193,7 +1268,7 @@ is of the order of $10^{-6}$ per $\si{\micro\metre\per\metre}$.
 \small
 \begin{tabular}{@{}p{0.46\textwidth}p{0.46\textwidth}@{}}
 \toprule
-Complex ratio (implemented) & Magnitude + sign (naive) \\
+Complex ratio with the B term (fw $\le$ 0.10.61) & Magnitude + sign (naive) \\
 \midrule
 \multicolumn{2}{@{}l}{\textbf{Advantages of the complex ratio}} \\
 Ratiometric: DDS amplitude (14\,\% above the sensor's nominal supply,
@@ -1248,10 +1323,15 @@ Trivial. \\
 A middle way exists: project $\underline{S}$ on the reference,
 $\operatorname{Re}[\underline{S}/(k(\underline{A}-\underline{B}))]$.  It is
 ratiometric, phase-insensitive to first order, linear and unbiased like the
-implemented method, but it drops the $\underline{A}+\underline{B}$ term: it
+full ratio, but it drops the $\underline{A}+\underline{B}$ term: it
 gives up the compensation of a real imbalance and in return becomes immune
 to a mismatch of the two measurement paths.  Which is better depends on
-which effect dominates.  It is a proposal only; nothing has been changed.
+which effect dominates.  The data (Sections 12.3 to 12.6) favour the
+projection, and it has been the firmware's estimator since fw 0.10.62.  On a
+74-minute contiguous phasor stream the two estimators give for $S_1$/$S_2$ a
+detrended standard deviation of $1.64/1.70\,\si{\micro\metre}$ (full ratio) against
+$0.56/0.57\,\si{\micro\metre}$ (projection), and an Allan deviation at 60\,s of
+$0.90\to0.30\,\si{\micro\metre}$ for $S_1$.
 
 \subsection{Imbalance of A and B: what is and is not corrected}
 
@@ -1547,11 +1627,19 @@ $|\underline{A}|$ and $|\underline{B}|$ (about 1000\,ppm) reaches the reading as
 a scale error, which is negligible at small tilts.  Estimating $\lambda$
 online (for example by regression on $\underline{z}$ in a sliding window) is
 not recommended, because real tilt correlates with $z$ as well; a fixed,
-calibrated $\lambda$ is safer.  \textbf{Status: proposal, not implemented.}
+calibrated $\lambda$ is safer.  \textbf{Status: step~1 ($\lambda=0$) implemented
+in fw 0.10.62; the zero calibration has to be redone (not yet done); steps~2
+and 3 open.}  One new observation: $|\underline{D}|=|\underline{A}-\underline{B}|$
+itself drifted by about 160\,ppm in the 74-minute stream (906\,ppm over
+17.5\,h); the projection is ratiometric against it, so this cancels if it is
+excitation drift, but not if it is drift of the A/B measurement path.  A
+constant-tilt test is needed to tell which.
 
 \subsection{What ``drop the B term'' and ``fix k'' mean}
 
-The firmware evaluates, per sensor and batch,
+\textbf{Status: the B term has been dropped in fw 0.10.62; this subsection
+records what was changed.  The ``fix $k$'' parts are still open.}  Up to fw
+0.10.61 the firmware evaluated, per sensor and batch,
 \begin{equation}
   \underline{x} = \frac{\underline{S}/k - \underline{B}}{\underline{A}-\underline{B}},
   \qquad \text{tilt} = 2\,d_0\bigl(\operatorname{Re}\underline{x}-\tfrac12\bigr) - \text{zero},
@@ -1635,8 +1723,9 @@ $k$ magnitude & set gain so that attenuator$\times$gain $=k_{\mathrm{phys}}$
 \end{tabular}
 \end{center}
 Order of priority: dropping the B term (large effect), then the phase constants (small
-effect), then the numerical value of $k$ (cosmetic).  \textbf{Status: proposals, not
-implemented.}
+effect), then the numerical value of $k$ (cosmetic).  \textbf{Status: B term dropped
+(fw 0.10.62, zero calibration to be redone); complex $k$ (approach~2 of Section~9)
+and the value of $k$ not implemented.}
 
 % ─────────────────────────────────────────────────────────────
 \section{Processing After the Ratio}
@@ -1692,11 +1781,14 @@ $10^{-5}$ of $0.5$).
 
 \subsection{From ratio to displacement}
 
-For each sensor the batch gives $\underline{x}$ (Section~12), and
+For each sensor the batch gives $\underline{x}'=\underline{S}/(k(\underline{A}-\underline{B}))$
+(Section~12; fw 0.10.62 and later), and
 \begin{equation}
-  \text{delta} = 2\,d_0\,\bigl(\operatorname{Re}\underline{x}-\tfrac12\bigr) - \text{zero},
-  \qquad \text{residual} = \operatorname{Im}\underline{x}.
+  \text{delta} = 2\,d_0\,\operatorname{Re}\underline{x}' - \text{zero},
+  \qquad \text{residual} = \operatorname{Im}\underline{x}' .
 \end{equation}
+(Earlier firmware subtracted $\underline{B}/(\underline{A}-\underline{B})-\tfrac12$ as well;
+see Section~12.8.)
 The result is in the project's convention of $\si{\milli\metre\per\metre}$.
 The calibration constants are stored per instrument in EEPROM:
 \begin{center}
@@ -1734,6 +1826,40 @@ holds the typical step size; a batch is flagged bad if its step exceeds
 $3\times$ the baseline.  The flag is per sensor and is used by the
 precision measurement; it does not alter the live value.
 
+\textbf{Caveat from the 24\,h raw-ADC analysis.}  The steps are not outliers
+but the sensor's \SI{20}{\hertz} pendulum resonance (next subsection): the
+flagged batches are those with a large pendulum amplitude.  Discarding them
+made a test estimate $3$ to $10\times$ \emph{worse}, because the pendulum is
+sampled at the batch Nyquist frequency and alternates sign from batch to
+batch; the plain average cancels it, and removing the large batches unbalances
+the cancellation.  The flag is therefore useful as a \emph{vibration
+indicator}, but dropping flagged batches from an average is not recommended.
+
+\subsection{Pendulum resonance and the smoothing filter}
+
+The sensor channels contain a strong, nearly coherent resonance at about
+\SI{20}{\hertz} (the pendulum; band 18 to \SI{21.5}{\hertz}, $Q\gtrsim4$; it
+is coherent between the two sensors, with $S_2$ about $3\times$ larger than
+$S_1$ in the nominal units, and larger by day).  This attribution is
+consistent with the data but not proven.  It explains most of the variance of
+the readings at 1 to \SI{30}{\second}.  The batch rate of \SI{40.7}{\hertz} has
+its Nyquist frequency at \SI{20.35}{\hertz}, right at the pendulum, and the
+64-cycle boxcar passes \SI{19.9}{\hertz} with only $\SI{-3.7}{\decibel}$, so
+the pendulum arrives nearly unattenuated, folded to about the Nyquist
+frequency.  Any interval-based sampling of the live value (for example
+a topic snapshot at $\le\SI{20}{\hertz}$) aliases it further to low
+frequencies; the contiguous phasor stream (Section~13.10) avoids this.
+
+The 8-batch boxcar of the next subsection cancels the Nyquist-folded part but
+has poor sidelobes elsewhere.  The raw-ADC analysis found that a smooth window
+over about \SI{0.37}{\second} (a triangular window, equal to two cascaded
+boxcars, over 15 batches, or a Hann window) reduces the pendulum leakage to
+about half the rms of the boxcar (about $0.13$ against $0.14$ to $0.28$ in
+the nominal units for the pendulum-dominated channels), and that all smooth
+windows perform alike; choosing an integer number of pendulum periods does
+not help because the resonance is broad.  \textbf{Status: not implemented}
+(a candidate change after the zero calibration is redone).
+
 \subsection{Moving average}
 
 The live value is a boxcar average of the last 8 batch results (a second
@@ -1756,8 +1882,62 @@ by reversing it in place:
 \end{equation}
 Each step averages 64 batches (about \SI{1.6}{\second}), the surface must be
 stable, and the result is stored per sensor in EEPROM.  This cancels any
-\emph{static} part of the $\underline{A}$/$\underline{B}$ imbalance term
-$\underline{z}$ (Section~12), but not its drift after the calibration.
+\emph{static} offsets, including (in firmware before 0.10.62) the static part of
+the $\underline{A}$/$\underline{B}$ imbalance term $\underline{z}$.  The
+stored zero offsets from before fw 0.10.62 contain about
+$\SI{3.6}{\milli\metre\per\metre}$ of that term and are \textbf{no longer valid};
+the zero calibration has to be repeated.  The first cycle after the start of
+the acquisition can be corrupt (stale conversion) and should not enter a
+calibration or a precision measurement (see Section~15).
+
+\subsection{Differential zero (side-by-side), independent of the flip}
+
+\textbf{Status: requirement and proposed routine; not implemented.}  The flip
+calibration above sets the \emph{absolute} level of each sensor: it answers
+``what reading means level''.  It is needed once per sensor and is
+independent of the sensitivity (the zero is stored in the nominal-sensitivity
+domain, so a gain change moves neither the stored zero nor the level point).
+It is a separate question whether two sensors standing side by side on the
+same surface agree.  Even directly after a flip they typically differ by a
+small amount (of the order of \SI{5}{\micro\metre}), because each flip has its
+own noise and each flip measures the plate at a slightly different place.
+For the differential $S_1-S_2$ this difference is a pure zero error and
+should be removable by a dedicated routine.
+
+\textbf{Routine.}  Place both instruments side by side on the same surface in
+the same orientation (the sign flips of Section~13.3 already make positive
+tilt the same direction for both).  Average the readings $r_1$ and $r_2$ over
+a defined time (at least one minute; the differential has an Allan deviation
+of about \SI{0.25}{\micro\metre} at 60\,s, so \SI{5}{\micro\metre} is well
+resolved) and form $e=\overline{r_1-r_2}$.  Each instrument absorbs half the
+error:
+\begin{equation}
+  \text{zero}_1 \leftarrow \text{zero}_1 + \tfrac{e}{2},\qquad
+  \text{zero}_2 \leftarrow \text{zero}_2 - \tfrac{e}{2},
+\end{equation}
+so that afterwards $r_1=r_2=\tfrac12(r_1+r_2)$ before the correction.  The
+mean $\tfrac12(r_1+r_2)$, i.e.\ the common level, is unchanged; only the
+difference is zeroed.
+
+\textbf{Independence.}  The two calibrations act on orthogonal combinations:
+the flip fixes each sensor's absolute level (the sum), the differential zero
+fixes only $r_1-r_2$ and leaves the sum untouched.  Neither needs a new
+constant: the differential zero is written into the existing per-sensor zero
+offsets, in the nominal-sensitivity domain like the flip result, so it is
+equally independent of the gain.  It must be applied \emph{after} a flip
+(a new flip overwrites the zero of that sensor and with it the difference),
+and repeated whenever either flip is repeated.  The routine should refuse to
+run if the readings are unstable (for example a large pendulum amplitude, a
+quality flag set in many batches, or a large drift of $r_1-r_2$ during the
+averaging), and use the same first-cycle discard and smoothing as the other
+averaged measurements.
+
+\textbf{Limits.}  The differential zero says that two instruments agree on
+\emph{this} surface; it does not make the absolute level any more correct
+than the flips did, and it does not remove real differences between the
+sensors (their own drift, the 3:1 pendulum amplitude ratio).  If the two
+sensors differ in sensitivity, the difference grows with tilt, which a zero
+cannot remove: that is a gain matter, calibrated separately.
 
 \subsection{Precision measurement}
 
@@ -1772,8 +1952,13 @@ batch.
 \subsection{Outputs}
 
 The results are available over the API (measurements, the raw phasors of
-the latest batch as a topic, a bulk capture of raw ADC samples and of
-phasor logs, and diagnostic counters), on the LIVE and diagnostic
+the latest batch as a topic, a bulk capture of raw ADC samples, the phasor log
+(now stores every batch), and diagnostic counters), plus, since fw 0.10.65, a
+\emph{continuous phasor stream} (Topic 0x05, resource 0x05) that pushes the
+phasors of \emph{every} 64-cycle batch with a sequence number, so a host can
+record a gapless \SI{40.7}{\hertz} series and detect dropped batches.
+\texttt{Testing/2026-10-04\_contiguous\_phasor\_capture/phasor\_stream.py} logs
+it to CSV.  The values are shown on the LIVE and diagnostic
 screens, and as the streaming and polling data used in the tests of this
 project.  The diagnostic amplitudes (RMS, phase, and the ``theoretical
 tilt'' from the nominal \SI{20}{\micro\volt}/(\si{\micro\metre\per\metre}))
@@ -2285,9 +2470,11 @@ resistor rework options are analysed in Section~14.8 but not applied.
 \subsection{Implemented and verified}
 
 Excitation, filters and input networks as described; simultaneous 24-bit
-sampling locked to the excitation; single-bin demodulation over 64 periods;
-the complex ratio with per-batch quality flag, moving average, zero
-calibration and precision measurement.
+sampling locked to the excitation; single-bin demodulation over 64 periods
+(per-position integer accumulation, fw 0.10.64); the projection estimator
+$\operatorname{Re}[\underline{S}/(k(\underline{A}-\underline{B}))]$ (fw 0.10.62)
+with per-batch quality flag, moving average, zero calibration and precision
+measurement; continuous phasor stream (fw 0.10.65).
 
 \subsection{Findings that need action}
 
@@ -2305,24 +2492,44 @@ $k$ (Sec.\,12.5) &
 Firmware $k=480$ (attenuator $3\times$ gain 160); network-derived
 $k\approx68$ (magnitude), and complex.  Affects the weight of the imbalance
 term. \\
-Imbalance term (Sec.\,12.3--12.7) &
-The A/B balance $\operatorname{Re}\underline{z}$ explains most of the
-common-mode drift of $S_1$ and $S_2$ (and their local noise); $\underline{S}$
-does not carry the imbalance.  Proposal: $\lambda=0$, i.e.\ drop the
-$-\underline{B}$ term, then a complex $k$; verify $\lambda$ with a
-deliberate imbalance.  Zero calibration must be repeated afterwards. \\
+Zero calibration (Sec.\,13.7) &
+\textbf{To redo.}  $\lambda=0$ (drop the $-\underline{B}$ term) has been in
+the firmware since 0.10.62; the stored zero offsets still contain about
+$\SI{3.6}{\milli\metre\per\metre}$ of the old balance term.  Verify
+$\lambda$ with a deliberate imbalance (Sec.\,12.7, step~3). \\
+Differential zero (Sec.\,13.8) &
+Requirement: a routine that zeroes $S_1-S_2$ side by side (each sensor takes
+half the error, e.g.\ the observed $\approx\SI{5}{\micro\metre}$), independent
+of the flip calibration and of the gain.  Not implemented. \\
 Phase calibration (Sec.\,9) &
-Planned: run-time reference $\underline{D}=\underline{A}-\underline{B}$ at
-$90^\circ$ ($A\approx90.5^\circ$, $B\approx269.5^\circ$, $B$--$A$ difference
-kept), $S_1$/$S_2$ near $90^\circ$ or $270^\circ$; only two EEPROM constants
-$\delta_1$, $\delta_2$ (phase of $k$; first estimates $-10.5^\circ$ and
-$-14.3^\circ$).  The absolute phase across restarts is not guaranteed by
-design (Sec.\,10.5). \\
+Decided (approach~2), \textbf{not implemented}: run-time reference
+$\underline{D}=\underline{A}-\underline{B}$ at $90^\circ$ ($A\approx90.5^\circ$,
+$B\approx269.5^\circ$, confirmed in three runs), $S_1$/$S_2$ near $90^\circ$
+or $270^\circ$; only two EEPROM constants $\delta_1$, $\delta_2$ (phase of
+$k$; estimates about $-10^\circ$ and $-10.6$ to $-14.3^\circ$, to be determined
+properly from a tilt change).  The absolute phase is \emph{not} reproducible
+(122.85, 122.67, $334.39^\circ$; Sec.\,10.5), which is why a fixed absolute
+constant was rejected. \\
 Sensor phase and impedance (Sec.\,9) &
 After the networks, the sensors add about $+11^\circ$ ($S_1$) and
-$+7^\circ$ ($S_2$) of delay; their output impedance is unspecified. \\
+$+7^\circ$ ($S_2$) of delay (old electronics in the sensor; the output is a
+low-impedance op-amp output, not measured). \\
 $B$ relative to $A$ (Sec.\,9) &
-$178.9^\circ$ instead of $180^\circ$, unexplained. \\
+$179.0^\circ$ instead of $180^\circ$, unexplained but stable in three runs
+($178.94$, $178.96$, $179.00^\circ$). \\
+Pendulum resonance (Sec.\,13.5) &
+About $\SI{20}{\hertz}$, at the batch Nyquist frequency; dominates the
+sensor noise.  A triangular/Hann smoother over about $\SI{0.37}{\second}$ is
+recommended and not implemented; do not drop flagged batches. \\
+First cycle after start (Sec.\,13.7) &
+The first cycle after \texttt{start()} can be corrupt on all four channels
+(seen in bulk captures); firmware does not yet discard it. \\
+Harmonics on $S_1$/$S_2$ (Sec.\,11.4) &
+2nd and 3rd harmonics of $-21$/$-15$\,dBc ($S_2$) are rejected exactly, the
+7th/9th fold onto the carrier and are unchecked. \\
+$|\underline{D}|$ drift (Sec.\,12.7) &
+About 160\,ppm in 74\,min (906\,ppm in 17.5\,h): excitation or path drift?
+A constant-tilt test is needed. \\
 Sensitivity (Sec.\,13.3) &
 Measured $7.5$ and $8.8$ (firmware units) against $20$ nominal; absolute
 meaning open because of the scale factor above. \\
@@ -2356,6 +2563,13 @@ sensors (a real input).  The clean window for the drift analysis is about
         thermal gradients between the A and B paths from other causes.
   \item The same event-based correction on the 1\,h run at PGA~1 as an
         independent check.
+  \item A constant-tilt, constant-temperature run with the phasor stream
+        (fw 0.10.65) to see whether $|\underline{D}|$ and the sensor phasors
+        drift together (excitation) or apart (path).
+  \item A tilt reversal (or a known tilt step) with the stream to measure
+        $\delta_1$, $\delta_2$ from the change of $\underline{S}$.
+  \item Post-processing of the full 24\,h phasor stream when it is available:
+        smoothing windows, Allan deviation, and the 7th/9th-harmonic question.
 \end{itemize}
 
 \end{document}
