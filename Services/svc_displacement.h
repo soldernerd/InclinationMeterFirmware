@@ -195,6 +195,20 @@ float svc_displacement_get_delta2_mm_raw(void);
 float svc_displacement_get_delta_diff_mm(void);
 float svc_displacement_get_delta_diff_mm_raw(void);
 
+/* Display stream (2026-10-05): the same delta readings condensed to about
+ * 4 Hz by a triangular window over 2*N-1 batches and decimation by N
+ * (config.h's DISPLACEMENT_DISPLAY_DECIMATION comment). Meant for the local
+ * display, not the API. display_seq() increments with every new value (and
+ * wraps), so a consumer can redraw exactly when there is something new;
+ * display_valid() is false from a (re)start until the first value is
+ * ready (about 0.5 s), then true. Per-instrument sign flip applied as for
+ * the getters above. */
+float    svc_displacement_get_display_delta1_mm(void);
+float    svc_displacement_get_display_delta2_mm(void);
+float    svc_displacement_get_display_delta_diff_mm(void);
+uint16_t svc_displacement_get_display_seq(void);
+bool     svc_displacement_get_display_valid(void);
+
 /* Latest completed batch's raw phasors -- same validity contract as the
  * getters above (all-zero before the first batch / while !get_ok()).
  * Feeds the API v2 Topic groups (0x5) real-time diagnostic resource

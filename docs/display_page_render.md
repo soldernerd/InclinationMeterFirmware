@@ -90,8 +90,8 @@ Build-verified only (clean, `-Wall -Wextra -Werror`); **not yet bench-tested**.
   full redraw, `DISPLAY_URGENT_PAGES_PER_TICK` bands per tick, and it abandons a frame
   still being rendered (stale snapshot). *Periodic* (`snapshot_changed()`): only the bands
   whose content changed (`bands_to_render()`; LIVE: top bar, the three value lines, the
-  status line), `DISPLAY_PAGES_PER_TICK` per tick. LIVE refreshes every 250 ms,
-  DIAGNOSTICS every 2 s, STATUS once a second (full redraw).
+  status line), `DISPLAY_PAGES_PER_TICK` per tick. Redraws are data-driven: discrete changes (screen, battery, USB, edit value...) and user input immediately; LIVE redraws on each new reading of the ~4 Hz display stream (svc_displacement: triangular window over 19 batches, decimated by 10, nulls the 20.35 Hz pendulum alias); DIAGNOSTICS compares its text every 250 ms (DISPLAY_CONTENT_CHECK_MS); unchanged text renders and sends nothing; STATUS redraws once a second for the clock; DISPLAY_INSURANCE_MS (1 s) forces a full redraw as a safety net only (a redraw of unchanged content sends no SPI data);
+  user input is drawn immediately regardless.
 * Bands are rendered individually (`u8g2_SetBufferCurrTileRow` + `u8g2_NextPage`) so
   unchanged bands cost nothing.
 * `drv_sharp_lcd_write_row()` compares each row with the framebuffer and marks it dirty;

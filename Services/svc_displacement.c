@@ -198,6 +198,20 @@ static uint8_t s_ma_count = 0;   /* ramps 0..DISPLACEMENT_MA_SAMPLES during
                                     * a start aren't biased toward zero by
                                     * an empty window */
 
+/* --- Display stream (2026-10-05, config.h's DISPLACEMENT_DISPLAY_DECIMATION
+ * comment): ring of the last DISPLACEMENT_DISPLAY_TAPS raw batch deltas per
+ * sensor; every DISPLACEMENT_DISPLAY_DECIMATION-th batch, once the ring is
+ * full, a triangular-weighted average of it becomes the displayed value. */
+static float    s_disp_ring1[DISPLACEMENT_DISPLAY_TAPS];
+static float    s_disp_ring2[DISPLACEMENT_DISPLAY_TAPS];
+static uint8_t  s_disp_ring_idx   = 0;
+static uint8_t  s_disp_ring_count = 0;
+static uint8_t  s_disp_phase      = 0;       /* batches since the last output */
+static float    s_disp_out1       = 0.0f;
+static float    s_disp_out2       = 0.0f;
+static bool     s_disp_valid      = false;
+static uint16_t s_disp_seq        = 0;
+
 /* Latest completed batch's raw phasors -- same storage/context reasoning
  * as the block above, added 2026-09-25 for the API v2 Topic groups (0x5)
  * real-time diagnostic resource. Written alongside s_delta1_mm etc. in
@@ -344,6 +358,53 @@ static void ma_reset(void)
     }
     s_ma1_sum = s_ma2_sum = 0.0f;
     s_ma_idx = s_ma_count = 0;
+}
+
+static void display_reset(void)
+{
+    s_disp_ring_idx = s_disp_ring_count = s_disp_phase = 0;
+    s_disp_out1 = s_disp_out2 = 0.0f;
+    s_disp_valid = false;
+    /* s_disp_seq deliberately keeps counting: a consumer sees the change. */
+    s_disp_seq++;
+}
+
+/* Feeds one batch's raw delta_mm pair into the display stream. Once per
+ * DISPLACEMENT_DISPLAY_DECIMATION batches (and only with a full window) it
+ * publishes a triangular-weighted average: weight of the i-th oldest sample
+ * is min(i+1, TAPS-i), weights sum to N*N. */
+static void display_feed(float delta1, float delta2)
+{
+    s_disp_ring1[s_disp_ring_idx] = delta1;
+    s_disp_ring2[s_disp_ring_idx] = delta2;
+    s_disp_ring_idx = (uint8_t)((s_disp_ring_idx + 1U) % DISPLACEMENT_DISPLAY_TAPS);
+    if (s_disp_ring_count < DISPLACEMENT_DISPLAY_TAPS) {
+        s_disp_ring_count++;
+    }
+    if (++s_disp_phase < DISPLACEMENT_DISPLAY_DECIMATION) {
+        return;
+    }
+    s_disp_phase = 0;
+    if (s_disp_ring_count < DISPLACEMENT_DISPLAY_TAPS) {
+        return;   /* window not yet full */
+    }
+
+    float acc1 = 0.0f;
+    float acc2 = 0.0f;
+    uint8_t pos = s_disp_ring_idx;   /* oldest sample */
+    for (uint8_t i = 0; i < DISPLACEMENT_DISPLAY_TAPS; ++i) {
+        uint8_t up = (uint8_t)(i + 1U);
+        uint8_t dn = (uint8_t)(DISPLACEMENT_DISPLAY_TAPS - i);
+        float   w  = (float)(up < dn ? up : dn);
+        acc1 += w * s_disp_ring1[pos];
+        acc2 += w * s_disp_ring2[pos];
+        pos = (uint8_t)((pos + 1U) % DISPLACEMENT_DISPLAY_TAPS);
+    }
+    const float norm = 1.0f / (float)(DISPLACEMENT_DISPLAY_DECIMATION * DISPLACEMENT_DISPLAY_DECIMATION);
+    s_disp_out1  = acc1 * norm;
+    s_disp_out2  = acc2 * norm;
+    s_disp_valid = true;
+    s_disp_seq++;
 }
 
 static void quality_reset(void)
@@ -849,6 +910,7 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     s_delta1_mm_raw = delta1;
     s_delta2_mm_raw = delta2;
     ma_apply(delta1, delta2, &s_delta1_mm, &s_delta2_mm);
+    display_feed(delta1, delta2);
     s_residual1 = residual1;
     s_residual2 = residual2;
     s_disp_ok   = true;
@@ -875,6 +937,7 @@ DrvStatus svc_displacement_init(void)
     s_amplitude_fault_logged = false;
     s_disp_ok           = false;
     ma_reset();
+    display_reset();
     quality_reset();
 
     /* drv_ads131m04_init() resets its callback pointer to NULL as its
@@ -911,6 +974,7 @@ DrvStatus svc_displacement_start(void)
     s_gap_over_threshold_count = 0;
     s_disp_ok = false;
     ma_reset();
+    display_reset();
     quality_reset();
     /* A fresh start invalidates any in-progress zero-cal run -- its
      * averaging assumed a continuous demod session, not one straddling a
@@ -940,6 +1004,15 @@ float svc_displacement_get_residual1(void) { return s_residual1; }
 float svc_displacement_get_delta2_mm(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_delta2_mm; }
 float svc_displacement_get_residual2(void) { return s_residual2; }
 bool  svc_displacement_get_ok(void)        { return s_disp_ok; }
+
+float svc_displacement_get_display_delta1_mm(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_disp_out1; }
+float svc_displacement_get_display_delta2_mm(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_disp_out2; }
+float svc_displacement_get_display_delta_diff_mm(void)
+{
+    return svc_displacement_get_display_delta1_mm() - svc_displacement_get_display_delta2_mm();
+}
+uint16_t svc_displacement_get_display_seq(void)   { return s_disp_seq; }
+bool     svc_displacement_get_display_valid(void) { return s_disp_ok && s_disp_valid; }
 
 float svc_displacement_get_delta1_mm_raw(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_delta1_mm_raw; }
 float svc_displacement_get_delta2_mm_raw(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_delta2_mm_raw; }

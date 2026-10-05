@@ -102,16 +102,28 @@
  * the LIVE screen's large logisoso24 S1/S2 glyphs), not this interval;
  * see the RE-INVESTIGATED paragraph above for why a shorter interval
  * would only make things worse until that's found. */
-/* 2026-10-05: redraws are now event-driven and partial (see
- * app_display_update()): a periodic frame renders only the bands whose
- * content changed (LIVE: the three value lines) and sends only the changed
- * rows over SPI2 at 2 MHz, so the LIVE readout is refreshed at 250 ms as
- * the user wants. The per-redraw cost measured in the investigation above
- * should be re-checked on the bench against input_drop_count (Raw data
- * 0x7 resource 0x02) with this cadence. The DIAGNOSTICS screen is a full
- * redraw and stays at the old 2 s. */
-#define LIVE_REFRESH_MS               250U
-#define DIAG_REFRESH_MS               2000U
+/* 2026-10-05: redraws are data-driven, not scheduler-driven (see
+ * app_display_update()). A frame starts when something that is displayed
+ * has changed:
+ *  - a user input (urgent, drawn immediately);
+ *  - a discrete value in DisplaySnapshot (screen, battery, USB, charging,
+ *    temperature, settings cursor/edit value, ...), also immediately;
+ *  - LIVE: a new reading from svc_displacement's ~4 Hz display stream
+ *    (the 40 Hz batch results are condensed there by a triangular window
+ *    and decimation, not here); readings that round to the same digits
+ *    render and send nothing;
+ *  - DIAGNOSTICS, whose values have no such stream: the text to be drawn
+ *    differs from what is on the panel, checked every
+ *    DISPLAY_CONTENT_CHECK_MS;
+ *  - STATUS (clock) once a second.
+ * DISPLAY_INSURANCE_MS is only a safety net: if no full redraw has happened
+ * for that long (SETTINGS, which has no snapshot field for its zero-cal
+ * progress row, relies on it too), force one. A redraw sends only the pixel
+ * rows that changed, so an insurance frame of unchanged content costs CPU
+ * but no SPI traffic. Re-check input_drop_count (Raw data 0x7 resource
+ * 0x02) on the bench against the per-redraw cost measured above. */
+#define DISPLAY_CONTENT_CHECK_MS      250U
+#define DISPLAY_INSURANCE_MS          1000U
 
 /* Display render path: CMakeLists.txt pins this file to -O2 in every
  * config. At -O0 a full banded render is tens of ms and the per-tick
@@ -159,12 +171,13 @@ typedef struct {
                               * the only thing that changes purely from
                               * time passing, with nothing else in this
                               * struct tracking it otherwise. */
-    uint32_t displacement_tick;   /* only checked while UI_SCREEN_LIVE is
-                                     * shown — same "redraw on a clock
-                                     * tick, not on the underlying value"
-                                     * shape as uptime_s, at
-                                     * LIVE_REFRESH_MS (DIAG_REFRESH_MS on the
-                                     * DIAGNOSTICS screen) instead of 1000 ms. */
+    uint16_t display_seq;         /* svc_displacement display-stream sequence (LIVE): a new
+                                     * ~4 Hz reading is the redraw trigger */
+    uint32_t displacement_tick;   /* periodic refresh tick, checked on
+                                     * every screen: "redraw on a clock
+                                     * tick, not on the underlying value",
+                                     * every DISPLAY_CONTENT_CHECK_MS (LIVE,
+                                     * DIAGNOSTICS). */
     char disp1_line[24];   /* pre-formatted once per redraw in
                               * snapshot_capture() -- see that function's
                               * comment for why this can't just be
@@ -216,6 +229,7 @@ static uint32_t     s_render_ms = 0;
 #define ALL_BANDS_MASK      ((uint16_t)((1UL << DISPLAY_BANDS) - 1UL))
 static uint16_t s_band_mask    = 0;
 static bool     s_frame_urgent = false;
+static uint32_t s_last_full_ms = 0;   /* start of the last all-bands frame (insurance) */
 
 /* Triggered precision measurement (2026-09-27) -- see app_ui.c's LIVE-screen
  * right-knob-press handler. svc_displacement's own DISP_PRECISION_DONE phase
@@ -671,9 +685,10 @@ static bool snapshot_changed(void)
         || (g_ui_state.current_screen == UI_SCREEN_STATUS
             && s_last.uptime_s != hal_systick_get_ms() / 1000U)
         || (g_ui_state.current_screen == UI_SCREEN_LIVE
-            && s_last.displacement_tick != hal_systick_get_ms() / LIVE_REFRESH_MS)
+            && s_last.display_seq != svc_displacement_get_display_seq())
         || (g_ui_state.current_screen == UI_SCREEN_DIAGNOSTICS
-            && s_last.displacement_tick != hal_systick_get_ms() / DIAG_REFRESH_MS);
+            && s_last.displacement_tick != hal_systick_get_ms() / DISPLAY_CONTENT_CHECK_MS)
+        || (uint32_t)(hal_systick_get_ms() - s_last_full_ms) >= DISPLAY_INSURANCE_MS;
 }
 
 /* Bands covering pixel rows y0..y1 (inclusive). */
@@ -696,6 +711,21 @@ static uint16_t bands_for_rows(uint16_t y0, uint16_t y1)
  * really changed); under-covering would leave stale pixels. */
 static uint16_t bands_to_render(const DisplaySnapshot *prev, const DisplaySnapshot *cur, bool urgent)
 {
+    if (cur->screen == UI_SCREEN_DIAGNOSTICS && !urgent && prev->screen == cur->screen
+        && cur->battery_low == prev->battery_low
+        && cur->battery_critical == prev->battery_critical) {
+        /* Content check: redraw everything only if a displayed string changed. */
+        bool same = strcmp(cur->diag_theory_line, prev->diag_theory_line) == 0;
+        for (uint8_t ch = 0; ch < 4U && same; ++ch) {
+            same = strcmp(cur->diag_line[ch], prev->diag_line[ch]) == 0;
+        }
+        if (same && cur->battery_soc_pct == prev->battery_soc_pct
+            && cur->battery_charging == prev->battery_charging
+            && cur->usb_connected == prev->usb_connected) {
+            return 0;
+        }
+        return ALL_BANDS_MASK;
+    }
     if (urgent || prev->screen != cur->screen || cur->screen != UI_SCREEN_LIVE
         || cur->battery_low != prev->battery_low
         || cur->battery_critical != prev->battery_critical) {
@@ -733,10 +763,10 @@ static void snapshot_capture(void)
     s_last.settings_editing = g_ui_state.settings_editing;
     s_last.edit_value       = g_ui_state.edit_value;
     s_last.uptime_s         = s_render_ms / 1000U;
-    s_last.displacement_tick = s_render_ms /
-        (g_ui_state.current_screen == UI_SCREEN_DIAGNOSTICS ? DIAG_REFRESH_MS : LIVE_REFRESH_MS);
+    s_last.displacement_tick = s_render_ms / DISPLAY_CONTENT_CHECK_MS;
+    s_last.display_seq       = svc_displacement_get_display_seq();
 
-    /* INVESTIGATED 2026-09-25 (see this file's LIVE_REFRESH_MS
+    /* INVESTIGATED 2026-09-25 (see this file's DISPLAY_CONTENT_CHECK_MS
      * comment for the full bisection): this float->string formatting used
      * to live inline in draw_live_screen(), which u8g2's page-mode
      * renderer calls once per band (~15x per redraw, clipping non-visible
@@ -751,11 +781,13 @@ static void snapshot_capture(void)
      * costs something -- the real fix for the underlying margin is
      * DISPLACEMENT_BATCH_CYCLES/_RING_DEPTH in config.h, not this file.
      * See docs/wp10_displacement.md for the full writeup. */
-    if (svc_displacement_get_ok()) {
+    if (svc_displacement_get_display_valid()) {
+        /* The ~4 Hz display stream (svc_displacement.h), not the 40 Hz batch
+         * values. */
         char d1[16], d2[16], ddiff[16];
-        format_displacement_mm_4dp(d1, sizeof d1, svc_displacement_get_delta1_mm());
-        format_displacement_mm_4dp(d2, sizeof d2, svc_displacement_get_delta2_mm());
-        format_displacement_mm_4dp(ddiff, sizeof ddiff, svc_displacement_get_delta_diff_mm());
+        format_displacement_mm_4dp(d1, sizeof d1, svc_displacement_get_display_delta1_mm());
+        format_displacement_mm_4dp(d2, sizeof d2, svc_displacement_get_display_delta2_mm());
+        format_displacement_mm_4dp(ddiff, sizeof ddiff, svc_displacement_get_display_delta_diff_mm());
         snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "S1 %smm", d1);
         snprintf(s_last.disp2_line, sizeof s_last.disp2_line, "S2 %smm", d2);
         snprintf(s_last.disp_diff_line, sizeof s_last.disp_diff_line, "Diff %smm", ddiff);
@@ -933,11 +965,15 @@ void app_display_update(void)
          * snapshot now so the multi-tick band render stays coherent. */
         static DisplaySnapshot s_prev;
         s_frame_urgent = g_ui_state.redraw_needed || !s_have_last;
+        bool insurance = (uint32_t)(hal_systick_get_ms() - s_last_full_ms) >= DISPLAY_INSURANCE_MS;
         s_prev = s_last;
         g_ui_state.redraw_needed = false;
         s_render_ms = hal_systick_get_ms();
         snapshot_capture();
-        s_band_mask = bands_to_render(&s_prev, &s_last, s_frame_urgent);
+        s_band_mask = bands_to_render(&s_prev, &s_last, s_frame_urgent || insurance);
+        if (s_band_mask == ALL_BANDS_MASK) {
+            s_last_full_ms = s_render_ms;
+        }
         s_phase = DISP_RENDER;
     }
 

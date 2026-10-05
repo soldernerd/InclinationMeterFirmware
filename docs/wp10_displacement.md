@@ -1114,3 +1114,15 @@ disconnect = stop. A lost batch shows as a cycle-`seq` jump (multiple of 64), a 
 an `issue_seq` jump. Frame = `[status][issue_seq][page=0]` + the 34-byte log entry, ~1.75 kB/s.
 Bench (UART, 1 min): 2443 batches, 40.71/s, zero gaps/losses. Host logger:
 `Testing/2026-10-04_contiguous_phasor_capture/phasor_stream.py`.
+
+## Display stream, ~4 Hz (2026-10-05)
+
+The LIVE screen no longer shows the 40.7 Hz batch values. `svc_displacement` condenses the raw
+per-batch deltas into a display stream: triangular window over `2N-1` = 19 batches (two cascaded
+10-batch boxcars) and decimation by `N` = 10, i.e. 4.07 Hz with a ~0.47 s window
+(`DISPLACEMENT_DISPLAY_DECIMATION` in `config.h`). The filter has exact nulls at multiples of
+4.07 Hz, including 20.35 Hz, the batch Nyquist frequency where the ~20 Hz pendulum lands, so the
+resonance is suppressed rather than aliased (findings of `Testing/2026-09-30_bulk_adc_30s_interval`).
+API: `svc_displacement_get_display_delta1/2/diff_mm()`, `_display_seq()` (the redraw trigger),
+`_display_valid()` (false until the first window is full, ~0.5 s after a start). The API
+Measurements resources and the 8-batch boxcar are unchanged. Build-verified only.

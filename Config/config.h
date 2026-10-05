@@ -552,6 +552,19 @@
  * batch rate -- not a new tuning target on its own. */
 #define DISPLACEMENT_MA_SAMPLES            8U
 
+/* Display stream (2026-10-05): the LIVE screen does not show the ~40.7 Hz
+ * batch stream (nor its 8-batch boxcar, which still updates at 40.7 Hz for
+ * the API) but a condensed ~4 Hz reading. Two cascaded boxcars of
+ * DISPLACEMENT_DISPLAY_DECIMATION batches (= a triangular window of
+ * 2*N-1 batches) followed by decimation by N: with N = 10 the output rate
+ * is 40.7/10 = 4.07 Hz, the window is ~0.47 s, and the filter has exact
+ * nulls at multiples of 4.07 Hz -- including 20.35 Hz (the batch Nyquist
+ * frequency, where the ~20 Hz pendulum resonance of the sensors lands), so
+ * that resonance is suppressed instead of aliasing into the readout
+ * (Testing/2026-09-30_bulk_adc_30s_interval/findings.md). */
+#define DISPLACEMENT_DISPLAY_DECIMATION    10U
+#define DISPLACEMENT_DISPLAY_TAPS          (2U * DISPLACEMENT_DISPLAY_DECIMATION - 1U)
+
 /* Nominal calibration seeds (DeviceSettings' displacement page, EEPROM-
  * backed past first boot — see system_state.h's comment on those
  * fields). Scaled integers, not raw floats, to fit svc_api.c's
