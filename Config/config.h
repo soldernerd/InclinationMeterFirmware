@@ -152,7 +152,7 @@
                                                          rest of the REV A sensor
                                                          stack; first REV B use of
                                                          this freed page. */
-#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0009  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x000C  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
                                                          S2_D0_UM bumped 1000x (sensitivity
                                                          fix, see that comment) -- learned
                                                          from the battery-scale bug earlier
@@ -236,7 +236,19 @@
                                                          gains, sensitivities, zero offsets and the
                                                          invert flags must be set again (the zero
                                                          and sensitivity calibrations were due for a
-                                                         redo anyway). */
+                                                         redo anyway).
+                                                         0x000A (2026-10-06): disp_atten_milli REMOVED
+                                                         (layout change) and the gain defaults x3
+                                                         (160000 -> 480000): |k| is now one empirical
+                                                         number per sensor. Page reseeded again.
+                                                         0x000B (2026-10-06): |k| now stored for PGA = 1
+                                                         (default 480000 -> 30000; the firmware multiplies
+                                                         by the PGA). Same layout, new meaning, so the
+                                                         page is reseeded rather than misread 16x.
+                                                         0x000C (2026-10-06): REDESIGN -- d0_theoretical and
+                                                         sensitivity removed; per sensor one k (x1e-6, PGA 1,
+                                                         default 21300) and one zero (ppm of the ratio, k-
+                                                         independent). Layout and meaning change. */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -625,77 +637,20 @@
  * real analog gain (still ~0.13 per the bulk-capture signal-quality
  * pass referenced above) -- it's compensating for a hardware change,
  * same shape as D0_UM's bumps above but for a different reason. */
-#define DEFAULT_DISP_ATTEN_MILLI            3000    /* atten = 3.000 */
-#define DEFAULT_DISP_S1_GAIN_MILLI        160000    /* gain  = 160.000 (10.000 x 16, see comment above) */
-
-/* --- Displacement sensitivity: theoretical baseline (2026-09-27,
- * re-expressed in physical units 2026-09-29) ---
- * D0_UM RETIRED, replaced by a theoretical baseline + this sensor's real
- * measured sensitivity: effective d0_mm = d0_theoretical_um/1000 *
- * (DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M / (sensitivity_uv_per_um_milli/1000))
- * (Services/svc_displacement.c's load_sensor_cal()). User's own framing,
- * both halves of it: "the Wyler handbook gives us the precise (if
- * theoretical) answer: 20uV RMS means 1um/m. Implement this as a baseline,
- * any digital calibration should just be a multiplier to this theoretical
- * baseline" (2026-09-27) -- then, once a bare multiplier turned out to
- * obscure what was actually being corrected: "the gain needs to be in
- * uV/0.001mm/m" (2026-09-29). sensitivity_uv_per_um_milli IS that -- this
- * sensor's own real electrical sensitivity, calibrated directly against a
- * known applied tilt, comparable at a glance against the 20uV nominal spec
- * with no mental unit conversion.
- *
- * DERIVATION: for a given batch, delta_mm = 2*d0*(x_re-0.5) is meant to
- * read directly in mm/m (this project's own established convention -- the
- * ±1mm/m PGA-sizing target, the precision-measurement target, etc. all
- * treat it that way). Wyler's spec (20uV RMS per sensor's own output, per
- * um/m of tilt) gives an INDEPENDENT estimate of the same batch's tilt,
- * computed directly from S's own measured RMS amplitude at the ADC pin
- * (Services/svc_displacement.c's svc_displacement_get_signal_diag(),
- * App/app_display.c's DIAGNOSTICS screen) with NO dependency on k/atten/
- * gain/(A-B) at all:
- *   tilt_theoretical_mm_per_m = S_rms_uV / 20 / 1000 = S_rms_mV / 20
- * Solving for the d0 that would make THIS SAME batch's x_re reproduce that
- * tilt exactly:
- *   d0_theoretical_mm = tilt_theoretical_mm_per_m / (2*(x_re - 0.5))
- * This is EXACTLY how the previous d0=700mm was derived too (empirically,
- * from one known physical displacement) -- same method, but the reference
- * is Wyler's handbook figure instead of a paper-shim test.
- *
- * COMPUTED 2026-09-27 from the one real dataset available (the 2026-09-25
- * gain-sizing bulk capture, Testing/2026-09-25_gain_sizing_bulk_capture/
- * data/gain16_check_pga16.csv -- PGA=16, matching current hardware): S1
- * d0_theoretical ~= 439 mm, S2 ~= 495 mm. This is an UNCONTROLLED BENCH
- * TILT, not a certified reference -- refine with a real known tilt on the
- * granite plate before trusting these numbers past "same ballpark as the
- * old empirical value" (they are: 439/495 vs the old 700mm is a ~1.4-1.6x
- * gap, not an order of magnitude, which is itself a reassuring cross-check
- * between two completely independent calibration methods).
- *
- * SENSITIVITY_UV_PER_UM_MILLI defaults to the bare nominal spec, 20000
- * (20.000 uV per 0.001mm/m) -- pure theory, zero correction, until a real
- * granite-plate/known-tilt calibration says otherwise. This is a clean
- * break from the field's history (old CAL_MULT_MILLI defaulted to whatever
- * reproduced the empirical d0=700mm exactly, carrying that legacy forward
- * indefinitely) -- per the user's explicit instruction this session ("I do
- * not at all care about any previous calibrations... the baseline has to
- * be the theoretical 20uV per 0.001mm/m"), the default is now the
- * theoretical anchor itself, not a historical empirical value. Real
- * per-instrument values (measured 2026-09-29 against known +0.5mm/m /
- * +0.667mm/m tilts): S1 ~= 7.49 uV/um/m, S2 ~= 8.76 uV/um/m -- both well
- * below the 20uV nominal spec, i.e. both sensors are real-world LESS
- * sensitive than the Wyler handbook claims, not a trim-quality artifact
- * (docs/wp10_displacement.md has the full session writeup). d0_theoretical
- * stays fixed as the traceable, handbook-derived anchor; sensitivity is
- * the single number that says how far this specific sensor's real
- * electronics differ from that anchor, in the same units as the anchor
- * itself. */
-#define DEFAULT_DISP_S1_D0_THEORETICAL_UM  439000    /* d0_theoretical = 439.000 mm */
-#define DEFAULT_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI  20000    /* 20.000 uV/um/m -- nominal Wyler spec, uncalibrated */
-#define DEFAULT_DISP_S1_ZERO_OFFSET_UM         0
-#define DEFAULT_DISP_S2_GAIN_MILLI        160000
-#define DEFAULT_DISP_S2_D0_THEORETICAL_UM  495000    /* d0_theoretical = 495.000 mm */
-#define DEFAULT_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI  20000    /* 20.000 uV/um/m -- nominal Wyler spec, uncalibrated */
-#define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
+/* Tilt calibration seeds (2026-10-06 redesign, system_state.h has the
+ * model): tilt [mm/m] = (r - zero) / k, r = Re[S/(PGA*D)*e^{-j delta}].
+ * k is stored x1e-6 and stated for PGA = 1. Default 0.0213 per (mm/m) =
+ * the nominal value: Wyler 20 uV RMS per um/m at 2 V RMS excitation
+ * (S/A = 1e-5 per um/m, S/D = 0.5e-5), times the ratio of the S-path to the
+ * A/B-path gain in the ADC domain (0.903 / 0.212 = 4.26 at PGA 1, REV B
+ * networks): 4.26 * 0.5e-5 * 1000 = 0.0213 (docs/signal_processing.tex
+ * Sec. 13.3). A real instrument differs (the 2026-09-29 calibrations
+ * correspond to about 0.013 at PGA 1) -- calibrate k against a known tilt.
+ * zero starts at 0 ppm (no flip calibration yet). */
+#define DEFAULT_DISP_S1_K_MICRO            21300
+#define DEFAULT_DISP_S1_ZERO_PPM               0
+#define DEFAULT_DISP_S2_K_MICRO            21300
+#define DEFAULT_DISP_S2_ZERO_PPM               0
 #define DEFAULT_DISP_S1_INVERT                 0    /* 0=normal, 1=inverted -- see system_state.h */
 #define DEFAULT_DISP_S2_INVERT                 0
 /* Phase calibration defaults, centidegrees (docs/signal_processing.tex
@@ -706,20 +661,11 @@
 #define DEFAULT_DISP_S1_PHASE_CDEG             (-600)
 #define DEFAULT_DISP_S2_PHASE_CDEG             (-915)
 
-/* Zero-offset clamp, output-mm domain (same domain as zero_offset_um
- * itself), so it scales with cal_mult -- raising cal_mult to compensate for
- * a sensor with a maxed-out physical trim pot raises the zero-offset
- * correction needed by the same factor. The original +-5000 (WP10's first
- * port, 2026-09-24) was sized against d0's THEN-default of 100um -- ~50x
- * headroom at the time -- and was never rescaled through the later ~7000x
- * sensitivity bumps (100->100000->700000, then the 2026-09-27
- * d0_theoretical/cal_mult refactor). Widened to 20000 on 2026-09-29 after
- * instrument 1 (pot maxed out, needing extra digital gain via cal_mult) hit
- * the old bound. Used by both svc_api.c's dispatch_calibrations() SF()
- * bounds and zero_cal_apply_if_ready()'s clamp -- keep them sharing this
- * one constant so they can't drift apart again the way the raw +-5000
- * literals just did. */
-#define DISPLACEMENT_ZERO_OFFSET_UM_MAX    20000
+/* Zero clamp, ppm of the ratio r (system_state.h): +-0.5 is far wider than
+ * any real zero error (10 mm/m at k = 0.0213 is 0.21), tight enough to catch
+ * a nonsense value. Shared by svc_api.c's SF() bounds and
+ * zero_cal_apply_if_ready()'s clamp so they cannot drift apart. */
+#define DISPLACEMENT_ZERO_PPM_MAX          500000
 
 /* Wyler handbook constant: 20uV RMS (at the sensor's own S-channel output,
  * referred to the ADC pin -- i.e. AFTER that channel's own PGA, same

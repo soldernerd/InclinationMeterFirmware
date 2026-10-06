@@ -72,8 +72,8 @@ static const SettingsSection s_sections[] = {
       offsetof(DeviceSettings, encoder_counts_per_detent),
       SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) },
     { EEPROM_DISPLACEMENT_SETTINGS_ADDR, EEPROM_DISPLACEMENT_SETTINGS_VERSION,
-      offsetof(DeviceSettings, disp_atten_milli),
-      SECTION_SPAN(disp_atten_milli, disp_reserved_pad) },
+      offsetof(DeviceSettings, disp_s1_k_micro),
+      SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad) },
 };
 #define SETTINGS_SECTION_COUNT  ((uint8_t)(sizeof(s_sections) / sizeof(s_sections[0])))
 
@@ -95,9 +95,9 @@ _Static_assert(offsetof(DeviceSettings, lm35_scale_mv_per_c) + SECTION_SPAN(lm35
                 == offsetof(DeviceSettings, encoder_counts_per_detent),
                 "lm35 section must end exactly where encoder section begins");
 _Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent)
-                == offsetof(DeviceSettings, disp_atten_milli),
+                == offsetof(DeviceSettings, disp_s1_k_micro),
                 "encoder section must end exactly where displacement section begins");
-_Static_assert(offsetof(DeviceSettings, disp_atten_milli) + SECTION_SPAN(disp_atten_milli, disp_reserved_pad)
+_Static_assert(offsetof(DeviceSettings, disp_s1_k_micro) + SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad)
                 == sizeof(DeviceSettings),
                 "displacement section must end exactly at the struct's end");
 
@@ -111,7 +111,7 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c)
                "lm35 page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) <= 0x0100U,
                "encoder page must fit within its 256-byte EEPROM page budget");
-_Static_assert(HDR_SIZE + SECTION_SPAN(disp_atten_milli, disp_reserved_pad) <= 0x0100U,
+_Static_assert(HDR_SIZE + SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad) <= 0x0100U,
                "displacement page must fit within its 256-byte EEPROM page budget");
 
 _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
@@ -182,15 +182,10 @@ static void fill_default_settings(DeviceSettings *s)
     s->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
 
     /* Displacement calibration page (WP10) */
-    s->disp_atten_milli         = DEFAULT_DISP_ATTEN_MILLI;
-    s->disp_s1_gain_milli       = DEFAULT_DISP_S1_GAIN_MILLI;
-    s->disp_s1_d0_theoretical_um = DEFAULT_DISP_S1_D0_THEORETICAL_UM;
-    s->disp_s1_sensitivity_uv_per_um_milli = DEFAULT_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI;
-    s->disp_s1_zero_offset_um   = DEFAULT_DISP_S1_ZERO_OFFSET_UM;
-    s->disp_s2_gain_milli       = DEFAULT_DISP_S2_GAIN_MILLI;
-    s->disp_s2_d0_theoretical_um = DEFAULT_DISP_S2_D0_THEORETICAL_UM;
-    s->disp_s2_sensitivity_uv_per_um_milli = DEFAULT_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI;
-    s->disp_s2_zero_offset_um   = DEFAULT_DISP_S2_ZERO_OFFSET_UM;
+    s->disp_s1_k_micro          = DEFAULT_DISP_S1_K_MICRO;
+    s->disp_s1_zero_ppm         = DEFAULT_DISP_S1_ZERO_PPM;
+    s->disp_s2_k_micro          = DEFAULT_DISP_S2_K_MICRO;
+    s->disp_s2_zero_ppm         = DEFAULT_DISP_S2_ZERO_PPM;
     s->disp_s1_invert           = DEFAULT_DISP_S1_INVERT;
     s->disp_s2_invert           = DEFAULT_DISP_S2_INVERT;
     s->disp_s1_phase_cdeg       = DEFAULT_DISP_S1_PHASE_CDEG;
@@ -573,18 +568,13 @@ void svc_storage_validate_settings(DeviceSettings *settings)
     if (settings->lm35_scale_mv_per_c == 0U) {
         settings->lm35_scale_mv_per_c = DEFAULT_LM35_SCALE_MV_PER_C;
     }
-    /* Displacement (WP10): atten and the two gains are divisors in
-     * svc_displacement.c's compute_sensor_delta() (inv_k = 1/(atten*gain));
-     * disp_s1/s2_d0_um are multipliers, not divisors, so unlike the
-     * fields above they don't need a zero-guard for correctness (0 would
-     * just be a meaningless calibration, not a fault). */
-    if (settings->disp_atten_milli == 0) {
-        settings->disp_atten_milli = DEFAULT_DISP_ATTEN_MILLI;
+    /* Displacement (WP10): the two k are divisors in svc_displacement.c's
+     * compute_sensor_delta() (tilt = (r - zero)/k), so 0 is a fault; the
+     * zero offsets are plain subtrahends and need no guard. */
+    if (settings->disp_s1_k_micro <= 0) {
+        settings->disp_s1_k_micro = DEFAULT_DISP_S1_K_MICRO;
     }
-    if (settings->disp_s1_gain_milli == 0) {
-        settings->disp_s1_gain_milli = DEFAULT_DISP_S1_GAIN_MILLI;
-    }
-    if (settings->disp_s2_gain_milli == 0) {
-        settings->disp_s2_gain_milli = DEFAULT_DISP_S2_GAIN_MILLI;
+    if (settings->disp_s2_k_micro <= 0) {
+        settings->disp_s2_k_micro = DEFAULT_DISP_S2_K_MICRO;
     }
 }

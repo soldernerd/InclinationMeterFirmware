@@ -251,6 +251,7 @@ static bool     s_pstream_active = false;
  * svc_api.c's svc_api_update(), both task-context callers). */
 static DisplacementZeroCalPhase s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
 static uint16_t s_zero_cal_count = 0;
+static uint8_t  s_zero_cal_mask  = ZERO_CAL_SENSORS_BOTH;   /* sensors covered by the current run */
 static float    s_zero_cal_sum1  = 0.0f;   /* running sum for the CURRENT step */
 static float    s_zero_cal_sum2  = 0.0f;
 static float    s_zero_cal_step1_avg1 = 0.0f;   /* saved once step 1 completes */
@@ -563,65 +564,25 @@ static void push_output(uint16_t seq, float delta1, float residual1, float delta
  * codebase -- see config.h's DEFAULT_DISP_* comment. */
 typedef struct {
     float phase_cos, phase_sin;  /* cos/sin of the phase calibration delta (system_state.h) */
-    float gain;              /* S-channel amplifier gain */
-    float d0_mm;              /* effective scale factor, mm -- see load_sensor_cal() */
-    float zero_offset_mm;    /* displacement zero calibration, mm */
+    float inv_pga;           /* 1 / PGA of the sensor channel */
+    float inv_k;             /* 1 / k, k = empirical sensitivity at PGA 1, per mm/m */
+    float zero_ratio;        /* zero of the ratio r (level point), dimensionless */
 } SensorCalF;
 
-/* d0 (2026-09-27) is now the PRODUCT of a theoretical baseline and a
- * calibration factor, not one directly-settable number -- see config.h's
- * "Displacement sensitivity: theoretical baseline" comment for the full
- * Wyler-handbook derivation. d0_theoretical_um is what the Wyler spec's
- * 20uV RMS = 1um/m implies for THIS batch's actual x-sensitivity.
- *
- * sensitivity_uv_per_um_milli (2026-09-29, replacing the original bare
- * "cal_mult" ratio -- see system_state.h's field comment for why a
- * dimensionless multiplier on an assumption buried in firmware was
- * confusing in a way a direct physical quantity isn't) is this sensor's
- * REAL measured electrical sensitivity, in the SAME uV-per-0.001mm/m units
- * as the fixed nominal spec (DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M,
- * config.h, =20). cal_mult is now just an internal implementation detail
- * derived from it here (nominal/actual -- if this sensor produces FEWER uV
- * per unit tilt than the 20uV spec claims, cal_mult > 1, compensating by
- * exactly that shortfall), not something stored or exposed on its own.
- *
- * zero_offset_um (2026-09-29, root-caused after a cal_mult change left two
- * instruments reading several mm at true level): stored in the SAME
- * cal_mult-independent theoretical domain as d0_theoretical -- i.e. "what
- * this sensor's electrical zero error would read at the nominal spec's
- * sensitivity" -- not the final output-mm domain the field's own name
- * might suggest. The sensor's intrinsic zero error lives in x_re itself (a
- * fixed offset from 0.5, baked in before ANY d0/cal_mult scaling is
- * applied), so it has to be scaled by the SAME d0_theoretical*cal_mult
- * factor as the real signal every time it's used, not stored once as a
- * fixed output-mm constant -- subtracting a fixed mm value was exactly
- * what broke every time cal_mult changed (the zero_offset_mm
- * docs/wp10_displacement.md's "should be re-run" note flagged as a
- * known-but-unfixed hazard, then hit repeatedly in practice). Multiplying
- * by the derived cal_mult here, at read time, makes a SINGLE zero-cal run
- * permanently valid across any future sensitivity change -- no more "redo
- * zero-cal after every gain adjustment." */
-/* nominal/actual -- see svc_displacement.h's declaration comment. Shared
- * by load_sensor_cal() below, zero_cal_accumulate()'s step2-combination
- * math, and svc_api.c's zero_cal_apply_if_ready(), so none of them can
- * drift apart on how a sensitivity value becomes a cal_mult. */
-float svc_displacement_cal_mult_from_sensitivity(int32_t sensitivity_uv_per_um_milli)
-{
-    float sensitivity = (float)sensitivity_uv_per_um_milli / 1000.0f;   /* uV per 0.001mm/m */
-    return (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M / sensitivity;
-}
-
+/* Tilt calibration (2026-10-06 redesign, system_state.h has the model):
+ * delta [mm/m] = (r - zero) / k with r the in-phase ratio. The zero is on
+ * r (k-independent), so a k calibration never moves the level point -- the
+ * 2026-09-29 cal_mult/d0/sensitivity machinery this replaces existed only
+ * to get that property by scaling the stored zero. */
 /* cos/sin of the phase calibration, cached per sensor: the angle changes
  * only when a host SETs it, and sinf/cosf are soft-float library calls on
  * this Cortex-M0+ that must not run every 24.6 ms batch. */
 typedef struct { int16_t cdeg; float c, s; bool valid; } PhaseCache;
 static PhaseCache s_phase_cache[2];
 
-static void load_sensor_cal(SensorCalF *out, int32_t gain_milli,
-                             int32_t d0_theoretical_um, int32_t sensitivity_uv_per_um_milli,
-                             int32_t zero_offset_um, int16_t phase_cdeg, uint8_t sensor_idx)
+static void load_sensor_cal(SensorCalF *out, int32_t k_micro, uint32_t pga,
+                             int32_t zero_ppm, int16_t phase_cdeg, uint8_t sensor_idx)
 {
-    float cal_mult = svc_displacement_cal_mult_from_sensitivity(sensitivity_uv_per_um_milli);
     PhaseCache *pc = &s_phase_cache[sensor_idx];
     if (!pc->valid || pc->cdeg != phase_cdeg) {
         float delta_rad = (float)phase_cdeg * (3.14159265f / 18000.0f);
@@ -630,11 +591,14 @@ static void load_sensor_cal(SensorCalF *out, int32_t gain_milli,
         pc->cdeg  = phase_cdeg;
         pc->valid = true;
     }
-    out->phase_cos      = pc->c;
-    out->phase_sin      = pc->s;
-    out->gain           = (float)gain_milli / 1000.0f;
-    out->d0_mm          = ((float)d0_theoretical_um / 1000.0f) * cal_mult;
-    out->zero_offset_mm = ((float)zero_offset_um / 1000.0f) * cal_mult;
+    out->phase_cos  = pc->c;
+    out->phase_sin  = pc->s;
+    /* k is stored for PGA = 1; the sensor channel's codes are PGA times
+     * larger, so S is divided by the PGA first. k_micro is guarded > 0 by
+     * svc_storage_validate_settings(). */
+    out->inv_pga    = 1.0f / (float)pga;
+    out->inv_k      = 1.0e6f / (float)k_micro;
+    out->zero_ratio = (float)zero_ppm * 1.0e-6f;
 }
 
 /* The values every sensor's computation needs but that don't vary
@@ -650,7 +614,6 @@ static void load_sensor_cal(SensorCalF *out, int32_t gain_milli,
  * (division is the most expensive op available on this FPU-less
  * Cortex-M0+; multiplication is much cheaper). */
 typedef struct {
-    float atten;
     float inv_den_re, inv_den_im;   /* 1 / (A - B) */
 } SharedCycleTerms;
 
@@ -679,36 +642,27 @@ static void compute_sensor_delta(float iS, float qS, const SensorCalF *cal,
                                   const SharedCycleTerms *shared,
                                   float *delta_out, float *residual_out)
 {
-    /* S/k -- a real-scalar reciprocal-multiply (k = atten*gain has no
-     * imaginary part), not a complex operation. */
-    float inv_k = 1.0f / (shared->atten * cal->gain);
-    float num_re = iS * inv_k;
-    float num_im = qS * inv_k;
+    /* S / PGA -- k is stored for PGA = 1. */
+    float num_re = iS * cal->inv_pga;
+    float num_im = qS * cal->inv_pga;
 
-    /* x' = num * (1/den) -- complex multiply by the precomputed shared
-     * reciprocal, equivalent to num/den but without a division here. */
+    /* u = num * (1/D) -- complex multiply by the precomputed shared
+     * reciprocal of D = A - B, equivalent to num/D without a division. */
     float u_re = num_re * shared->inv_den_re - num_im * shared->inv_den_im;
     float u_im = num_re * shared->inv_den_im + num_im * shared->inv_den_re;
 
     /* Phase calibration (2026-10-06, docs/signal_processing.tex Sec. 9.1,
-     * approach 2): u = S/(|k| D) lies along e^{j delta} for a real tilt, delta
-     * being the phase of the complex k (the sensor's delay relative to the
-     * run-time reference D = A - B, which is measured in every batch, so
-     * the sample-grid phase drops out). Rotate by -delta so the tilt is
-     * exactly in-phase: x = u * e^{-j delta}. The quadrature part of x is
+     * approach 2): u lies along e^{j delta} for a real tilt, delta being the
+     * sensor's delay relative to the run-time reference D (measured in every
+     * batch, so the sample-grid phase drops out). Rotate by -delta so the
+     * tilt is exactly in-phase: x = u * e^{-j delta}; the quadrature part is
      * then a clean diagnostic. */
     float x_re =  u_re * cal->phase_cos + u_im * cal->phase_sin;
     float x_im = -u_re * cal->phase_sin + u_im * cal->phase_cos;
 
-    /* No "- 0.5" here (2026-09-30, alongside the B-term drop above): that
-     * offset existed because the OLD x = (S/k-B)/(A-B) sits near 0.5 at
-     * true zero tilt (B contributes a baseline the old formula had to
-     * re-center). x' = S/(k(A-B)) has no such baseline -- it's naturally
-     * near 0 at zero tilt (docs/signal_processing.tex Section 12.7's
-     * "tilt = 2*d0*Re(x') - zero", no 1/2 term). Leaving "-0.5" in after
-     * dropping B would subtract a spurious d0-sized constant from every
-     * reading -- exactly the ~1.1-1.4m bogus offset this was caught by. */
-    *delta_out    = 2.0f * cal->d0_mm * x_re - cal->zero_offset_mm;
+    /* tilt [mm/m] = (r - zero) / k (2026-10-06 redesign). No "- 0.5": that
+     * belonged to the old (S/k - B)/(A - B) form, dropped 2026-09-30. */
+    *delta_out    = (x_re - cal->zero_ratio) * cal->inv_k;
     *residual_out = x_im;
 }
 
@@ -763,11 +717,13 @@ static void zero_cal_accumulate(float delta1, float delta2)
          * scales the finished result back down before persisting it, so
          * disp_s1/s2_zero_offset_um itself never leaves the theoretical
          * domain on disk. */
-        s_zero_cal_result1_mm = (float)g_device_settings.disp_s1_zero_offset_um / 1000.0f
-                               * svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s1_sensitivity_uv_per_um_milli)
+        /* zero_ppm / k_micro = the stored zero expressed in mm/m (both are
+         * x1e-6); the averaged delta already has it subtracted. */
+        s_zero_cal_result1_mm = (float)g_device_settings.disp_s1_zero_ppm
+                               / (float)g_device_settings.disp_s1_k_micro
                                + (s_zero_cal_step1_avg1 + avg1) / 2.0f;
-        s_zero_cal_result2_mm = (float)g_device_settings.disp_s2_zero_offset_um / 1000.0f
-                               * svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s2_sensitivity_uv_per_um_milli)
+        s_zero_cal_result2_mm = (float)g_device_settings.disp_s2_zero_ppm
+                               / (float)g_device_settings.disp_s2_k_micro
                                + (s_zero_cal_step1_avg2 + avg2) / 2.0f;
         s_zero_cal_phase = DISP_ZERO_CAL_RESULT_READY;
     }
@@ -916,17 +872,14 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     }
 
     SensorCalF s1_cal, s2_cal;
-    load_sensor_cal(&s1_cal, g_device_settings.disp_s1_gain_milli,
-                     g_device_settings.disp_s1_d0_theoretical_um, g_device_settings.disp_s1_sensitivity_uv_per_um_milli,
-                     g_device_settings.disp_s1_zero_offset_um,
+    load_sensor_cal(&s1_cal, g_device_settings.disp_s1_k_micro, ADS131M04_PGA_S1,
+                     g_device_settings.disp_s1_zero_ppm,
                      g_device_settings.disp_s1_phase_cdeg, 0U);
-    load_sensor_cal(&s2_cal, g_device_settings.disp_s2_gain_milli,
-                     g_device_settings.disp_s2_d0_theoretical_um, g_device_settings.disp_s2_sensitivity_uv_per_um_milli,
-                     g_device_settings.disp_s2_zero_offset_um,
+    load_sensor_cal(&s2_cal, g_device_settings.disp_s2_k_micro, ADS131M04_PGA_S2,
+                     g_device_settings.disp_s2_zero_ppm,
                      g_device_settings.disp_s2_phase_cdeg, 1U);
 
     SharedCycleTerms shared = {
-        .atten      = (float)g_device_settings.disp_atten_milli / 1000.0f,
         .inv_den_re = inv_den_re,
         .inv_den_im = inv_den_im,
     };
@@ -1102,9 +1055,8 @@ void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
     }
     const float i[4] = { s_phasors.iB, s_phasors.iA, s_phasors.iS1, s_phasors.iS2 };
     const float q[4] = { s_phasors.qB, s_phasors.qA, s_phasors.qS1, s_phasors.qS2 };
-    /* B, A at PGA=1; S1, S2 at PGA=16 -- must stay in sync with
-     * Drivers_App/drv_ads131m04.c's GAIN1_REG_VALUE. */
-    const uint8_t pga[4] = { 1U, 1U, 16U, 16U };
+    /* B, A, S1, S2 -- single source of truth: drv_ads131m04.h. */
+    const uint8_t pga[4] = { ADS131M04_PGA_B, ADS131M04_PGA_A, ADS131M04_PGA_S1, ADS131M04_PGA_S2 };
 
     /* Phase reference: D = A - B at 90 deg (Sec. 9.1) -- subtract D's own
      * angle, so the display no longer depends on the sample-grid phase. */
@@ -1509,8 +1461,11 @@ uint16_t svc_displacement_phasor_stream_drops(void)
     return s_pstream_drops;
 }
 
-DrvStatus svc_displacement_zero_cal_step1_begin(void)
+DrvStatus svc_displacement_zero_cal_step1_begin(uint8_t sensor_mask)
 {
+    if ((sensor_mask & ZERO_CAL_SENSORS_BOTH) == 0U) {
+        return DRV_ERR_INVALID;
+    }
     if (!svc_displacement_is_running()) {
         return DRV_ERR_NOT_READY;
     }
@@ -1529,6 +1484,7 @@ DrvStatus svc_displacement_zero_cal_step1_begin(void)
     if (s_precision_phase == DISP_PRECISION_RUNNING) {
         return DRV_ERR_NOT_READY;
     }
+    s_zero_cal_mask  = (uint8_t)(sensor_mask & ZERO_CAL_SENSORS_BOTH);
     s_zero_cal_sum1  = s_zero_cal_sum2  = 0.0f;
     s_zero_cal_count = 0;
     s_zero_cal_phase = DISP_ZERO_CAL_STEP1_RUNNING;
@@ -1566,13 +1522,20 @@ void svc_displacement_zero_cal_progress(uint16_t *count_out, uint16_t *target_ou
     if (target_out) *target_out = DISPLACEMENT_ZERO_CAL_SAMPLES;
 }
 
-bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out)
+uint8_t svc_displacement_zero_cal_get_mask(void)
+{
+    return s_zero_cal_mask;
+}
+
+bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out,
+                                               uint8_t *sensor_mask_out)
 {
     if (s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
         return false;
     }
     if (offset1_mm_out) *offset1_mm_out = s_zero_cal_result1_mm;
     if (offset2_mm_out) *offset2_mm_out = s_zero_cal_result2_mm;
+    if (sensor_mask_out) *sensor_mask_out = s_zero_cal_mask;
     s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
     return true;
 }

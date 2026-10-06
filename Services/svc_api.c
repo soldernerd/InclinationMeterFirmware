@@ -503,8 +503,11 @@ static void cmd_reboot_dfu(ApiTransport t, uint16_t opcode,
 static void cmd_zero_cal(ApiTransport t, uint16_t opcode,
                          const uint8_t *pl, uint16_t paylen)
 {
-    (void)paylen;
+    /* Payload: 1 byte action, optionally followed (step 1 only) by a sensor
+     * mask, bit 0 = S1, bit 1 = S2 (default and 3 = both). Step 2 continues
+     * the sensors chosen in step 1. */
     uint8_t action = pl[0];
+    uint8_t mask   = (paylen >= 2U) ? pl[1] : ZERO_CAL_SENSORS_BOTH;
     DrvStatus rc;
     switch (action) {
         case 0U:
@@ -513,7 +516,11 @@ static void cmd_zero_cal(ApiTransport t, uint16_t opcode,
             send_response(t, opcode, API2_STATUS_OK, 0, 0);
             return;
         case 1U:
-            rc = svc_displacement_zero_cal_step1_begin();
+            if ((mask & ZERO_CAL_SENSORS_BOTH) == 0U || paylen > 2U) {
+                send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+                return;
+            }
+            rc = svc_displacement_zero_cal_step1_begin(mask);
             break;
         case 2U:
             rc = svc_displacement_zero_cal_step2_begin();
@@ -529,7 +536,8 @@ static void cmd_zero_cal(ApiTransport t, uint16_t opcode,
         send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
         return;
     }
-    svc_logf(API2_LOG_INFO, "cmd: zero-cal step %u started", (unsigned)action);
+    svc_logf(API2_LOG_INFO, "cmd: zero-cal step %u started (sensors 0x%02X)",
+             (unsigned)action, (unsigned)svc_displacement_zero_cal_get_mask());
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
@@ -572,7 +580,7 @@ static const CommandDesc s_commands[] = {
     { API2_RES_CMD_FORCE_CHARGE,    0U, cmd_force_charge    },
     { API2_RES_CMD_POWER_TEST,      4U, cmd_power_test      },
     { API2_RES_CMD_PIN_TEST,        1U, cmd_pin_test        },
-    { API2_RES_CMD_ZERO_CAL,        1U, cmd_zero_cal        },
+    { API2_RES_CMD_ZERO_CAL,        CMD_LEN_ANY, cmd_zero_cal },   /* 1 or 2 bytes, validated in the handler */
     { API2_RES_CMD_REBOOT_DFU,      0U, cmd_reboot_dfu      },
     { API2_RES_CMD_PRECISION_MEASURE, 1U, cmd_precision_measure },
     { API2_RES_CMD_END_CHARGING,      0U, cmd_end_charging     },
@@ -847,12 +855,14 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         struct __attribute__((packed)) {
             uint8_t  phase;
             uint16_t progress, target;
+            uint8_t  sensor_mask;   /* appended 2026-10-06: sensors covered by the current run */
         } p;
         uint16_t progress, target;
         p.phase = (uint8_t)svc_displacement_zero_cal_get_phase();
         svc_displacement_zero_cal_progress(&progress, &target);
         p.progress = progress;
         p.target   = target;
+        p.sensor_mask = svc_displacement_zero_cal_get_mask();
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }
@@ -1535,31 +1545,15 @@ static void dispatch_settings(ApiTransport t, uint16_t opcode, uint8_t verb,
  * in this category (WP10, 2026-09-24) -- see svc_api.h's Calibrations
  * comment for why displacement calibration lives here, not Settings. */
 static const SettingsFieldDesc s_calibration_fields[] = {
-    SF(API2_RES_CALIB_DISP_ATTEN_MILLI,       SF_UNSIGNED, disp_atten_milli,           100, 100000),
-    SF(API2_RES_CALIB_DISP_S1_GAIN_MILLI,     SF_UNSIGNED, disp_s1_gain_milli,         100, 1000000),
-    SF(API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM, SF_SIGNED,   disp_s1_zero_offset_um,
-       -DISPLACEMENT_ZERO_OFFSET_UM_MAX, DISPLACEMENT_ZERO_OFFSET_UM_MAX),
-    SF(API2_RES_CALIB_DISP_S2_GAIN_MILLI,     SF_UNSIGNED, disp_s2_gain_milli,         100, 1000000),
-    SF(API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM, SF_SIGNED,   disp_s2_zero_offset_um,
-       -DISPLACEMENT_ZERO_OFFSET_UM_MAX, DISPLACEMENT_ZERO_OFFSET_UM_MAX),
-    /* Theoretical baseline + real measured sensitivity (2026-09-27,
-     * replacing D0_UM; sensitivity re-expressed in physical uV/um/m units
-     * 2026-09-29, replacing a bare dimensionless CAL_MULT ratio -- see
-     * Config/config.h's DEFAULT_DISP_S1_D0_THEORETICAL_UM /
-     * DEFAULT_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI comments). Bounds on
-     * D0_THEORETICAL match the old D0_UM's (this is the same "not a
-     * literal air gap, needs generous headroom" constant, just derived
-     * from the Wyler handbook instead of a paper-shim test). Sensitivity's
-     * bounds (100..1000000 milli = 0.1..1000 uV/um/m) are generous headroom
-     * either side of the 20uV nominal spec -- wide enough to never bind in
-     * practice, narrow enough to catch an obviously-wrong SET (e.g. a
-     * value left over from the old ratio convention, where anything under
-     * 100 would have been a plausible ratio but is not a plausible
-     * uV/um/m sensitivity). */
-    SF(API2_RES_CALIB_DISP_S1_D0_THEORETICAL_UM, SF_UNSIGNED, disp_s1_d0_theoretical_um,     1, 2000000),
-    SF(API2_RES_CALIB_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI, SF_UNSIGNED, disp_s1_sensitivity_uv_per_um_milli, 100, 1000000),
-    SF(API2_RES_CALIB_DISP_S2_D0_THEORETICAL_UM, SF_UNSIGNED, disp_s2_d0_theoretical_um,     1, 2000000),
-    SF(API2_RES_CALIB_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI, SF_UNSIGNED, disp_s2_sensitivity_uv_per_um_milli, 100, 1000000),
+    /* Tilt calibration (2026-10-06 redesign): k x1e-6 at PGA 1, zero in ppm
+     * of the ratio. k bounds 0.0001..1.0 per mm/m are wide headroom around
+     * the nominal 0.0213 and catch a value typed in the wrong unit. */
+    SF(API2_RES_CALIB_DISP_S1_K_MICRO,        SF_SIGNED,   disp_s1_k_micro,            100, 1000000),
+    SF(API2_RES_CALIB_DISP_S1_ZERO_PPM,       SF_SIGNED,   disp_s1_zero_ppm,
+       -DISPLACEMENT_ZERO_PPM_MAX, DISPLACEMENT_ZERO_PPM_MAX),
+    SF(API2_RES_CALIB_DISP_S2_K_MICRO,        SF_SIGNED,   disp_s2_k_micro,            100, 1000000),
+    SF(API2_RES_CALIB_DISP_S2_ZERO_PPM,       SF_SIGNED,   disp_s2_zero_ppm,
+       -DISPLACEMENT_ZERO_PPM_MAX, DISPLACEMENT_ZERO_PPM_MAX),
     /* Sign flip on the final reading (2026-09-29) -- see svc_api.h's
      * API2_RES_CALIB_DISP_S1_INVERT comment. */
     SF(API2_RES_CALIB_DISP_S1_INVERT,            SF_UNSIGNED, disp_s1_invert,                0, 1),
@@ -1838,17 +1832,17 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
  * follows -- svc_displacement.c computes the result but never writes
  * settings itself. Called every tick from svc_api_update() so the save
  * happens promptly (usually the very tick step 2 finishes) rather than
- * waiting for a host to poll Raw data 0x03. Divides by cal_mult before
- * storing (2026-09-29) so the persisted value stays valid across future
- * cal_mult changes -- see svc_displacement.c's load_sensor_cal() comment.
- * mm -> um matches dispatch_calibrations()'s existing ZERO_OFFSET_UM
- * bounds (+-DISPLACEMENT_ZERO_OFFSET_UM_MAX, config.h) exactly -- clamped,
+ * waiting for a host to poll Raw data 0x03. Converts to ppm of the ratio
+ * (k-independent, 2026-10-06) so the persisted value stays valid across k
+ * calibrations. Bounds match dispatch_calibrations()'s ZERO_PPM
+ * bounds (+-DISPLACEMENT_ZERO_PPM_MAX, config.h) exactly -- clamped,
  * not rejected, since this is a computed result, not a host-supplied value
  * that should ever be "invalid" in normal use. */
 static void zero_cal_apply_if_ready(void)
 {
     float offset1_mm, offset2_mm;
-    if (!svc_displacement_zero_cal_consume_result(&offset1_mm, &offset2_mm)) {
+    uint8_t mask;
+    if (!svc_displacement_zero_cal_consume_result(&offset1_mm, &offset2_mm, &mask)) {
         return;
     }
     if (svc_storage_is_busy()) {
@@ -1862,38 +1856,30 @@ static void zero_cal_apply_if_ready(void)
         svc_log(API2_LOG_WARN, "zero-cal: EEPROM busy, result dropped -- retry the calibration");
         return;
     }
-    /* svc_displacement.c hands back the result in OUTPUT-mm domain (the
-     * same domain as the delta_mm readings it was measured from), but
-     * disp_s1/s2_zero_offset_um is stored in the cal_mult-INDEPENDENT
-     * theoretical domain (load_sensor_cal()'s 2026-09-29 comment) so a
-     * later sensitivity change can't silently invalidate it again. Divide
-     * by the cal_mult active for THIS run before persisting --
-     * svc_displacement_cal_mult_from_sensitivity() is the same formula
-     * load_sensor_cal() uses internally, and sensitivity_uv_per_um_milli
-     * is bounded >= 100 (this file's s_calibration_fields[]), so this can
-     * never divide by zero. */
-    float cal_mult1 = svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s1_sensitivity_uv_per_um_milli);
-    float cal_mult2 = svc_displacement_cal_mult_from_sensitivity(g_device_settings.disp_s2_sensitivity_uv_per_um_milli);
-    offset1_mm /= cal_mult1;
-    offset2_mm /= cal_mult2;
-
-    /* Round to nearest micrometer, not truncate toward zero (a naive
-     * cast would silently discard any sub-micrometer correction --
-     * e.g. -0.6 um truncates to 0, not -1 -- same rounding
-     * App/app_display.c's format_displacement_mm() already uses). */
-    int32_t off1_um = (int32_t)(offset1_mm * 1000.0f + (offset1_mm >= 0.0f ? 0.5f : -0.5f));
-    int32_t off2_um = (int32_t)(offset2_mm * 1000.0f + (offset2_mm >= 0.0f ? 0.5f : -0.5f));
-    if (off1_um < -DISPLACEMENT_ZERO_OFFSET_UM_MAX) off1_um = -DISPLACEMENT_ZERO_OFFSET_UM_MAX;
-    else if (off1_um > DISPLACEMENT_ZERO_OFFSET_UM_MAX) off1_um = DISPLACEMENT_ZERO_OFFSET_UM_MAX;
-    if (off2_um < -DISPLACEMENT_ZERO_OFFSET_UM_MAX) off2_um = -DISPLACEMENT_ZERO_OFFSET_UM_MAX;
-    else if (off2_um > DISPLACEMENT_ZERO_OFFSET_UM_MAX) off2_um = DISPLACEMENT_ZERO_OFFSET_UM_MAX;
-    g_device_settings.disp_s1_zero_offset_um = off1_um;
-    g_device_settings.disp_s2_zero_offset_um = off2_um;
+    /* svc_displacement.c hands back the new absolute zero in OUTPUT-mm
+     * domain (the same domain as the delta_mm readings it was measured
+     * from). The stored zero is in ppm of the ratio r, independent of k, so
+     * a later k calibration cannot invalidate it: zero_ppm = zero_mm * k_micro
+     * (k_micro is guarded > 0 by svc_storage_validate_settings()). Round to
+     * the nearest ppm, clamp (not reject: a computed result). */
+    float p1 = offset1_mm * (float)g_device_settings.disp_s1_k_micro;
+    float p2 = offset2_mm * (float)g_device_settings.disp_s2_k_micro;
+    int32_t off1_ppm = (int32_t)(p1 + (p1 >= 0.0f ? 0.5f : -0.5f));
+    int32_t off2_ppm = (int32_t)(p2 + (p2 >= 0.0f ? 0.5f : -0.5f));
+    if (off1_ppm < -DISPLACEMENT_ZERO_PPM_MAX) off1_ppm = -DISPLACEMENT_ZERO_PPM_MAX;
+    else if (off1_ppm > DISPLACEMENT_ZERO_PPM_MAX) off1_ppm = DISPLACEMENT_ZERO_PPM_MAX;
+    if (off2_ppm < -DISPLACEMENT_ZERO_PPM_MAX) off2_ppm = -DISPLACEMENT_ZERO_PPM_MAX;
+    else if (off2_ppm > DISPLACEMENT_ZERO_PPM_MAX) off2_ppm = DISPLACEMENT_ZERO_PPM_MAX;
+    /* Only the sensors this run covered are updated; the other keeps its
+     * stored zero (per-sensor calibration, 2026-10-06). */
+    if (mask & ZERO_CAL_SENSOR_S1) g_device_settings.disp_s1_zero_ppm = off1_ppm;
+    if (mask & ZERO_CAL_SENSOR_S2) g_device_settings.disp_s2_zero_ppm = off2_ppm;
     svc_storage_validate_settings(&g_device_settings);
     DrvStatus rc = svc_storage_save_settings(&g_device_settings);
     if (rc == DRV_OK) {
-        svc_logf(API2_LOG_INFO, "zero-cal: applied, S1 offset %ld um, S2 offset %ld um",
-                 (long)off1_um, (long)off2_um);
+        svc_logf(API2_LOG_INFO, "zero-cal: applied (sensors 0x%02X), S1 zero %ld ppm, S2 zero %ld ppm",
+                 (unsigned)mask, (long)g_device_settings.disp_s1_zero_ppm,
+                 (long)g_device_settings.disp_s2_zero_ppm);
     } else {
         g_system_state.settings_save_failed = true;
         svc_log(API2_LOG_ERROR, "zero-cal: save failed");

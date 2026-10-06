@@ -28,12 +28,12 @@ OP_CMD_FORCE_CHARGE    = opcode(EXECUTE, CAT_COMMANDS, 0x02)  # no payload — c
 OP_CMD_POWER_TEST      = opcode(EXECUTE, CAT_COMMANDS, 0x03)  # payload u32 mask LE (svc_powertest.h)
 OP_RAW_PWRTEST         = opcode(GET, CAT_RAW, 0x01)           # -> u32 mask + u8 rail flags
 OP_CMD_PIN_TEST        = opcode(EXECUTE, CAT_COMMANDS, 0x04)  # 1B: [5:0]=SCK,MOSI,CS,DISP_ON,VCOM,BUZZER  bit6=allow DISP_ON  bit7=reboot
-OP_CMD_ZERO_CAL        = opcode(EXECUTE, CAT_COMMANDS, 0x06)  # 1B: 0=cancel 1=step1 2=step2 (180-degree reversal test)
+OP_CMD_ZERO_CAL        = opcode(EXECUTE, CAT_COMMANDS, 0x06)  # 1B: 0=cancel 1=step1 2=step2 (180-degree reversal test); step1 may carry a 2nd byte sensor mask (bit0=S1, bit1=S2, default 3=both)
 OP_CMD_REBOOT_DFU      = opcode(EXECUTE, CAT_COMMANDS, 0x05)  # no payload — reset into the ROM bootloader (one-shot; see HAL_App/hal_dfu.h)
 OP_CMD_PRECISION_MEASURE = opcode(EXECUTE, CAT_COMMANDS, 0x07)  # 1B: 0=start 1=cancel (2026-09-26)
 OP_CMD_END_CHARGING     = opcode(EXECUTE, CAT_COMMANDS, 0x08)  # no payload -- cancels an armed force-charge (2026-09-27)
 
-# Zero-cal status (Raw data 0x7/0x03). GET -> u8 phase, u16 progress, u16 target.
+# Zero-cal status (Raw data 0x7/0x03). GET -> u8 phase, u16 progress, u16 target, u8 sensor_mask (mask added 2026-10-06).
 OP_RAW_ZERO_CAL_STATUS = opcode(GET, CAT_RAW, 0x03)
 ZERO_CAL_PHASE_NAMES = {0: "IDLE", 1: "STEP1_RUNNING", 2: "STEP1_DONE",
                         3: "STEP2_RUNNING", 4: "RESULT_READY"}
@@ -43,8 +43,9 @@ def decode_zero_cal_status(d: bytes):
     if len(d) < 5:
         return None
     phase, progress, target = struct.unpack("<BHH", d[:5])
+    mask = d[5] if len(d) >= 6 else 3
     return dict(phase=phase, phase_name=ZERO_CAL_PHASE_NAMES.get(phase, f"?{phase}"),
-                progress=progress, target=target)
+                progress=progress, target=target, sensor_mask=mask)
 
 # Precision-measurement status (Raw data 0x7/0x04, 2026-09-26). GET ->
 # u8 phase, u16 target, u16 count1, u16 count2, u16 count_diff, u32 elapsed_ms,
@@ -155,15 +156,12 @@ MEAS_DISP_DIFF_MM   = 0x0E   # float32 mm, S1 - S2 (2026-09-27)
 # comment. 0x02/0x05 (old S1/S2 D0_UM) retired 2026-09-27, replaced by the
 # theoretical-baseline + multiplier pair below (Config/config.h's
 # DEFAULT_DISP_S1_D0_THEORETICAL_UM has the Wyler-handbook derivation).
-CALIB_DISP_ATTEN_MILLI          = 0x00   # u32, x1000
-CALIB_DISP_S1_GAIN_MILLI        = 0x01   # u32, x1000
-CALIB_DISP_S1_ZERO_OFFSET_UM    = 0x03   # i32, signed -- cal_mult-independent theoretical domain (2026-09-29)
-CALIB_DISP_S2_GAIN_MILLI        = 0x04   # u32, x1000
-CALIB_DISP_S2_ZERO_OFFSET_UM    = 0x06   # i32, signed -- same theoretical domain as S1's
-CALIB_DISP_S1_D0_THEORETICAL_UM = 0x07   # u32, um -- fixed Wyler-derived anchor
-CALIB_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI = 0x08   # u32, x1000 -- real measured uV/um/m sensitivity (2026-09-29, was a bare CAL_MULT ratio)
-CALIB_DISP_S2_D0_THEORETICAL_UM = 0x09   # u32, um
-CALIB_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI = 0x0A   # u32, x1000
+# 0x00 (CALIB_DISP_ATTEN_MILLI) retired 2026-10-06: the attenuator is folded into |k| (the gain constants)
+CALIB_DISP_S1_K_MICRO            = 0x01   # i32, k at PGA 1 x1e-6 per (mm/m); tilt = (r - zero)/k (2026-10-06 redesign)
+CALIB_DISP_S1_ZERO_PPM          = 0x03   # i32, zero in ppm of the ratio r, k-independent (2026-10-06)
+CALIB_DISP_S2_K_MICRO            = 0x04   # i32, as S1
+CALIB_DISP_S2_ZERO_PPM          = 0x06   # i32, as S1
+# 0x07..0x0A (d0_theoretical, sensitivity) retired 2026-10-06: folded into k
 CALIB_DISP_S1_INVERT            = 0x0B   # u8/u32, 0=normal 1=inverted -- sign flip on the final reading (2026-09-29)
 CALIB_DISP_S2_INVERT            = 0x0C   # u8/u32, 0=normal 1=inverted
 CALIB_DISP_S1_PHASE_CDEG         = 0x0D   # i16 in a 2-byte field, signed centidegrees -- phase of S1 relative to D=A-B (Sec. 9.1, 2026-10-06)

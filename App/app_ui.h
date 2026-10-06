@@ -38,6 +38,8 @@ typedef enum {
                                      * app_ui.c's action-row switch and
                                      * App/app_display.c's SETTINGS row for
                                      * the live progress/phase text. */
+    UI_SETTING_ZERO_CAL_S1,         /* action -- same procedure for sensor 1 only */
+    UI_SETTING_ZERO_CAL_S2,         /* action -- same procedure for sensor 2 only */
     UI_SETTING_REBOOT_DFU,          /* action, not a value — see its
                                      * UiSettingMeta.step == 0 and
                                      * app_ui.c's app_ui_update() */

@@ -33,10 +33,10 @@
  * x = C_A/(C_A+C_B) = (d0+delta)/(2*d0) for a parallel-plate capacitor
  * at neutral gap d0 and displacement delta. Solving for delta from the
  * measured ADC-domain phasors (see the .c file's top comment for the
- * full derivation, including how the S-channel gain and A/B attenuation
- * combine into k = atten*gain):
- *   x = (S/k - B) / (A - B)
- *   delta = 2*d0*(x - 0.5) - zero_offset
+ * full derivation; superseded -- since 2026-10-06 the calibration is
+ * k (empirical sensitivity at PGA 1) and zero, system_state.h):
+ *   r = Re[ S/(PGA*D) * e^{-j phase} ],  D = A - B
+ *   delta [mm/m] = (r - zero) / k
  * Does NOT convert delta to inclination angle -- that needs empirical
  * pendulum/flexure calibration and is later work.
  *
@@ -118,15 +118,6 @@ typedef struct {
  * does not start the acquisition trigger -- see svc_displacement_start()
  * below, same split as WP8's svc_signal_analysis.c had). Call once from
  * main.c, checking the return value (CLAUDE.md 7.6). */
-/* nominal(20uV/um/m)/actual -- converts a stored sensitivity_uv_per_um_milli
- * value into the internal cal_mult scale factor (2026-09-29). Exposed
- * (not static) so svc_api.c's zero_cal_apply_if_ready() can convert a
- * freshly-measured zero-cal result back into the same cal_mult-independent
- * theoretical domain the stored value lives in, using the exact same
- * formula svc_displacement.c's own load_sensor_cal()/zero_cal_accumulate()
- * use internally -- one formula, not two copies that could drift apart. */
-float svc_displacement_cal_mult_from_sensitivity(int32_t sensitivity_uv_per_um_milli);
-
 DrvStatus svc_displacement_init(void);
 
 /* Start / stop the ADC sample stream + per-cycle demodulation. start()
@@ -432,7 +423,7 @@ uint16_t  svc_displacement_phasor_stream_drops(void);
  *   3. Once the phase reports DISP_ZERO_CAL_RESULT_READY, the new
  *      per-sensor zero offsets are ready; svc_api.c's svc_api_update()
  *      polls for this and applies + persists them to
- *      g_device_settings.disp_s1/s2_zero_offset_um via
+ *      g_device_settings.disp_s1/s2_zero_ppm via
  *      svc_displacement_zero_cal_consume_result() (task context, same
  *      "only touch g_device_settings/EEPROM from the API layer" pattern
  *      Calibrations SET already follows) -- this module computes the
@@ -452,8 +443,17 @@ typedef enum {
     DISP_ZERO_CAL_RESULT_READY,      /* computed, not yet consumed/applied */
 } DisplacementZeroCalPhase;
 
-DrvStatus svc_displacement_zero_cal_step1_begin(void);   /* DRV_ERR_NOT_READY if not running or already in progress */
+/* Per-sensor selection (2026-10-06): a calibration run covers the sensors in
+ * sensor_mask (bit 0 = S1, bit 1 = S2; ZERO_CAL_SENSORS_BOTH = both); the
+ * other sensor keeps its stored zero. Step 2 uses the mask of step 1.
+ * DRV_ERR_INVALID if the mask selects no sensor. */
+#define ZERO_CAL_SENSOR_S1     0x01U
+#define ZERO_CAL_SENSOR_S2     0x02U
+#define ZERO_CAL_SENSORS_BOTH  (ZERO_CAL_SENSOR_S1 | ZERO_CAL_SENSOR_S2)
+DrvStatus svc_displacement_zero_cal_step1_begin(uint8_t sensor_mask);   /* DRV_ERR_NOT_READY if not running or already in progress */
 DrvStatus svc_displacement_zero_cal_step2_begin(void);   /* DRV_ERR_NOT_READY unless phase == DISP_ZERO_CAL_STEP1_DONE */
+/* Sensor mask of the current/last run (meaningful while the phase is not IDLE). */
+uint8_t   svc_displacement_zero_cal_get_mask(void);
 void      svc_displacement_zero_cal_cancel(void);        /* back to IDLE from any phase; harmless if already idle */
 
 /* count_out and target_out (both may be NULL) report progress within the
@@ -467,10 +467,13 @@ void svc_displacement_zero_cal_progress(uint16_t *count_out, uint16_t *target_ou
  * resets phase to IDLE) while phase == DISP_ZERO_CAL_RESULT_READY --
  * false (outputs untouched) otherwise. These are the NEW absolute
  * zero-offset values in mm (this run's computed zero error added to
- * whatever disp_s1/s2_zero_offset_um already held, NOT a delta) -- the
- * caller still has to convert to micrometers and persist them; this
+ * whatever disp_s1/s2_zero_ppm already held, NOT a delta) -- the
+ * caller still has to convert to ppm of the ratio and persist them; this
  * module never touches g_device_settings or EEPROM itself. */
-bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out);
+bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out,
+                                               uint8_t *sensor_mask_out);
+/* sensor_mask_out (may be NULL): which sensors the run covered; the caller
+ * must only update those sensors' stored zeros. */
 
 /* --- Per-batch quality flag (2026-09-26) --- see Config/config.h's
  * DISPLACEMENT_QUALITY_BAD_MULTIPLE comment for the derivation (bench-

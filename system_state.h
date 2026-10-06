@@ -78,49 +78,25 @@ typedef struct {
      * point (Math/Services layer, not HAL/driver). Exposed over the API
      * under Calibrations (category 0x2), not Settings (0x3) — the first
      * resources to use that category. */
-    int32_t disp_atten_milli;        /* shared A/B attenuator, x1000 (nominal 3.000) */
-    int32_t disp_s1_gain_milli;      /* S1 amplifier gain, x1000 (nominal 10.000) */
-    /* d0 REPLACED 2026-09-27 by a theoretical-baseline + a calibration
-     * factor (config.h's "Displacement sensitivity: theoretical baseline"
-     * comment has the full derivation). d0_theoretical is the
-     * Wyler-handbook-derived micrometers-per-x-unit constant (assuming the
-     * nominal 20uV RMS = 1um/m spec exactly).
-     *
-     * sensitivity_uv_per_um_milli (2026-09-29, replacing the original
-     * cal_mult_milli -- a bare dimensionless ratio, which is exactly the
-     * kind of indirect representation that caused real confusion this
-     * session: "why is the correction factor 2.7x, I expected ~1x?" has an
-     * immediate answer when the field IS the physical quantity being
-     * calibrated, not a multiplier on an assumption buried in firmware).
-     * This is the sensor's REAL, measured electrical sensitivity: how many
-     * microvolts (RMS, at the ADC pin, same reference point as the
-     * DIAGNOSTICS screen / signal-diag RMS values) this specific sensor
-     * actually produces per 0.001mm/m (1um/m) of real tilt -- calibrated
-     * directly against a known applied tilt, nothing else. Compares
-     * directly against the fixed nominal spec
-     * (DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M, config.h, =20) with no unit
-     * conversion needed: this sensor's real sensitivity IS this many uV,
-     * period, vs. the datasheet's 20uV claim.
-     * Services/svc_displacement.c's load_sensor_cal() converts this to the
-     * old internal cal_mult concept (cal_mult = nominal/sensitivity) before
-     * computing effective_d0 -- that's purely an internal implementation
-     * detail now, not something this field's meaning depends on. */
-    int32_t disp_s1_d0_theoretical_um;
-    int32_t disp_s1_sensitivity_uv_per_um_milli;
-    /* S1 displacement zero calibration, micrometers, signed -- stored in the
-     * cal_mult-INDEPENDENT theoretical domain (i.e. what this sensor's
-     * electrical zero error would read with cal_mult=1.0), NOT the final
-     * output-mm domain the name might suggest -- see
-     * Services/svc_displacement.c's load_sensor_cal() comment (2026-09-29)
-     * for why: the sensor's zero error lives in x_re itself, so it has to
-     * scale with cal_mult like any other x-domain quantity, not sit fixed
-     * in mm. Written by svc_api.c's zero_cal_apply_if_ready(), which
-     * divides by cal_mult before persisting here. */
-    int32_t disp_s1_zero_offset_um;
-    int32_t disp_s2_gain_milli;      /* S2 amplifier gain, x1000 */
-    int32_t disp_s2_d0_theoretical_um;
-    int32_t disp_s2_sensitivity_uv_per_um_milli;  /* S2 -- same meaning as disp_s1_sensitivity_uv_per_um_milli above */
-    int32_t disp_s2_zero_offset_um;  /* S2 zero calibration -- same theoretical domain as disp_s1_zero_offset_um above */
+    /* Tilt calibration (redesigned 2026-10-06): per sensor ONE sensitivity k
+     * and ONE zero, both on the dimensionless ratio
+     *     r = Re[ S / (PGA * D) * e^{-j delta} ]      (D = A - B, delta below)
+     *     tilt [mm/m] = (r - zero) / k
+     * k is the sensor's empirical sensitivity, "per mm/m", STATED FOR PGA = 1
+     * (the firmware divides S by the channel's PGA, drv_ads131m04.h, so k does
+     * not change when the PGA is changed) with everything else -- on-board
+     * attenuation and filtering, the instrument's own gain -- folded in.
+     * Stored as an integer in units of 1e-6 (0.0213 per mm/m = 21300), so
+     * the integer-only API field machinery keeps ~50 ppm resolution.
+     * The nominal value from the Wyler 20 uV/(um/m) and the network gains is
+     * 0.0213 (docs/signal_processing.tex Sec. 13.3).
+     * zero is the value of r at level, stored in ppm of the ratio (1e-6),
+     * i.e. in the k-independent domain: changing k does not move the level
+     * point, so a flip calibration stays valid when k is recalibrated. */
+    int32_t disp_s1_k_micro;         /* S1 k at PGA 1, x1e-6 per (mm/m) */
+    int32_t disp_s1_zero_ppm;        /* S1 zero, ppm of r */
+    int32_t disp_s2_k_micro;         /* S2, same */
+    int32_t disp_s2_zero_ppm;        /* S2, same */
 
     /* Sign convention is arbitrary at the sensor level -- these flip the
      * FINAL reported reading (after gain/zero-cal, at the getter layer in

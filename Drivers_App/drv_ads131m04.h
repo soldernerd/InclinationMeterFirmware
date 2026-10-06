@@ -13,6 +13,17 @@
  * amplitude checks. */
 #define ADS131M04_CODE_MAX  8388607L   /* 2^23 - 1 */
 
+/* Per-channel PGA gain -- the ONE place it is set (2026-10-06). The GAIN1
+ * register value in drv_ads131m04.c is derived from these, and
+ * Services/svc_displacement.c divides each sensor's k by its PGA (|k| is
+ * stored for PGA = 1, so changing a gain here needs no recalibration of k)
+ * and uses them for the diagnostic volts. Allowed values 1, 2, 4, ... 128.
+ * Channel map: CH0 = S2, CH1 = B, CH2 = A, CH3 = S1. */
+#define ADS131M04_PGA_S2   16U
+#define ADS131M04_PGA_B     1U
+#define ADS131M04_PGA_A     1U
+#define ADS131M04_PGA_S1   16U
+
 /* Configures the ADS131M04 for continuous 4-channel simultaneous
  * sampling at a fixed ~20833.33 Hz (see Config/config.h's
  * ADS131M04_OSR_FIELD) and starts its MCLK feed. PGA gain is per-channel

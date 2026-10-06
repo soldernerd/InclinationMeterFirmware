@@ -44,7 +44,7 @@
 \title{Signal Processing of the Inclination Meter\\
        from DDS Excitation to Displacement Readout}
 \author{}
-\date{Draft --- work in progress (reflects firmware up to 0.10.66, 2026-10-06)}
+\date{Draft --- work in progress (reflects firmware up to 0.10.70, 2026-10-06)}
 
 \begin{document}
 
@@ -385,8 +385,8 @@ described here.
   \item \textbf{R36 with R38$\parallel$R40} (\SI{10}{\kilo\ohm} over
         \SI{5}{\kilo\ohm}): attenuator, ratio $1/3$.  It brings the
         \SI{3.2}{\volt} peak of the exciter into the ADC's $\pm\SI{1.2}{\volt}$
-        range.  The firmware constant for this attenuator is 3.000
-        (\texttt{disp\_atten\_milli}).
+        range.  (Since fw 0.10.67 this attenuator has no constant of its own in the
+        firmware: it is part of the empirical $|k|$, Section~13.3.)
   \item \textbf{C53 with R44:} AC coupling.  C53 removes the DC offset of
         the exciter (section~\ref{sec:dc}); R44 gives the node a DC path to
         ground.  R44 also loads the attenuator, so the total division is
@@ -849,7 +849,7 @@ $-\delta$:
   x_{\mathrm{re}} = u_{\mathrm{re}}\cos\delta + u_{\mathrm{im}}\sin\delta,\qquad
   x_{\mathrm{im}} = -u_{\mathrm{re}}\sin\delta + u_{\mathrm{im}}\cos\delta ,
 \end{equation}
-with the tilt $=2\,d_0\,x_{\mathrm{re}}-\text{zero}$ and the residual
+with the tilt $=(x_{\mathrm{re}}-\text{zero})/k$ (Eq.~\eqref{eq:tilt}) and the residual
 $x_{\mathrm{im}}$.  A sensor delayed by $\delta$ relative to the ideal has
 positive $\delta$, an earlier one negative (the firmware's angle convention,
 Section~11.1); both sensors are early, so both $\delta$ are negative.  The
@@ -893,8 +893,8 @@ tilt: determine $\delta_1$, $\delta_2$ properly from a tilt change (the
 
 \textbf{Consequences.}  The gain of the reading is no longer reduced by
 $\cos\delta$ ($0.6\,\%$ for $S_1$, $1.3\,\%$ for $S_2$ with the defaults), so a
-sensitivity calibrated before this change is off by that amount (the
-sensitivity is to be redone anyway, Section~13.3).  The zero level is not
+$k$ calibrated before this change is off by that amount ($k$ is to be
+redone anyway, Section~13.3).  The zero level is not
 affected in principle, but the static quadrature offset of $\underline{u}$
 leaks into the in-phase reading differently after the rotation, so the zero
 calibration has to be repeated as well.  The change of the EEPROM layout
@@ -1315,9 +1315,9 @@ The original firmware evaluated a complex division per sensor:
   \qquad \text{residual} = \operatorname{Im}\underline{x},
   \label{eq:ratio}
 \end{equation}
-with $k$ a real constant (attenuator $\times$ gain, both software
-settings) that brings $\underline{S}$ to the scale of $\underline{A}$ and
-$\underline{B}$.  The output is $\text{delta}=2\,d_0\,(\operatorname{Re}\underline{x}-\tfrac12)-\text{zero}$,
+with $k$ a constant (one software setting per sensor, since fw 0.10.67 no longer
+split into attenuator and gain) that brings $\underline{S}$ to the scale of
+$\underline{A}$ and $\underline{B}$.  The output is $\text{delta}=2\,d_0\,(\operatorname{Re}\underline{x}-\tfrac12)-\text{zero}$,
 where $d_0$ (built from the nominal sensitivity and a per-sensor calibration
 factor) and the zero offset are calibration constants.
 
@@ -1543,12 +1543,19 @@ the networks and PGA settings (Sections~7, 9, 10),
 and, because the two paths delay the signal differently (S path
 $\SI{2.6}{\degree}$, A/B path $\SI{23.7}{\degree}$ plus the sensor's own
 delay, Section~9), $k$ is in fact complex, $|k|\,e^{\mathrm{j}\delta}$ with
-$\delta$ of order $\SI{10}{\degree}$ to $\SI{20}{\degree}$.  The firmware uses a
-real $k$ = attenuator $3.000\times$ gain $160$ $=480$: a nominal attenuator
-of 3 (in reality the A/B network attenuates by $1/0.212=4.7$ at $f_0$) and an
-assumed external gain of 10 (there is none; the S network has a gain of $0.9$)
-times the PGA of 16.  The factor between the two magnitudes is $7.0$, the same
-as the empirical sensitivity correction found earlier with a paper-shim test.
+$\delta$ of order $\SI{10}{\degree}$ to $\SI{20}{\degree}$.  Up to fw 0.10.66 the
+firmware used a real $k$ = attenuator $3.000\times$ gain $160$ $=480$: a nominal
+attenuator of 3 (in reality the A/B network attenuates by $1/0.212=4.7$ at
+$f_0$) and an assumed external gain of 10 (there is none; the S network has a
+gain of $0.9$) times the PGA of 16.  The factor between that and the
+network-derived magnitude is $7.0$, the same as the empirical sensitivity
+correction found earlier with a paper-shim test.  Since fw 0.10.67 $|k|$ is
+simply one empirical number per sensor with no further interpretation; since
+fw 0.10.68 it is stated and stored for a PGA gain of~1 (the firmware divides
+$\underline{S}$ by the PGA first); and since fw 0.10.69 it is the sensitivity
+$k$ of Section~13.3 (default 0.0213 per \si{\milli\metre\per\metre}, derived there
+from the nominal sensor sensitivity), the separate $d_0$ and sensitivity constants
+having been removed.
 
 This is harmless for the tilt term, because $d_0$ compensates it, but it
 matters for the imbalance:
@@ -1711,7 +1718,7 @@ records what was changed.  The ``fix $k$'' parts are still open.}  Up to fw
 \begin{equation}
   \underline{x} = \frac{\underline{S}/k - \underline{B}}{\underline{A}-\underline{B}},
   \qquad \text{tilt} = 2\,d_0\bigl(\operatorname{Re}\underline{x}-\tfrac12\bigr) - \text{zero},
-  \qquad k = \text{attenuator}\times\text{gain} = 3\times160 = 480 .
+  \qquad k = 3\times160 = 480\ \text{(attenuator times gain, until fw 0.10.66)} .
 \end{equation}
 Expanding, $\underline{x}-\tfrac12 = \underline{S}/(k(\underline{A}-\underline{B})) + \underline{z}$
 with $\underline{z}=-(\underline{A}+\underline{B})/(2(\underline{A}-\underline{B}))$
@@ -1752,7 +1759,8 @@ domain, needed so that $\underline{S}/k$ is on the same scale as $\underline{A}$
 $\underline{B}$.  It has a magnitude and a phase.
 \begin{itemize}
   \item \emph{Magnitude.}  The firmware value $480$ was built from a nominal
-        attenuator of 3 and an assumed external gain of 10 times the PGA of 16.  The
+        attenuator of 3 and an assumed external gain of 10 times the PGA of 16 (since
+        fw 0.10.67 simply stored as one number $|k|$ per sensor, see Section~13.3).  The
         networks give about $68$ on REV~B (and about $47$ with the planned REV~C
         network, Section~14).  The effect depends on whether the B term is kept:
         with the B term, $k$ decides how much of a real imbalance is cancelled
@@ -1784,7 +1792,7 @@ Drop the B term & remove $-\underline{B}$ in the numerator
 Complex $k$ (phase) & rotate $\underline{S}$ by $-\delta_{1,2}$
   & small scale change, cleaner diagnostics
   & phase constants; sensitivity \\
-$k$ magnitude & set gain so that attenuator$\times$gain $=k_{\mathrm{phys}}$
+$k$ magnitude & set $|k|$ to $k_{\mathrm{phys}}$ (not needed: $|k|$ is empirical)
   & none (with the B term dropped), absorbed by $d_0$
   & none \\
 \bottomrule
@@ -1848,40 +1856,73 @@ $10^{-5}$ of $0.5$).
 \end{itemize}
 
 \subsection{From ratio to displacement}
+\label{sec:ratio2disp}
 
-For each sensor the batch gives $\underline{x}'=\underline{S}/(k(\underline{A}-\underline{B}))$
-(Section~12; fw 0.10.62 and later), and
+\textbf{Calibration model (fw 0.10.69).}  Per sensor the batch gives the
+complex number $\underline{u}=\underline{S}/(\mathrm{PGA}\cdot\underline{D})$
+with $\underline{D}=\underline{A}-\underline{B}$, rotated by the phase
+calibration (Section~9.1) to $\underline{x}=\underline{u}\,e^{-\mathrm{j}\delta}$.
+The in-phase part $r=\operatorname{Re}\underline{x}$ is a dimensionless ratio;
+the quadrature part is the residual.  The tilt is
 \begin{equation}
-  \text{delta} = 2\,d_0\,\operatorname{Re}\underline{x}' - \text{zero},
-  \qquad \text{residual} = \operatorname{Im}\underline{x}' .
+  \text{tilt}\ [\si{\milli\metre\per\metre}]
+  = \frac{r-\text{zero}}{k},
+  \qquad \text{residual} = \operatorname{Im}\underline{x}.
+  \label{eq:tilt}
 \end{equation}
-(Earlier firmware subtracted $\underline{B}/(\underline{A}-\underline{B})-\tfrac12$ as well;
-see Section~12.8.)
-The result is in the project's convention of $\si{\milli\metre\per\metre}$.
-The calibration constants are stored per instrument in EEPROM:
+There are exactly two constants per sensor besides the phase and the sign:
 \begin{center}
 \small
-\begin{tabular}{@{}p{2.7cm}p{4.3cm}p{7.2cm}@{}}
+\begin{tabular}{@{}p{2.6cm}p{2.6cm}p{8.6cm}@{}}
 \toprule
 Constant & Default & Meaning \\
 \midrule
-attenuator & 3.000 & part of $k$: A/B attenuation (real network: 4.7 at $f_0$) \\
-gain (per sensor) & 160 & rest of $k$: assumed $10\times$ (none exists) times PGA 16 \\
-$d_0$ theoretical & 439\,mm ($S_1$), 495\,mm ($S_2$) & scale from the Wyler nominal \SI{20}{\micro\volt}/(\si{\micro\metre\per\metre}) \\
-sensitivity & 20 nominal; 7.49 ($S_1$), 8.76 ($S_2$) measured & \si{\micro\volt}/(\si{\micro\metre\per\metre}); $d_0^{\mathrm{eff}} = d_0\cdot 20/\text{sensitivity}$ \\
-zero offset & 0 & per sensor, in the same theoretical domain as $d_0$ \\
-sign (invert) & off & per sensor, applied to the final value \\
+$k$ (sensitivity) & 0.0213 per \si{\milli\metre\per\metre}, stored as 21300 ($\times10^{-6}$, integer)
+  & Empirical sensitivity: the in-phase ratio $r$ per \si{\milli\metre\per\metre}, \emph{stated
+  for a PGA gain of~1}.  The firmware divides $\underline{S}$ by the PGA of the channel
+  (16 now, defined once in \texttt{drv\_ads131m04.h}), so $k$ does not change when the PGA
+  is changed.  On-board attenuation, filtering and the instrument's gain are all folded
+  in, with no further interpretation. \\
+zero & 0 ppm & Value of $r$ at level, in ppm of the ratio (integer).  It lives in the
+  $r$ domain, independent of $k$: recalibrating $k$ does not move the level point, so a
+  flip calibration (Section~13.7) stays valid. \\
+sign (invert) & off & Per sensor, applied to the final value. \\
 \bottomrule
 \end{tabular}
 \end{center}
-The measured sensitivities are lower than the nominal one.  Note that they
-were obtained by comparing against the diagnostic amplitudes, whose scale was
-a factor of two above the datasheet LSB until it was fixed on 2026-10-06
-(Section~7); a sensitivity calibrated against those values is therefore off
-by that factor and should be redone.  The zero offset is stored in the domain of the nominal
-sensitivity, so a later change of the sensitivity does not invalidate an
-earlier zero calibration.  The differential $S_1-S_2$ is formed after the
-sign flips.
+The older constants (a shared attenuator, a per-sensor gain, a theoretical $d_0$
+and a ``sensitivity'' in \si{\micro\volt}/(\si{\micro\metre\per\metre}), with the
+zero stored in a domain that scaled with them) are gone: they all multiplied the
+same single number.  The differential $S_1-S_2$ is formed after the sign flips.
+
+\textbf{Default value of $k$ from the nominal sensitivity.}  The default is not
+a measurement but follows from the Wyler figure and the network gains.  The
+sensor output is $\underline{V}_S=\kappa\tau\underline{V}_A$ with
+$\kappa=\SI{20}{\micro\volt}/\SI{2}{\volt}=10^{-5}$ per \si{\micro\metre\per\metre}
+(Section~8); since $\underline{B}=-\underline{A}$, $\underline{D}=2\underline{A}$ and
+at the sensor $S/D=\kappa\tau/2=0.5\cdot10^{-5}$ per \si{\micro\metre\per\metre},
+i.e.\ $0.005$ per \si{\milli\metre\per\metre}.  In the ADC the sensor path has the
+network gain $0.903$ (Section~9) and the A/B path $0.212$ (Section~7), so
+\begin{equation}
+  k = \frac{0.903}{0.212}\cdot 0.005\ \text{per}\ \si{\milli\metre\per\metre}
+    = 4.26\cdot0.005 = 0.0213\quad(\text{PGA }1).
+\end{equation}
+At PGA~16, as now used, the ratio in the ADC codes is $16\times$ this,
+$0.341$ per \si{\milli\metre\per\metre}: $|\underline{S}|=0.68\,|\underline{A}|$ at
+\SI{1}{\milli\metre\per\metre}.  The planned REV~C networks (Section~14) give
+$k\approx0.0147$ at PGA~1.
+
+\textbf{Comparison with the first calibrations.}  The two instruments were calibrated
+against a known tilt on 2026-09-29, using the older constants.  Converted to the
+model above, those calibrations correspond to $k\approx0.013$ ($S_1$) and
+$0.013$ ($S_2$) at PGA~1, i.e.\ about $60\,\%$ of the nominal $0.0213$: the sensors
+deliver about \SI{12}{\micro\volt} per \si{\micro\metre\per\metre} instead of the
+nominal 20, if the network gains are right.  Candidate causes (not verified):
+loading of the exciters by the sensor, a different definition of the quoted supply
+(per exciter or differential), the midpoint leak of the sensor, and sensor
+tolerance.  The earlier ``7.5 and 8.8 instead of 20'' overstated the deficit,
+because it was combined with a wrong scale of 480 (Section~12.5).  Calibrate $k$
+against a known tilt; the default is only the starting point.
 
 \subsection{Batch quality flag}
 
@@ -1959,13 +2000,25 @@ the zero calibration has to be repeated.  The first cycle after the start of
 the acquisition can be corrupt (stale conversion) and should not enter a
 calibration or a precision measurement (see Section~15).
 
+\textbf{Per sensor or both (fw 0.10.70).}  A flip calibration covers the sensors
+selected for the run: $S_1$ only, $S_2$ only, or both.  The sensor not selected
+keeps its stored zero (both are still averaged during the run, but only the
+selected zeros are written).  Over the API the step-1 command
+(Commands 0x06, action 1) takes an optional second payload byte, the sensor mask
+(bit 0 = $S_1$, bit 1 = $S_2$; default and 3 = both; 0 is rejected); step 2
+continues the sensors of step 1, and the status resource (Raw data 0x03) reports
+the mask of the current run.  On the instrument the SETTINGS screen has three
+rows: ``Zero cal both'', ``Zero cal S1'' and ``Zero cal S2''.  Pressing the row of
+the run in progress performs step 2; pressing another row after step 1 restarts
+with that row's sensors.
+
 \subsection{Differential zero (side-by-side), independent of the flip}
 
 \textbf{Status: requirement and proposed routine; not implemented.}  The flip
 calibration above sets the \emph{absolute} level of each sensor: it answers
 ``what reading means level''.  It is needed once per sensor and is
-independent of the sensitivity (the zero is stored in the nominal-sensitivity
-domain, so a gain change moves neither the stored zero nor the level point).
+independent of the sensitivity (the zero is stored on the ratio $r$, ppm, which does
+not contain $k$, so a change of $k$ moves neither the stored zero nor the level point).
 It is a separate question whether two sensors standing side by side on the
 same surface agree.  Even directly after a flip they typically differ by a
 small amount (of the order of \SI{5}{\micro\metre}), because each flip has its
@@ -1991,9 +2044,8 @@ difference is zeroed.
 \textbf{Independence.}  The two calibrations act on orthogonal combinations:
 the flip fixes each sensor's absolute level (the sum), the differential zero
 fixes only $r_1-r_2$ and leaves the sum untouched.  Neither needs a new
-constant: the differential zero is written into the existing per-sensor zero
-offsets, in the nominal-sensitivity domain like the flip result, so it is
-equally independent of the gain.  It must be applied \emph{after} a flip
+constant: the differential zero is written into the existing per-sensor zeros
+(ppm of the ratio, like the flip result), so it is equally independent of $k$.  It must be applied \emph{after} a flip
 (a new flip overwrites the zero of that sensor and with it the difference),
 and repeated whenever either flip is repeated.  The routine should refuse to
 run if the readings are unstable (for example a large pendulum amplitude, a
@@ -2556,11 +2608,13 @@ Item & Detail \\
 Diagnostic amplitude scale (Sec.\,7) &
 \textbf{Fixed 2026-10-06:} \texttt{phasor\_peak\_mv} used $2400/\text{PGA}/2^{23}$,
 twice the datasheet LSB $2.4\,\mathrm{V}/(\text{PGA}\cdot2^{24})$.  Sensitivities
-calibrated against the old diagnostic values must be redone. \\
+calibrated against the old diagnostic values must be redone ($k$ replaced them in fw 0.10.69). \\
 $k$ (Sec.\,12.5) &
-Firmware $k=480$ (attenuator $3\times$ gain 160); network-derived
-$k\approx68$ (magnitude), and complex.  Affects the weight of the imbalance
-term. \\
+$k$ is one empirical sensitivity per sensor, stated for PGA~1 (default 0.0213
+per \si{\milli\metre\per\metre}, Section~13.3; the attenuator, gain, $d_0$ and
+sensitivity constants were merged into it by fw 0.10.69) and the phase is a separate constant.  The
+default is derived from the nominal sensor sensitivity and the network gains
+(Section~13.3); a calibration against a known tilt replaces it. \\
 Zero calibration (Sec.\,13.7) &
 \textbf{To redo.}  $\lambda=0$ (drop the $-\underline{B}$ term) has been in
 the firmware since 0.10.62; the stored zero offsets still contain about
@@ -2600,9 +2654,11 @@ Harmonics on $S_1$/$S_2$ (Sec.\,11.4) &
 $|\underline{D}|$ drift (Sec.\,12.7) &
 About 160\,ppm in 74\,min (906\,ppm in 17.5\,h): excitation or path drift?
 A constant-tilt test is needed. \\
-Sensitivity (Sec.\,13.3) &
-Measured $7.5$ and $8.8$ (firmware units) against $20$ nominal; absolute
-meaning open because of the scale factor above. \\
+Sensitivity $k$ (Sec.\,13.3) &
+Default 0.0213 per \si{\milli\metre\per\metre} at PGA~1 (nominal).  The 2026-09-29
+calibrations correspond to about 0.013, i.e.\ the sensors give about 60\,\% of the
+nominal signal; cause open.  To be recalibrated against a known tilt (also because of
+the diagnostic scale fix and the phase rotation). \\
 Excitation DC and headroom (Sec.\,6) &
 Residual offset about $\SI{-0.3}{\volt}$ on ExciterA and headroom of about
 $\SI{3.5}{\volt}$ against the AD826's $\pm3.3$ to $\pm\SI{3.8}{\volt}$ swing;

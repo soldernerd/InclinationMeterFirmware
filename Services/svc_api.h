@@ -187,7 +187,7 @@ typedef enum {
  *   STM32_Programmer_CLI -c port=USB1 -w fw.hex -ob nSWBOOT0=1 nBOOT0=1 -v -rst
  * (or PythonTestCode/dfu_flash.ps1). See HAL_App/hal_dfu.h. */
 #define API2_RES_CMD_REBOOT_DFU       0x05U
-/* 0x06 Zero calibration — 1-byte payload, the classic 180-degree
+/* 0x06 Zero calibration — 1- or 2-byte payload, the classic 180-degree
  * reversal test (Config/config.h's "Displacement zero calibration"
  * comment has the derivation):
  *   0x00 cancel — abort an in-progress run, no-op if already idle.
@@ -195,9 +195,12 @@ typedef enum {
  *        DISPLACEMENT_ZERO_CAL_SAMPLES batches at the current
  *        orientation. Requires the demod already running (Commands
  *        API2_RES_CMD_DISPLACEMENT) — BUSY_RESOURCE otherwise.
+ *        Optional 2nd payload byte (2026-10-06): sensor mask, bit 0 = S1,
+ *        bit 1 = S2 (default and 0x03 = both; 0 is INVALID_PARAMETER). Only
+ *        the selected sensors are calibrated; the other keeps its zero.
  *   0x02 step 2 — after physically rotating the instrument 180 degrees,
  *        EXECUTE this. Same averaging at the new orientation, then
- *        computes and PERSISTS new disp_s1/s2_zero_offset_um values to
+ *        computes and PERSISTS new disp_s1/s2_zero_ppm values (of the selected sensors) to
  *        this instrument's own EEPROM (Calibrations 0x2, resources
  *        0x03/0x06) — BUSY_RESOURCE if step 1 hasn't finished yet.
  * Each EXECUTE just starts/cancels a step and acks immediately — the
@@ -452,21 +455,14 @@ typedef enum {
  * DEFAULT_DISP_S1_D0_THEORETICAL_UM comment for the full derivation. Gaps
  * stay so 0x00/0x01/0x03/0x04/0x06 keep their numbers, same convention
  * Settings (0x3) already uses for its own retired resources. */
-#define API2_RES_CALIB_DISP_ATTEN_MILLI        0x00U   /* shared A/B attenuator, x1000 */
-#define API2_RES_CALIB_DISP_S1_GAIN_MILLI      0x01U   /* S1 amplifier gain, x1000 */
+/* 0x00 retired 2026-10-06 (shared A/B attenuator; folded into |k|) */
+#define API2_RES_CALIB_DISP_S1_K_MICRO         0x01U   /* S1 k at PGA 1, x1e-6 per (mm/m); tilt = (r - zero)/k (2026-10-06 redesign) */
 /* 0x02 retired (disp_s1_d0_um) */
-#define API2_RES_CALIB_DISP_S1_ZERO_OFFSET_UM  0x03U   /* S1 zero calibration, um, signed --
-                                                           cal_mult-independent theoretical
-                                                           domain since 2026-09-29, see
-                                                           system_state.h's field comment */
-#define API2_RES_CALIB_DISP_S2_GAIN_MILLI      0x04U   /* S2 amplifier gain, x1000 */
+#define API2_RES_CALIB_DISP_S1_ZERO_PPM        0x03U   /* S1 zero, ppm of the ratio r, signed -- k-independent (2026-10-06 redesign) */
+#define API2_RES_CALIB_DISP_S2_K_MICRO         0x04U   /* S2 k at PGA 1, x1e-6 per (mm/m) */
 /* 0x05 retired (disp_s2_d0_um) */
-#define API2_RES_CALIB_DISP_S2_ZERO_OFFSET_UM  0x06U   /* S2 zero calibration, um, signed -- same
-                                                           theoretical domain as 0x03 */
-#define API2_RES_CALIB_DISP_S1_D0_THEORETICAL_UM 0x07U   /* S1 Wyler-derived baseline, um -- fixed anchor, not meant to be tuned casually */
-#define API2_RES_CALIB_DISP_S1_SENSITIVITY_UV_PER_UM_MILLI  0x08U   /* S1 real measured sensitivity, uV per 0.001mm/m, x1000 -- compare directly against the 20uV nominal spec (2026-09-29, was a bare "CAL_MULT" ratio) */
-#define API2_RES_CALIB_DISP_S2_D0_THEORETICAL_UM 0x09U   /* S2 Wyler-derived baseline, um */
-#define API2_RES_CALIB_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI  0x0AU   /* S2 real measured sensitivity, uV per 0.001mm/m, x1000 */
+#define API2_RES_CALIB_DISP_S2_ZERO_PPM        0x06U   /* S2 zero, ppm of the ratio r, signed */
+/* 0x07..0x0A retired 2026-10-06 (d0_theoretical, sensitivity: folded into k) */
 /* Sign flip on the FINAL reported reading (2026-09-29) -- 0=normal,
  * 1=inverted. Deliberately separate from the sensitivity's sign so
  * toggling it never disturbs the sensor's existing zero-cal, unlike a
@@ -598,7 +594,9 @@ typedef enum {
  *   u16 progress  (samples averaged so far in the CURRENT step, 0 while
  *                   idle or between steps)
  *   u16 target    (DISPLACEMENT_ZERO_CAL_SAMPLES, so a host doesn't need
- *                   to hardcode it) */
+ *                   to hardcode it)
+ *   u8  sensor_mask (2026-10-06: sensors of the current run, bit 0 = S1,
+ *                   bit 1 = S2) */
 #define API2_RES_RAW_ZERO_CAL_STATUS    0x03U
 /* 0x04 = triggered precision-measurement progress/result (Commands 0x07,
  * see its comment for the full procedure). GET, no request payload.

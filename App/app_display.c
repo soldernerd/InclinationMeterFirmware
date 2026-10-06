@@ -551,7 +551,17 @@ static void draw_settings_screen(void)
                      m->label,
                      (long)setting_value_for_display((UiSettingIndex)i),
                      m->unit);
-        } else if ((UiSettingIndex)i == UI_SETTING_ZERO_CAL) {
+        } else if (((UiSettingIndex)i == UI_SETTING_ZERO_CAL
+                    || (UiSettingIndex)i == UI_SETTING_ZERO_CAL_S1
+                    || (UiSettingIndex)i == UI_SETTING_ZERO_CAL_S2)
+                   && svc_displacement_zero_cal_get_phase() != DISP_ZERO_CAL_IDLE
+                   && svc_displacement_zero_cal_get_mask() ==
+                      (((UiSettingIndex)i == UI_SETTING_ZERO_CAL_S1) ? ZERO_CAL_SENSOR_S1
+                       : ((UiSettingIndex)i == UI_SETTING_ZERO_CAL_S2) ? ZERO_CAL_SENSOR_S2
+                       : ZERO_CAL_SENSORS_BOTH)) {
+            /* Phase/progress shown on the row of the run in progress only
+             * (per-sensor calibration, 2026-10-06); the other zero-cal rows
+             * show the plain action prompt. */
             /* Live phase/progress, not the generic "RIGHT again to
              * confirm" suffix -- this row's meaning genuinely changes
              * between step 1 and step 2 (place vs. flip-and-confirm), and

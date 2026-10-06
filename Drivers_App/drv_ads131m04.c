@@ -78,7 +78,15 @@
  * 160000 via the API to match (both are runtime-settable EEPROM values,
  * not firmware constants, so that revert didn't need a rebuild on its
  * own -- only the register value here did). */
-#define GAIN1_REG_VALUE  0x4004U
+/* Derived from the PGA gains in drv_ads131m04.h (CH0 = S2 in bits [2:0],
+ * CH1 = B [6:4], CH2 = A [10:8], CH3 = S1 [14:12]); field value = log2(gain).
+ * 16/1/1/16 -> 0x4004. */
+#define PGA_FIELD(g) ((g) == 1U ? 0U : (g) == 2U ? 1U : (g) == 4U ? 2U : (g) == 8U ? 3U : \
+                      (g) == 16U ? 4U : (g) == 32U ? 5U : (g) == 64U ? 6U : 7U)
+#define GAIN1_REG_VALUE  ((uint16_t)(PGA_FIELD(ADS131M04_PGA_S2)        \
+                                   | (PGA_FIELD(ADS131M04_PGA_B)  << 4) \
+                                   | (PGA_FIELD(ADS131M04_PGA_A)  << 8) \
+                                   | (PGA_FIELD(ADS131M04_PGA_S1) << 12)))
 
 /* MODE register (datasheet Table 8-16): same as the 0510h reset default
  * except RESET (bit 10) cleared to 0 -- our own SYNC_RESET pulse below

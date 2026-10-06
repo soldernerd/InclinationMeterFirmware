@@ -1138,3 +1138,38 @@ phasor stream. EEPROM displacement page version 0x0009: the page is reseeded to 
 first boot (gains, sensitivities, zero offsets and invert flags must be set again; zero-cal and
 sensitivity are due for a redo anyway). The diagnostic phases (DIAGNOSTICS screen, API signal
 diagnostics) are now relative to D at 90 deg, 0..360. Build-verified only.
+
+## |k| as one empirical number (2026-10-06, fw 0.10.67)
+
+The separate shared attenuator constant (`disp_atten_milli`, API Calibrations 0x00) is removed.
+`disp_s1/s2_gain_milli` is now |k| of each sensor: one empirical scale between the sensor path and
+the A/B path, everything folded in (on-board attenuation and filtering, ADC PGA, the instrument's
+gain). Default 480.000 = the old attenuator 3.000 x gain 160.000, so readings are unchanged. EEPROM
+displacement page version 0x000A (layout change): the page is reseeded to defaults on the first boot.
+Build-verified only.
+
+## |k| stored for PGA = 1 (2026-10-06, fw 0.10.68)
+
+`disp_s1/s2_gain_milli` (|k|) is now stated and stored for PGA = 1; `svc_displacement.c` multiplies it by
+the sensor channel's PGA before dividing S (`load_sensor_cal()`). The per-channel PGA gains are defined
+once, in `drv_ads131m04.h` (`ADS131M04_PGA_S1/S2/A/B`); the ADC's GAIN1 register value and the diagnostic
+voltage scaling are derived from them. Default 30.000 (= the old 480 at PGA 16), so readings are unchanged.
+EEPROM displacement page version 0x000B (same layout, new meaning): reseeded on first boot. Build-verified only.
+
+## Calibration redesign: k and zero (2026-10-06, fw 0.10.69)
+
+Per sensor the calibration is now `tilt [mm/m] = (r - zero) / k`, with `r = Re[S/(PGA*D)*e^{-j delta}]`.
+`k` (`disp_s1/s2_k_micro`, int32, x1e-6 per mm/m, stated for PGA 1, default 21300 = 0.0213 derived from the
+nominal 20 uV/(um/m) and the network gains, see `docs/signal_processing.tex` Sec. 13.3) and `zero`
+(`disp_s1/s2_zero_ppm`, ppm of `r`, independent of `k`). Removed: the attenuator, `d0_theoretical`,
+`sensitivity` and the old `zero_offset_um`. API Calibrations 0x01/0x04 = k, 0x03/0x06 = zero (ppm),
+0x00 and 0x07..0x0A retired. Zero-cal converts its mm result to ppm via k. EEPROM displacement page
+version 0x000C: reseeded on first boot. Older Testing scripts that SET the retired resources need updating.
+Build-verified only.
+
+## Per-sensor zero calibration (2026-10-06, fw 0.10.70)
+
+The 180-degree flip calibration can run for S1 only, S2 only or both. `svc_displacement_zero_cal_step1_begin(mask)`
+(bit 0 = S1, bit 1 = S2); step 2 continues the same sensors; only the selected sensors' `disp_sN_zero_ppm` are
+written. API: Commands 0x06 step 1 accepts an optional 2nd byte (sensor mask, default 3), Raw data 0x03 appends
+`sensor_mask`. Instrument: SETTINGS rows "Zero cal both / S1 / S2". Build-verified only.
