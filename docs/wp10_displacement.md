@@ -1126,3 +1126,15 @@ resonance is suppressed rather than aliased (findings of `Testing/2026-09-30_bul
 API: `svc_displacement_get_display_delta1/2/diff_mm()`, `_display_seq()` (the redraw trigger),
 `_display_valid()` (false until the first window is full, ~0.5 s after a start). The API
 Measurements resources and the 8-batch boxcar are unchanged. Build-verified only.
+
+## Phase calibration, approach 2 (2026-10-06, fw 0.10.66)
+
+Implements `docs/signal_processing.tex` Sec. 9.1. Per sensor the phasor ratio `u = S/(|k| D)`
+(D = A - B, measured every batch) is rotated by `-delta` before the in-phase projection:
+`x_re = u_re cos(d) + u_im sin(d)`, `x_im = -u_re sin(d) + u_im cos(d)`. `delta` is stored as
+`disp_s1_phase_cdeg` / `disp_s2_phase_cdeg` (int16, centidegrees, negative = sensor early), API
+Calibrations 0x0D / 0x0E; defaults -6.00 / -9.15 deg from the principal axis of S/D over the 19 h
+phasor stream. EEPROM displacement page version 0x0009: the page is reseeded to defaults on the
+first boot (gains, sensitivities, zero offsets and invert flags must be set again; zero-cal and
+sensitivity are due for a redo anyway). The diagnostic phases (DIAGNOSTICS screen, API signal
+diagnostics) are now relative to D at 90 deg, 0..360. Build-verified only.

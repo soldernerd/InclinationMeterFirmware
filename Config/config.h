@@ -152,7 +152,7 @@
                                                          rest of the REV A sensor
                                                          stack; first REV B use of
                                                          this freed page. */
-#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0008  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x0009  /* 0x0002 (2026-09-26): DEFAULT_DISP_S1/
                                                          S2_D0_UM bumped 1000x (sensitivity
                                                          fix, see that comment) -- learned
                                                          from the battery-scale bug earlier
@@ -227,7 +227,16 @@
                                                          (2.669 read as "2.669 uV/um/m" is nowhere near
                                                          2669), so this bump forces a reset to the
                                                          nominal-spec default (20000) rather than
-                                                         reusing it under the new meaning. */
+                                                         reusing it under the new meaning.
+                                                         0x0009 (2026-10-06): disp_s1/s2_phase_cdeg
+                                                         ADDED (struct layout change) -- the phase
+                                                         calibration of docs/signal_processing.tex
+                                                         Sec. 9.1. Reseeds the whole displacement
+                                                         page to the DEFAULT_DISP_* values, so
+                                                         gains, sensitivities, zero offsets and the
+                                                         invert flags must be set again (the zero
+                                                         and sensitivity calibrations were due for a
+                                                         redo anyway). */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -689,6 +698,13 @@
 #define DEFAULT_DISP_S2_ZERO_OFFSET_UM         0
 #define DEFAULT_DISP_S1_INVERT                 0    /* 0=normal, 1=inverted -- see system_state.h */
 #define DEFAULT_DISP_S2_INVERT                 0
+/* Phase calibration defaults, centidegrees (docs/signal_processing.tex
+ * Sec. 9.1): principal axis of S/D over the 19 h phasor stream of
+ * 2026-10-04/05 (S1 -6.0 deg, S2 -9.15 deg). Estimates only -- determine
+ * them properly from a tilt change (Sec. 9.1) once the instrument is
+ * calibrated, via API Calibrations 0x0D / 0x0E. */
+#define DEFAULT_DISP_S1_PHASE_CDEG             (-600)
+#define DEFAULT_DISP_S2_PHASE_CDEG             (-915)
 
 /* Zero-offset clamp, output-mm domain (same domain as zero_offset_um
  * itself), so it scales with cal_mult -- raising cal_mult to compensate for

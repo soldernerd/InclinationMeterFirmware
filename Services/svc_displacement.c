@@ -562,6 +562,7 @@ static void push_output(uint16_t seq, float delta1, float residual1, float delta
  * is integer-only, matching every other calibration constant in this
  * codebase -- see config.h's DEFAULT_DISP_* comment. */
 typedef struct {
+    float phase_cos, phase_sin;  /* cos/sin of the phase calibration delta (system_state.h) */
     float gain;              /* S-channel amplifier gain */
     float d0_mm;              /* effective scale factor, mm -- see load_sensor_cal() */
     float zero_offset_mm;    /* displacement zero calibration, mm */
@@ -610,11 +611,27 @@ float svc_displacement_cal_mult_from_sensitivity(int32_t sensitivity_uv_per_um_m
     return (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M / sensitivity;
 }
 
+/* cos/sin of the phase calibration, cached per sensor: the angle changes
+ * only when a host SETs it, and sinf/cosf are soft-float library calls on
+ * this Cortex-M0+ that must not run every 24.6 ms batch. */
+typedef struct { int16_t cdeg; float c, s; bool valid; } PhaseCache;
+static PhaseCache s_phase_cache[2];
+
 static void load_sensor_cal(SensorCalF *out, int32_t gain_milli,
                              int32_t d0_theoretical_um, int32_t sensitivity_uv_per_um_milli,
-                             int32_t zero_offset_um)
+                             int32_t zero_offset_um, int16_t phase_cdeg, uint8_t sensor_idx)
 {
     float cal_mult = svc_displacement_cal_mult_from_sensitivity(sensitivity_uv_per_um_milli);
+    PhaseCache *pc = &s_phase_cache[sensor_idx];
+    if (!pc->valid || pc->cdeg != phase_cdeg) {
+        float delta_rad = (float)phase_cdeg * (3.14159265f / 18000.0f);
+        pc->c = cosf(delta_rad);
+        pc->s = sinf(delta_rad);
+        pc->cdeg  = phase_cdeg;
+        pc->valid = true;
+    }
+    out->phase_cos      = pc->c;
+    out->phase_sin      = pc->s;
     out->gain           = (float)gain_milli / 1000.0f;
     out->d0_mm          = ((float)d0_theoretical_um / 1000.0f) * cal_mult;
     out->zero_offset_mm = ((float)zero_offset_um / 1000.0f) * cal_mult;
@@ -670,8 +687,18 @@ static void compute_sensor_delta(float iS, float qS, const SensorCalF *cal,
 
     /* x' = num * (1/den) -- complex multiply by the precomputed shared
      * reciprocal, equivalent to num/den but without a division here. */
-    float x_re = num_re * shared->inv_den_re - num_im * shared->inv_den_im;
-    float x_im = num_re * shared->inv_den_im + num_im * shared->inv_den_re;
+    float u_re = num_re * shared->inv_den_re - num_im * shared->inv_den_im;
+    float u_im = num_re * shared->inv_den_im + num_im * shared->inv_den_re;
+
+    /* Phase calibration (2026-10-06, docs/signal_processing.tex Sec. 9.1,
+     * approach 2): u = S/(|k| D) lies along e^{j delta} for a real tilt, delta
+     * being the phase of the complex k (the sensor's delay relative to the
+     * run-time reference D = A - B, which is measured in every batch, so
+     * the sample-grid phase drops out). Rotate by -delta so the tilt is
+     * exactly in-phase: x = u * e^{-j delta}. The quadrature part of x is
+     * then a clean diagnostic. */
+    float x_re =  u_re * cal->phase_cos + u_im * cal->phase_sin;
+    float x_im = -u_re * cal->phase_sin + u_im * cal->phase_cos;
 
     /* No "- 0.5" here (2026-09-30, alongside the B-term drop above): that
      * offset existed because the OLD x = (S/k-B)/(A-B) sits near 0.5 at
@@ -891,10 +918,12 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     SensorCalF s1_cal, s2_cal;
     load_sensor_cal(&s1_cal, g_device_settings.disp_s1_gain_milli,
                      g_device_settings.disp_s1_d0_theoretical_um, g_device_settings.disp_s1_sensitivity_uv_per_um_milli,
-                     g_device_settings.disp_s1_zero_offset_um);
+                     g_device_settings.disp_s1_zero_offset_um,
+                     g_device_settings.disp_s1_phase_cdeg, 0U);
     load_sensor_cal(&s2_cal, g_device_settings.disp_s2_gain_milli,
                      g_device_settings.disp_s2_d0_theoretical_um, g_device_settings.disp_s2_sensitivity_uv_per_um_milli,
-                     g_device_settings.disp_s2_zero_offset_um);
+                     g_device_settings.disp_s2_zero_offset_um,
+                     g_device_settings.disp_s2_phase_cdeg, 1U);
 
     SharedCycleTerms shared = {
         .atten      = (float)g_device_settings.disp_atten_milli / 1000.0f,
@@ -1049,12 +1078,21 @@ void svc_displacement_get_phasors(DisplacementPhasors *out)
  * DISPLACEMENT_BATCH_CYCLES-cycle coherent batch sum is that many times
  * bigger -- see config.h's DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG comment
  * for the same derivation) then the ADS131M04's own LSB size
- * (2.4V/PGA/ADS131M04_CODE_MAX, drv_ads131m04.h). */
+ * (full scale +-1.2V/PGA at +-ADS131M04_CODE_MAX, i.e. 1 LSB = 2.4V/PGA/2^24,
+ * drv_ads131m04.h).
+ *
+ * FIXED 2026-10-06: this used 2400/PGA/CODE_MAX, i.e. twice the datasheet
+ * LSB (the 2.4 V span is +-1.2 V over 2^24 codes, not over 2^23). Found in
+ * the signal-processing note (docs/signal_processing.tex, Sec. 7: channel A
+ * read 1.25 V peak on a +-1.2 V range without clipping). It scaled the
+ * DIAGNOSTICS screen, the API signal-diagnostic RMS/P2P values and the
+ * "theoretical tilt" 2x too high; deltas and the sensitivity-based
+ * calibration do not use this function. */
 static float phasor_peak_mv(float i, float q, uint8_t pga)
 {
     float mag       = sqrtf(i * i + q * q);
     float peak_code = mag / (65536.0f * (float)DISPLACEMENT_BATCH_CYCLES);
-    return peak_code * (2400.0f / (float)pga) / (float)ADS131M04_CODE_MAX;
+    return peak_code * (1200.0f / (float)pga) / (float)ADS131M04_CODE_MAX;
 }
 
 void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
@@ -1068,11 +1106,18 @@ void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
      * Drivers_App/drv_ads131m04.c's GAIN1_REG_VALUE. */
     const uint8_t pga[4] = { 1U, 1U, 16U, 16U };
 
+    /* Phase reference: D = A - B at 90 deg (Sec. 9.1) -- subtract D's own
+     * angle, so the display no longer depends on the sample-grid phase. */
+    const float psi_d = atan2f(q[1] - q[0], i[1] - i[0]) * (180.0f / 3.14159265f);
+
     for (uint8_t ch = 0; ch < 4U; ++ch) {
         float peak_mv    = phasor_peak_mv(i[ch], q[ch], pga[ch]);
         out->rms_mv[ch]   = peak_mv * 0.70710678f;   /* /sqrt(2) */
         out->p2p_mv[ch]   = peak_mv * 2.0f;
-        out->phase_deg[ch] = atan2f(q[ch], i[ch]) * (180.0f / 3.14159265f);
+        float ph = atan2f(q[ch], i[ch]) * (180.0f / 3.14159265f) - psi_d + 90.0f;
+        while (ph < 0.0f)    { ph += 360.0f; }
+        while (ph >= 360.0f) { ph -= 360.0f; }
+        out->phase_deg[ch] = ph;
     }
 
     /* Wyler-handbook-only estimate -- see svc_displacement.h's comment.

@@ -474,6 +474,11 @@ typedef enum {
  * VERSION 0x0006 comment). */
 #define API2_RES_CALIB_DISP_S1_INVERT            0x0BU   /* S1: 0=normal, 1=inverted */
 #define API2_RES_CALIB_DISP_S2_INVERT            0x0CU   /* S2: 0=normal, 1=inverted */
+/* Phase calibration (2026-10-06, docs/signal_processing.tex Sec. 9.1): phase
+ * of each sensor's signal relative to D = A - B, centidegrees, signed
+ * (negative = earlier than ideal). */
+#define API2_RES_CALIB_DISP_S1_PHASE_CDEG        0x0DU
+#define API2_RES_CALIB_DISP_S2_PHASE_CDEG        0x0EU
 
 /* ---------------- Settings (0x3: GET, SET) ----------------
  * Resource IDs are stable wire values, not a dense sequence. 0x01 and

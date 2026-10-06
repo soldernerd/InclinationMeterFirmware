@@ -235,7 +235,11 @@ void svc_displacement_get_phasors(DisplacementPhasors *out);
 typedef struct {
     float rms_mv[4];         /* order: B, A, S1, S2 -- matches DisplacementPhasors */
     float p2p_mv[4];
-    float phase_deg[4];      /* atan2(q,i), degrees, -180..+180 */
+    float phase_deg[4];      /* atan2(q,i) rotated so that D = A - B sits at 90 deg
+                              * (2026-10-06, Sec. 9.1 of docs/signal_processing.tex),
+                              * degrees, 0..360: A ~ 90.5, B ~ 269.5, a sensor near
+                              * 90 (positive tilt) or 270 (negative). Independent of
+                              * the sample-grid alignment. */
     float theoretical_tilt1_mm_per_m;   /* from rms_mv[2] (S1) via the Wyler constant */
     float theoretical_tilt2_mm_per_m;   /* from rms_mv[3] (S2) */
 } DisplacementSignalDiag;

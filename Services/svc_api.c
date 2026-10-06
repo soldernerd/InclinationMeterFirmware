@@ -1564,6 +1564,10 @@ static const SettingsFieldDesc s_calibration_fields[] = {
      * API2_RES_CALIB_DISP_S1_INVERT comment. */
     SF(API2_RES_CALIB_DISP_S1_INVERT,            SF_UNSIGNED, disp_s1_invert,                0, 1),
     SF(API2_RES_CALIB_DISP_S2_INVERT,            SF_UNSIGNED, disp_s2_invert,                0, 1),
+    /* Phase calibration (2026-10-06): +-45 deg is far wider than any real
+     * sensor delay and catches a value typed in the wrong unit. */
+    SF(API2_RES_CALIB_DISP_S1_PHASE_CDEG,        SF_SIGNED,   disp_s1_phase_cdeg,        -4500, 4500),
+    SF(API2_RES_CALIB_DISP_S2_PHASE_CDEG,        SF_SIGNED,   disp_s2_phase_cdeg,        -4500, 4500),
 };
 #define CALIBRATION_FIELD_COUNT (sizeof(s_calibration_fields) / sizeof(s_calibration_fields[0]))
 

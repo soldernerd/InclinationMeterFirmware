@@ -193,6 +193,8 @@ static void fill_default_settings(DeviceSettings *s)
     s->disp_s2_zero_offset_um   = DEFAULT_DISP_S2_ZERO_OFFSET_UM;
     s->disp_s1_invert           = DEFAULT_DISP_S1_INVERT;
     s->disp_s2_invert           = DEFAULT_DISP_S2_INVERT;
+    s->disp_s1_phase_cdeg       = DEFAULT_DISP_S1_PHASE_CDEG;
+    s->disp_s2_phase_cdeg       = DEFAULT_DISP_S2_PHASE_CDEG;
 }
 
 /* ---------------- header helpers ---------------- */

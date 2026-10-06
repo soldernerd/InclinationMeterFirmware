@@ -112,7 +112,7 @@ OP_BULK_RAW_ADC_CANCEL    = opcode(CANCEL_BULK, CAT_BULK, BULK_RAW_ADC)
 ADC_BULK_SAMPLE_COUNT     = 6144   # must match Config/config.h
 ADC_BULK_CHUNK_SAMPLES    = 10     # must match Config/config.h
 ADC_BULK_BYTES_PER_SAMPLE = 12     # 4 ch x 3-byte packed signed LE
-ADC_RAW_LSB_V             = 2.4 / (1 << 23)   # 1 raw code = 2.4 V / 2^23 (gain 1)
+ADC_RAW_LSB_V             = 2.4 / (1 << 24)   # 1 raw code = 2.4 V / 2^24 (gain 1; FSR +-1.2 V = +-2^23 codes). Was 2^23 (2x too big) before 2026-10-06.
 
 # Bulk phasor log capture (category 0x8, resource 0x01) -- WP10 diagnostics,
 # added 2026-09-25. START_BULK has no request payload; chunks come back
@@ -166,6 +166,8 @@ CALIB_DISP_S2_D0_THEORETICAL_UM = 0x09   # u32, um
 CALIB_DISP_S2_SENSITIVITY_UV_PER_UM_MILLI = 0x0A   # u32, x1000
 CALIB_DISP_S1_INVERT            = 0x0B   # u8/u32, 0=normal 1=inverted -- sign flip on the final reading (2026-09-29)
 CALIB_DISP_S2_INVERT            = 0x0C   # u8/u32, 0=normal 1=inverted
+CALIB_DISP_S1_PHASE_CDEG         = 0x0D   # i16 in a 2-byte field, signed centidegrees -- phase of S1 relative to D=A-B (Sec. 9.1, 2026-10-06)
+CALIB_DISP_S2_PHASE_CDEG         = 0x0E   # same for S2
 DBG_LOG_STREAM = 0x00
 
 # Topic groups (CAT_TOPICS = 5) — GET or SUBSCRIBE (4-byte LE interval_ms payload)

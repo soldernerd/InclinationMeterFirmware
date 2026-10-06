@@ -132,6 +132,18 @@ typedef struct {
      * 2026-09-29 granite-plate session). */
     uint8_t disp_s1_invert;
     uint8_t disp_s2_invert;
+    /* Phase calibration (2026-10-06, docs/signal_processing.tex Sec. 9.1,
+     * approach 2): phase delta of each sensor's signal relative to the
+     * run-time reference D = A - B, in centidegrees (firmware angle
+     * convention: positive = the sensor signal is DELAYED relative to the
+     * ideal in-phase position, negative = earlier). This is the phase of
+     * the complex gain ratio k = |k| e^{j delta}; the sensor phasor is
+     * rotated by -delta before the division by D, so the reading is the
+     * exact in-phase component. No constants for A and B are needed (D is
+     * measured in every batch), and the absolute sample-grid phase drops
+     * out. */
+    int16_t disp_s1_phase_cdeg;
+    int16_t disp_s2_phase_cdeg;
     /* Explicit, not compiler-inserted: the struct's overall alignment (4,
      * from its int32_t members) would otherwise leave 2 silent trailing
      * pad bytes after disp_s2_invert, which svc_storage.c's SECTION_SPAN/

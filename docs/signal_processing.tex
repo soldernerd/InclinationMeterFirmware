@@ -44,7 +44,7 @@
 \title{Signal Processing of the Inclination Meter\\
        from DDS Excitation to Displacement Readout}
 \author{}
-\date{Draft --- work in progress (reflects firmware up to 0.10.65, 2026-10-05)}
+\date{Draft --- work in progress (reflects firmware up to 0.10.66, 2026-10-06)}
 
 \begin{document}
 
@@ -440,8 +440,14 @@ with $2400/\mathrm{PGA}/2^{23}$, twice the datasheet LSB.  With the
 datasheet LSB the measured peak is about \SI{0.63}{\volt}, \SI{9}{\percent}
 below the prediction above --- consistent within the unspecified DDS
 amplitude tolerance (the prediction uses the typical DDS amplitude).
-\textbf{Open:} the firmware scaling should be confirmed and, if wrong,
-corrected; the values in this note use the datasheet LSB.
+\textbf{Confirmed and fixed (2026-10-06):} the full scale of the ADC is
+$\pm1.2\,\mathrm{V}/\mathrm{PGA}$ for $\pm2^{23}$ codes, so one LSB is
+$2.4\,\mathrm{V}/(\mathrm{PGA}\cdot2^{24})$; the firmware used $2^{23}$ in
+the denominator of the \SI{2.4}{\volt} span.  \texttt{phasor\_peak\_mv} now uses
+$1200/\mathrm{PGA}/2^{23}$ (the same constant in the Python test tools was
+corrected too).  The error only affected the diagnostic amplitudes (the
+DIAGNOSTICS screen, the API signal diagnostics) and the ``theoretical
+tilt'' derived from them; the displacement readings do not use it.
 
 % ─────────────────────────────────────────────────────────────
 \section{The Sensor: Wyler Leveltronic A40 (Black Box)}
@@ -679,10 +685,12 @@ $178.94^{\circ}$, $178.96^{\circ}$ and $179.00^{\circ}$ (the absolute phase of $
 in the same runs was not stable, Section~10.5), so it behaves as a fixed property
 of the measurement paths.
 
-\subsection{Phase calibration (planned)}
+\subsection{Phase calibration}
+\label{sec:phasecal}
 
-\textbf{Status: approach decided (approach~2 below), not implemented.}  The
-firmware still uses a real $k$; this subsection records the intended design.
+\textbf{Status: approach~2 below is implemented in fw 0.10.66} (see
+``Implementation'' at the end of this subsection).  The default constants are
+estimates and the proper calibration is still to be done.
 
 \textbf{Two approaches were considered} (Table~\ref{tab:approaches}).
 \begin{table}[ht]
@@ -832,6 +840,66 @@ in the analog chain each phase shift arises.  The constants are valid as long
 as the filters and the sensor do not change; they must be re-determined
 after any rework of the input networks, or if the phases turn out to drift
 with temperature.
+
+\textbf{Implementation (fw 0.10.66).}  Per batch the firmware forms, as before,
+$\underline{u}=\underline{S}/(|k|\,\underline{D})$ with the real magnitude
+$|k|$ and the shared reciprocal of $\underline{D}$, and then rotates it by
+$-\delta$:
+\begin{equation}
+  x_{\mathrm{re}} = u_{\mathrm{re}}\cos\delta + u_{\mathrm{im}}\sin\delta,\qquad
+  x_{\mathrm{im}} = -u_{\mathrm{re}}\sin\delta + u_{\mathrm{im}}\cos\delta ,
+\end{equation}
+with the tilt $=2\,d_0\,x_{\mathrm{re}}-\text{zero}$ and the residual
+$x_{\mathrm{im}}$.  A sensor delayed by $\delta$ relative to the ideal has
+positive $\delta$, an earlier one negative (the firmware's angle convention,
+Section~11.1); both sensors are early, so both $\delta$ are negative.  The
+cost is one extra complex multiplication per sensor and batch
+($\cos\delta$, $\sin\delta$ are cached and only recomputed when the constant
+changes).  Nothing is needed for $A$ and $B$: $\underline{D}$ is measured in
+every batch, so the sample-grid phase drops out of the reading.  The
+diagnostic phases (DIAGNOSTICS screen, API signal diagnostics) are shown
+relative to $\underline{D}$ at $\SI{90}{\degree}$, in the range 0 to
+\SI{360}{\degree}.
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{0.27\textwidth}p{0.6\textwidth}@{}}
+\toprule
+Item & Value \\
+\midrule
+Constants & \texttt{disp\_s1\_phase\_cdeg}, \texttt{disp\_s2\_phase\_cdeg} (int16,
+  centidegrees, $\pm\SI{45}{\degree}$), EEPROM displacement page, version 0x0009 \\
+API & Calibrations (0x2), resources 0x0D ($S_1$) and 0x0E ($S_2$), GET/SET \\
+Defaults & $-\SI{6.00}{\degree}$ ($S_1$), $-\SI{9.15}{\degree}$ ($S_2$) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Defaults and check against the 19\,h phasor stream.}  The defaults
+are the principal axis of $\underline{u}$ (its direction of variation, which
+excludes the static offsets) over the 19\,h contiguous stream of 2026-10-04/05
+(2.8 million batches).  In that stream $A$ and $B$ lay at $90.50^{\circ}$ and
+$269.50^{\circ}$ relative to $\underline{D}$.  Rotating by the default
+constants leaves the in-phase variation unchanged and reduces the quadrature
+standard deviation of $x$ from $1.8\cdot10^{-4}$ to $1.1\cdot10^{-4}$ ($S_1$)
+and from $4.0\cdot10^{-4}$ to $0.9\cdot10^{-4}$ ($S_2$), against an in-phase
+standard deviation of $1.4\cdot10^{-3}$ and $2.5\cdot10^{-3}$.  The axis of
+$S_2$ is stable between 4\,h segments ($-9.1^{\circ}$ to $-10.4^{\circ}$); that
+of $S_1$ is less certain ($-7^{\circ}$ to $-8^{\circ}$ in most segments,
+$-6.0^{\circ}$ over everything), so $\pm1.5^{\circ}$ is the honest
+uncertainty.  These are estimates from drift and noise, not from a controlled
+tilt: determine $\delta_1$, $\delta_2$ properly from a tilt change (the
+180$^{\circ}$ reversal) and set them over the API.
+
+\textbf{Consequences.}  The gain of the reading is no longer reduced by
+$\cos\delta$ ($0.6\,\%$ for $S_1$, $1.3\,\%$ for $S_2$ with the defaults), so a
+sensitivity calibrated before this change is off by that amount (the
+sensitivity is to be redone anyway, Section~13.3).  The zero level is not
+affected in principle, but the static quadrature offset of $\underline{u}$
+leaks into the in-phase reading differently after the rotation, so the zero
+calibration has to be repeated as well.  The change of the EEPROM layout
+reseeds the whole displacement page to its defaults: gains, sensitivities,
+zero offsets and the invert flags have to be entered again.
 
 
 % ─────────────────────────────────────────────────────────────
@@ -1725,7 +1793,7 @@ $k$ magnitude & set gain so that attenuator$\times$gain $=k_{\mathrm{phys}}$
 Order of priority: dropping the B term (large effect), then the phase constants (small
 effect), then the numerical value of $k$ (cosmetic).  \textbf{Status: B term dropped
 (fw 0.10.62, zero calibration to be redone); complex $k$ (approach~2 of Section~9)
-and the value of $k$ not implemented.}
+implemented in fw 0.10.66; the value of $|k|$ not changed.}
 
 % ─────────────────────────────────────────────────────────────
 \section{Processing After the Ratio}
@@ -1806,10 +1874,11 @@ sign (invert) & off & per sensor, applied to the final value \\
 \bottomrule
 \end{tabular}
 \end{center}
-The measured sensitivities are lower than the nominal one; note that they
-were obtained with the diagnostic amplitude scale discussed in Section~7,
-which is a factor of two above the datasheet LSB, so their absolute meaning
-is open.  The zero offset is stored in the domain of the nominal
+The measured sensitivities are lower than the nominal one.  Note that they
+were obtained by comparing against the diagnostic amplitudes, whose scale was
+a factor of two above the datasheet LSB until it was fixed on 2026-10-06
+(Section~7); a sensitivity calibrated against those values is therefore off
+by that factor and should be redone.  The zero offset is stored in the domain of the nominal
 sensitivity, so a later change of the sensitivity does not invalidate an
 earlier zero calibration.  The differential $S_1-S_2$ is formed after the
 sign flips.
@@ -2485,9 +2554,9 @@ measurement; continuous phasor stream (fw 0.10.65).
 Item & Detail \\
 \midrule
 Diagnostic amplitude scale (Sec.\,7) &
-\texttt{phasor\_peak\_mv} converts codes with $2400/\text{PGA}/2^{23}$, twice
-the datasheet LSB $2.4\,\mathrm{V}/(\text{PGA}\cdot2^{24})$.  Values in this
-note use the datasheet LSB.  To be confirmed and corrected. \\
+\textbf{Fixed 2026-10-06:} \texttt{phasor\_peak\_mv} used $2400/\text{PGA}/2^{23}$,
+twice the datasheet LSB $2.4\,\mathrm{V}/(\text{PGA}\cdot2^{24})$.  Sensitivities
+calibrated against the old diagnostic values must be redone. \\
 $k$ (Sec.\,12.5) &
 Firmware $k=480$ (attenuator $3\times$ gain 160); network-derived
 $k\approx68$ (magnitude), and complex.  Affects the weight of the imbalance
@@ -2502,7 +2571,8 @@ Requirement: a routine that zeroes $S_1-S_2$ side by side (each sensor takes
 half the error, e.g.\ the observed $\approx\SI{5}{\micro\metre}$), independent
 of the flip calibration and of the gain.  Not implemented. \\
 Phase calibration (Sec.\,9) &
-Decided (approach~2), \textbf{not implemented}: run-time reference
+\textbf{Implemented in fw 0.10.66} (approach~2), with estimated defaults
+($-6.0^\circ$, $-9.15^\circ$), proper calibration still to do: run-time reference
 $\underline{D}=\underline{A}-\underline{B}$ at $90^\circ$ ($A\approx90.5^\circ$,
 $B\approx269.5^\circ$, confirmed in three runs), $S_1$/$S_2$ near $90^\circ$
 or $270^\circ$; only two EEPROM constants $\delta_1$, $\delta_2$ (phase of
