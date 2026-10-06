@@ -794,8 +794,10 @@ calibration, with the following design decisions.
   \item \textbf{Determination:} apply a clearly non-zero tilt in a known
         direction and choose $\delta$ so that $\underline{S}$ lands on the
         real axis with the sign given by that direction.  The best estimate
-        uses the \emph{change} of $\underline{S}$ between two tilt states (for
-        example the 180$^{\circ}$ reversal): the direction of the change
+        uses the \emph{change} of $\underline{S}$ between two clearly different tilt
+        states (a deliberate tilt step of at least about \SI{0.5}{\milli\metre\per\metre},
+        \emph{not} the zero calibration, which is done almost flat and is kept
+        separate): the direction of the change
         $\Delta\underline{S}$ is the direction of $\underline{k}\,\underline{D}$
         and is independent of any static offset (the quadrature zero offset
         and the leakage of the sensor midpoint, which are of order $10$ to
@@ -888,8 +890,9 @@ $S_2$ is stable between 4\,h segments ($-9.1^{\circ}$ to $-10.4^{\circ}$); that
 of $S_1$ is less certain ($-7^{\circ}$ to $-8^{\circ}$ in most segments,
 $-6.0^{\circ}$ over everything), so $\pm1.5^{\circ}$ is the honest
 uncertainty.  These are estimates from drift and noise, not from a controlled
-tilt: determine $\delta_1$, $\delta_2$ properly from a tilt change (the
-180$^{\circ}$ reversal) and set them over the API.
+tilt: determine $\delta_1$, $\delta_2$ properly from a deliberate tilt step and set
+them over the API (Calibrations 0x0D, 0x0E); there is no on-instrument routine, and
+the flip calibration does not touch them.
 
 \textbf{Consequences.}  The gain of the reading is no longer reduced by
 $\cos\delta$ ($0.6\,\%$ for $S_1$, $1.3\,\%$ for $S_2$ with the defaults), so a
@@ -2692,7 +2695,7 @@ sensors (a real input).  The clean window for the drift analysis is about
   \item A constant-tilt, constant-temperature run with the phasor stream
         (fw 0.10.65) to see whether $|\underline{D}|$ and the sensor phasors
         drift together (excitation) or apart (path).
-  \item A tilt reversal (or a known tilt step) with the stream to measure
+  \item A deliberate tilt step (not the almost flat zero calibration) with the stream to measure
         $\delta_1$, $\delta_2$ from the change of $\underline{S}$.
   \item Post-processing of the full 24\,h phasor stream when it is available:
         smoothing windows, Allan deviation, and the 7th/9th-harmonic question.
