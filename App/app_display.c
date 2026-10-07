@@ -164,6 +164,10 @@ typedef struct {
                               * rather than a live g_system_state read */
     UiScreen screen;
     uint8_t  settings_cursor;
+    uint8_t  settings_top;  /* first visible SETTINGS row -- display-only scroll
+                              * state, derived in snapshot_capture() from the
+                              * cursor (not part of g_ui_state, no redraw trigger
+                              * of its own: it only changes when the cursor does) */
     bool     settings_editing;
     int32_t  edit_value;
     uint32_t uptime_s;      /* only checked while UI_SCREEN_STATUS is
@@ -519,6 +523,14 @@ static void draw_status_screen(void)
 
 /* ---- SETTINGS screen ---- */
 
+/* Rows that fit between the title (y=36) and the footer hint (baseline y=200,
+ * glyph top ~190): rows are 18 px apart starting at baseline y=56, so row k sits at
+ * 56 + 18k; k=7 -> y=182, whose highlight box ends at y=187. More settings than
+ * this scroll (settings_top above). */
+#define SETTINGS_FIRST_ROW_Y   56
+#define SETTINGS_ROW_PITCH     18
+#define SETTINGS_VISIBLE_ROWS  8U
+
 static int32_t setting_value_for_display(UiSettingIndex i)
 {
     /* If editing the row at cursor, show the working edit_value;
@@ -537,10 +549,22 @@ static int32_t setting_value_for_display(UiSettingIndex i)
 static void draw_settings_screen(void)
 {
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 36, "Settings");
+    {
+        char title[24];
+        if (UI_SETTING_COUNT > SETTINGS_VISIBLE_ROWS) {
+            snprintf(title, sizeof title, "Settings  %u/%u",
+                     (unsigned)s_last.settings_cursor + 1U, (unsigned)UI_SETTING_COUNT);
+        } else {
+            snprintf(title, sizeof title, "Settings");
+        }
+        u8g2_DrawUTF8(&s_u8g2, 8, 36, title);
+    }
 
-    int y = 56;
-    for (uint8_t i = 0; i < UI_SETTING_COUNT; ++i) {
+    const uint8_t top = s_last.settings_top;
+    const uint8_t end = (UI_SETTING_COUNT < (uint8_t)(top + SETTINGS_VISIBLE_ROWS))
+                            ? (uint8_t)UI_SETTING_COUNT : (uint8_t)(top + SETTINGS_VISIBLE_ROWS);
+    int y = SETTINGS_FIRST_ROW_Y;
+    for (uint8_t i = top; i < end; ++i) {
         char line[64];
         const char *cursor = (i == s_last.settings_cursor) ? ">" : " ";
         const UiSettingMeta *m = app_ui_setting_meta((UiSettingIndex)i);
@@ -615,7 +639,16 @@ static void draw_settings_screen(void)
         } else {
             u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);
         }
-        y += 18;
+        y += SETTINGS_ROW_PITCH;
+    }
+
+    /* "more above / below" markers at the right edge of the first / last row. */
+    if (top > 0U) {
+        u8g2_DrawUTF8(&s_u8g2, LCD_WIDTH - 14, SETTINGS_FIRST_ROW_Y, "^");
+    }
+    if (end < UI_SETTING_COUNT) {
+        u8g2_DrawUTF8(&s_u8g2, LCD_WIDTH - 14,
+                      (u8g2_uint_t)(SETTINGS_FIRST_ROW_Y + SETTINGS_ROW_PITCH * (SETTINGS_VISIBLE_ROWS - 1U)), "v");
     }
 
     u8g2_DrawUTF8(&s_u8g2, 8, 200, "LEFT: screen   RIGHT: item/value   RIGHT press: enter");
@@ -770,6 +803,21 @@ static void snapshot_capture(void)
     s_last.battery_low      = g_system_state.battery_low;
     s_last.screen           = g_ui_state.current_screen;
     s_last.settings_cursor  = g_ui_state.settings_cursor;
+    {
+        /* Scroll window: keep the cursor inside the SETTINGS_VISIBLE_ROWS rows shown,
+         * moving the window only as far as needed. Done here, once per redraw, so
+         * every band of a frame renders the same window. */
+        uint8_t top = s_last.settings_top;
+        if (g_ui_state.settings_cursor < top) {
+            top = g_ui_state.settings_cursor;
+        } else if (g_ui_state.settings_cursor >= (uint8_t)(top + SETTINGS_VISIBLE_ROWS)) {
+            top = (uint8_t)(g_ui_state.settings_cursor - SETTINGS_VISIBLE_ROWS + 1U);
+        }
+        if (UI_SETTING_COUNT > SETTINGS_VISIBLE_ROWS && top > UI_SETTING_COUNT - SETTINGS_VISIBLE_ROWS) {
+            top = (uint8_t)(UI_SETTING_COUNT - SETTINGS_VISIBLE_ROWS);
+        }
+        s_last.settings_top = top;
+    }
     s_last.settings_editing = g_ui_state.settings_editing;
     s_last.edit_value       = g_ui_state.edit_value;
     s_last.uptime_s         = s_render_ms / 1000U;
