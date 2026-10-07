@@ -19,8 +19,15 @@ One flat CSV, one row per batch:
 
 Charging: the board charges on its own when it needs to. If it has been charging
 continuously for --max-charge-h hours (default 3), the script sends Commands 0x09
-(charge inhibit) and keeps charging off for the rest of the run; the inhibit is cleared
-again when the script exits normally. (It lives in RAM: a reboot also clears it.)
+(charge inhibit). The inhibit is lifted again when the (non-charging, so reliable) state of
+charge falls to --resume-soc percent (default 40), so the battery cannot run flat during a
+long run -- an unconditional inhibit let the 2026-10-05 run drain the battery until the
+board reset and the stream died. A new 3 h charging limit then applies. The inhibit is also
+cleared when the script exits normally (it lives in RAM: a reboot clears it too).
+
+Stall recovery: if no batch arrives for --stall-s seconds (e.g. the board reset), the script
+stops the demod, re-subscribes and re-applies the inhibit if one was active; the first batch
+after that has first_batch = 1 and `cycles` restarts from the device's cycle counter.
 
 Usage:
   python phasor_stream.py --duration-min 1                     # smoke test
@@ -51,6 +58,7 @@ OP_UNSUB = a.opcode(a.UNSUBSCRIBE, a.CAT_TOPICS, a.TOPIC_PHASOR_STREAM)
 OP_TEMP = a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP)
 OP_STATUS = a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_STATUS)
 OP_INHIBIT = a.opcode(a.EXECUTE, a.CAT_COMMANDS, 0x09)   # API2_RES_CMD_CHARGE_INHIBIT, payload 0/1
+OP_STOP = a.OP_CMD_SIGNAL_ANALYSIS                       # payload 0 = stop the displacement demod
 
 
 def find_port():
@@ -82,8 +90,14 @@ def main():
     ap.add_argument("--label", default="")
     ap.add_argument("--max-charge-h", type=float, default=3.0,
                     help="inhibit charging after this many hours of continuous charging (0 = never)")
+    ap.add_argument("--resume-soc", type=int, default=40,
+                    help="lift a charge inhibit again when the state of charge falls to this percent")
+    ap.add_argument("--stall-s", type=float, default=10.0,
+                    help="re-subscribe if no batch arrives for this many seconds (0 = off)")
     ap.add_argument("--keep-autopoweroff", action="store_true")
-    ap.add_argument("--restore", action="store_true", help="restart the displacement demod at the end")
+    ap.add_argument("--no-restore", action="store_true",
+                    help="leave the displacement demod stopped at the end (default: restart it, so the "
+                         "instrument goes back to measuring / showing readings)")
     args = ap.parse_args()
 
     out = args.out or os.path.join(HERE, "data", datetime.now().strftime("phasor_stream_%Y%m%d_%H%M%S.csv"))
@@ -125,7 +139,8 @@ def main():
         if saved_apo is not None:
             request(ser, reasm, setop, struct.pack("<H", saved_apo))
         sys.exit(f"SUBSCRIBE phasor stream refused: {a.STATUS.get(st, st)}")
-    reasm = a.Reassembler()   # drop anything buffered while waiting for the ack
+    # keep the SAME reassembler: request() may already have buffered the start of the next
+    # stream frame behind the ack; a fresh one would start mid-frame and report bad frames.
     t0 = time.time()
     t_end = t0 + args.duration_min * 60.0
     next_poll = 0.0
@@ -136,6 +151,8 @@ def main():
     cycles = 0
     charge_since = None       # host time the current continuous charging stretch began
     inhibited = False
+    last_row_t = time.time()  # host time of the last stream row (stall detection)
+    recoveries = 0
 
     try:
         while time.time() < t_end:
@@ -144,6 +161,17 @@ def main():
                 ser.write(a.build(OP_TEMP))
                 ser.write(a.build(OP_STATUS))
                 next_poll = now + args.poll_s
+            if args.stall_s > 0 and time.time() - last_row_t > args.stall_s:
+                recoveries += 1
+                print(f"  STALL: no batch for {time.time() - last_row_t:.0f} s at t={(time.time() - t0)/60:.1f}min "
+                      f"-> re-subscribing (recovery #{recoveries})", flush=True)
+                ser.write(a.build(OP_STOP, bytes([0])))      # a reset restarts the demod, which blocks the stream
+                time.sleep(0.3)
+                ser.write(a.build(OP_SUB, a.build_interval(50)))
+                if inhibited:
+                    ser.write(a.build(OP_INHIBIT, bytes([1])))   # a reset clears the inhibit
+                prev_seq = prev_frame = None                 # next batch starts a new segment (first_batch = 1)
+                last_row_t = time.time()                     # retry throttle
             chunk = ser.read(max(1, ser.in_waiting))
             if not chunk:
                 continue
@@ -170,11 +198,18 @@ def main():
                             ser.write(a.build(OP_INHIBIT, bytes([1])))
                             inhibited = True      # confirmed (or not) by the ack below
                             print(f"  charging for {args.max_charge_h} h: charge INHIBIT sent (soc {soc}%)", flush=True)
+                        elif inhibited and not chg and soc is not None and soc <= args.resume_soc:
+                            ser.write(a.build(OP_INHIBIT, bytes([0])))
+                            inhibited = False
+                            print(f"  soc {soc}% <= {args.resume_soc}%: charge inhibit LIFTED, charging allowed again", flush=True)
                     continue
                 if op == OP_INHIBIT:
                     print(f"  charge inhibit ack: {a.STATUS.get(status, status)}", flush=True)
                     if status != 0:
                         inhibited = False         # retry at the next poll
+                    continue
+                if op == OP_SUB and status != 0:
+                    print(f"  SUBSCRIBE refused: {a.STATUS.get(status, status)}", flush=True)
                     continue
                 if op != OP_SUB or status != 0 or len(data) < 2 + 34:
                     continue
@@ -203,6 +238,7 @@ def main():
                             "" if temp is None else temp, "" if soc is None else soc,
                             "" if chg is None else chg, "" if usb is None else usb, args.label])
                 rows += 1
+                last_row_t = time.time()
                 if rows % 400 == 0:
                     f.flush()
             t = time.time() - t0
@@ -229,7 +265,7 @@ def main():
         if saved_apo is not None:
             st, _ = request(ser, reasm, setop, struct.pack("<H", saved_apo))
             print(f"restore auto_poweroff_s = {saved_apo} [{a.STATUS.get(st, st)}]", flush=True)
-        if args.restore:
+        if not args.no_restore:
             st, _ = request(ser, reasm, a.OP_CMD_SIGNAL_ANALYSIS, bytes([1]))
             print("restart displacement demod ->", st, flush=True)
         ser.close()
