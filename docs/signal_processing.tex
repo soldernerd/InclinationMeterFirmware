@@ -1259,15 +1259,18 @@ of the CPU.)
 
 \textbf{Why 32 bits are enough.}  A position sum adds $N$ signed 24-bit codes,
 $|s_n|\le N\cdot2^{23}$, which fits a 32-bit signed integer for any
-$N\le256$ (checked at compile time against \texttt{DISPLACEMENT\_BATCH\_CYCLES}).
+$N\le256$ (checked at compile time).
 The bound is deterministic, so no further headroom is needed.  With the 64-cycle
 batch the worst case is $2^{29}$.
 
 \textbf{Batch level (integer, exact).}  When the 64th cycle is complete the 32
 sums are queued, and the task applies the weights once per batch.  The Q14
-weights are $\cos\theta n=\{16384,11585,0,-11585,-16384,-11585,0,11585\}$
-and $\sin\theta n=\{0,11585,16384,11585,0,-11585,-16384,-11585\}$, so by
-linearity
+weights for positions $n=0\ldots7$ are
+\begin{align*}
+  \cos\theta n &\to \{16384,\ 11585,\ 0,\ -11585,\ -16384,\ -11585,\ 0,\ 11585\},\\
+  \sin\theta n &\to \{0,\ 11585,\ 16384,\ 11585,\ 0,\ -11585,\ -16384,\ -11585\},
+\end{align*}
+so by linearity
 \begin{equation}
   I = 16384\,(s_0-s_4) + 11585\,(s_1-s_3-s_5+s_7),\qquad
   Q = 16384\,(s_2-s_6) + 11585\,(s_1+s_3-s_5-s_7),
@@ -1823,9 +1826,10 @@ and is started over the API (\texttt{Commands}, resource \texttt{0x01}).
 Stage & Unit & Rate & Notes \\
 \midrule
 ADC sample (all four channels) & 1 sample & \SI{20.83}{\kilo\hertz} & Section~10 \\
-Cycle & 8 samples & \SI{2.604}{\kilo\hertz} & counted only; samples summed per cycle position (32-bit) \\
-Batch & 64 cycles & \SI{40.7}{\hertz} & \SI{24.6}{\milli\second}; weights applied, ratio and delta computed here \\
+Cycle & 8 samples & \SI{2.604}{\kilo\hertz} & summed per position (32-bit) \\
+Batch & 64 cycles & \SI{40.7}{\hertz} & \SI{24.6}{\milli\second}; weights, ratio, delta \\
 Moving average & 8 batches & \SI{40.7}{\hertz} & \SI{197}{\milli\second} window \\
+Display value & 25 batches (Hann) & \SI{4.07}{\hertz} & LIVE screen, Sec.~13.5 \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1968,7 +1972,7 @@ frequencies; the contiguous phasor stream (Section~13.10) avoids this.
 
 The 8-batch boxcar of the next subsection cancels the Nyquist-folded part but
 has poor sidelobes elsewhere.  The raw-ADC analysis and the 19\,h contiguous
-phasor stream (\texttt{Testing/2026-09-30\_bulk\_adc\_30s\_interval/findings.md})
+phasor stream (\nolinkurl{Testing/2026-09-30_bulk_adc_30s_interval/findings.md})
 found that a smooth window over contiguous batches is the right tool: it
 needs no knowledge of the exact resonance frequency, and dropping individual
 batches does not work (see the quality flag above).  Choosing an integer number
@@ -2135,7 +2139,7 @@ the latest batch as a topic, a bulk capture of raw ADC samples, the phasor log
 \emph{continuous phasor stream} (Topic 0x05, resource 0x05) that pushes the
 phasors of \emph{every} 64-cycle batch with a sequence number, so a host can
 record a gapless \SI{40.7}{\hertz} series and detect dropped batches.
-\texttt{Testing/2026-10-04\_contiguous\_phasor\_capture/phasor\_stream.py} logs
+\nolinkurl{Testing/2026-10-04_contiguous_phasor_capture/phasor_stream.py} logs
 it to CSV.  The values are shown on the LIVE and diagnostic
 screens, and as the streaming and polling data used in the tests of this
 project.  The diagnostic amplitudes (RMS, phase, and the ``theoretical
