@@ -24,7 +24,7 @@ series of 64-cycle phasors. Questions this data should answer:
 
 ## Method
 
-`phasor_capture.py` stops the demod, then repeatedly runs the API Bulk phasor log
+`archive/phasor_capture.py` stops the demod, then repeatedly runs the API Bulk phasor log
 (`START_BULK`, category 0x8 / resource 0x01): 512 batches = 12.6 s contiguous per capture,
 transferred over the wired UART (ST-Link VCP; `--port auto`). Captures run back-to-back
 (or every `--interval-s`). One flat CSV, one row per batch, with `seq`, a `gap_cycles`
@@ -53,9 +53,9 @@ Keep the instrument on one screen (note which) -- the LIVE-screen redraw is know
 
 ## Files
 
-* `phasor_capture.py` -- the capture routine
+* `archive/phasor_capture.py` -- the capture routine
 * `first_look.py` -- first analysis (quality, spectrum, strategy comparison, graph)
-* `selftest_mock.py` -- hardware-free test of both (simulated device; its numbers mean nothing)
+* `archive/selftest_mock.py` -- hardware-free test of both (simulated device; its numbers mean nothing)
 * `data/` -- captures (to be created)
 
 ## Status
@@ -80,3 +80,6 @@ one frame per batch, ~1.75 kB/s on the wired UART). `phasor_stream.py` logs it:
   but the script inhibits it (Commands 0x09) after 3 h of continuous charging
   (`--max-charge-h`) and clears the inhibit when the script exits.
 * `data/` is git-ignored for this test (CSVs are large and not committed).
+
+
+> 2026-10-07: the firmware's one-shot Bulk phasor log (which `archive/phasor_capture.py` drives) was removed in fw 0.10.72; the continuous stream (`phasor_stream.py`) replaces it. The archived scripts need firmware <= 0.10.71.
