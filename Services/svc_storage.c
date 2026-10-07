@@ -4,6 +4,7 @@
 #include "config.h"
 #include "system_state.h"
 #include "hal_systick.h"
+#include "svc_log.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -40,6 +41,13 @@
  * the whole pending save. A stale/incomplete result is caught by the CRC
  * check on the next boot's load path and reseeded — not silently trusted. */
 #define STORAGE_WRITE_MAX_RETRIES  3U
+/* An async EEPROM operation (DMA + ACK polling, normally ~6 ms) that has not
+ * finished after this long is aborted and handled like a failed write (retry,
+ * then settings_save_failed). Without it a stuck I2C bus kept s_pending.active
+ * forever: every later save was refused and the state never cleared. */
+#define STORAGE_ASYNC_TIMEOUT_MS   100U
+static bool     s_busy_seen = false;
+static uint32_t s_busy_since_ms = 0U;
 
 /* ---------------- settings page table ---------------- */
 
@@ -424,8 +432,18 @@ void svc_storage_update(void)
         return;
     }
     if (drv_24lc256_is_busy()) {
-        return;     /* DMA or write-cycle poll still in flight */
+        if (!s_busy_seen) {
+            s_busy_seen = true;
+            s_busy_since_ms = hal_systick_get_ms();
+            return;
+        }
+        if (hal_systick_elapsed_ms(s_busy_since_ms) <= STORAGE_ASYNC_TIMEOUT_MS) {
+            return;     /* DMA or write-cycle poll still in flight */
+        }
+        svc_log(API2_LOG_WARN, "storage: EEPROM operation timed out -- aborted");
+        drv_24lc256_abort();   /* write_complete() is now false: falls into the retry/fail path below */
     }
+    s_busy_seen = false;
 
     if (s_pending.inflight_len != 0U) {
         /* A chunk write just finished — check the outcome before trusting
@@ -514,6 +532,11 @@ void svc_storage_init(void)
         uint8_t *dest = (uint8_t *)&g_device_settings + sec->offset;
         DrvStatus rc = load_section(sec, dest);
         if (rc != DRV_OK) {
+            /* Never silent: a reseed throws the stored calibration of this page away. */
+            svc_logf(API2_LOG_WARN, "storage: settings page %u reseeded to defaults (%s)",
+                     (unsigned)i,
+                     rc == DRV_ERR_NOT_READY ? "layout version changed" :
+                     rc == DRV_ERR_INVALID   ? "bad magic/CRC"           : "read failed");
             /* Persist the just-seeded default back to EEPROM so this
              * page is valid (magic/version/CRC all consistent) on the
              * next boot, matching the original single-page behavior —

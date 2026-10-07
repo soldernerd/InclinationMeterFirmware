@@ -1228,3 +1228,22 @@ API no longer refuses a subscribe while the demod runs (only while a raw-ADC bul
 logger `phasor_stream.py` no longer stops or restarts the measurement and needs fw >= 0.10.74 (0.10.73
 refuses the subscribe with BUSY_EXCLUSIVE while the demod runs). Build-verified only; not yet
 bench-tested (the 24 h run of 2026-10-07 was still using 0.10.73).
+
+## Cleanup after the code review (2026-10-07, fw 0.10.72)
+
+Removed: the output ring (`svc_displacement_pop`), the 8-batch moving average
+(`DISPLACEMENT_MA_SAMPLES`), the per-batch EWMA quality flag and the one-shot bulk phasor log
+(Bulk 0x8 / 0x01). Everything above that describes them is history. What replaces them:
+
+* `delta1/2_mm` (Measurements, LIVE screen) are the Hann-25 display values (raw batch value until
+  the first display window exists); the per-batch value is Topic 0x03.
+* `quality1/2_ok` on Topic 0x03 = "newest display window not doubtful" (`math_window`).
+* Quiet floor: only trusted once two independent 81-batch windows exist
+  (`math_window_floor_ready`, ~4 s). Before that nothing is flagged and a precision measurement
+  waits. If a sensor stays flagged for `DISPLACEMENT_QUALITY_RESEED_S` (600 s) the floor re-seeds.
+* The continuous phasor stream (Topic 0x5 / resource 0x05) is the gapless capture path;
+  `Testing/2026-10-04_contiguous_phasor_capture/archive/` holds the old bulk-log scripts (fw <= 0.10.71).
+* `svc_displacement_start()` is idempotent; displacement start/stop answers BUSY_EXCLUSIVE while a
+  bulk capture or the phasor stream runs. Batch ring is 16 deep.
+* Frames > 64 B are not sent over USB HID (dropped, counted, WARN logged) -- use UART/BLE for the
+  diagnostics topic and bulk transfers.

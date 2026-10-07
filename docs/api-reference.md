@@ -683,6 +683,10 @@ an active capture/transfer and frees the exclusivity slot immediately.
 `BUSY_EXCLUSIVE` if the demod is running or another bulk transfer is
 active.
 
+> **Removed 2026-10-07 (fw 0.10.72):** this resource now answers `UNKNOWN_RESOURCE`; use the
+> continuous phasor stream (Topic 0x5 / resource 0x05). `phasor_log_progress` in Raw data 0x7/0x02 is always 0.
+> The text below is kept for firmware <= 0.10.71.
+
 ### `0x8/0x01` — Phasor log capture  → START `0x5801`, CANCEL `0x6801`
 A longer-duration, decimated companion to `0x00`: 512 entries of the
 demod's batch-level phasors at every 2nd completed batch (~40.7 Hz
