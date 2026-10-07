@@ -186,17 +186,28 @@ float svc_displacement_get_delta2_mm_raw(void);
 float svc_displacement_get_delta_diff_mm(void);
 float svc_displacement_get_delta_diff_mm_raw(void);
 
-/* Display stream (2026-10-05): the same delta readings condensed to about
- * 4 Hz by a triangular window over 2*N-1 batches and decimation by N
- * (config.h's DISPLACEMENT_DISPLAY_DECIMATION comment). Meant for the local
- * display, not the API. display_seq() increments with every new value (and
- * wraps), so a consumer can redraw exactly when there is something new;
- * display_valid() is false from a (re)start until the first value is
- * ready (about 0.5 s), then true. Per-instrument sign flip applied as for
- * the getters above. */
+/* Display stream (2026-10-05, Hann window 2026-10-07): the same delta
+ * readings condensed to about 4 Hz by a Hann window over the newest
+ * DISPLACEMENT_DISPLAY_TAPS (25) contiguous batches, published every
+ * DISPLACEMENT_DISPLAY_DECIMATION-th batch (config.h has the reasoning).
+ * Meant for the local display, not the API. display_seq() increments with
+ * every new value (and wraps), so a consumer can redraw exactly when there is
+ * something new; display_valid() is false from a (re)start until the first
+ * value is ready (about 0.6 s), then true. Per-instrument sign flip applied as
+ * for the getters above.
+ *
+ * display_doubtful1/2() (2026-10-07): the value is shown either way, but this
+ * says whether its window looked disturbed -- the mean squared batch-to-batch
+ * step of Im(x) over the 25 batches exceeded DISPLACEMENT_QUALITY_K times the
+ * instrument's own quiet floor (Math/math_window.h). The LIVE screen puts a "!"
+ * next to a doubtful reading. doubtful_diff() = either sensor. Nothing is
+ * flagged until the floor is known (about 2 s after a start). */
 float    svc_displacement_get_display_delta1_mm(void);
 float    svc_displacement_get_display_delta2_mm(void);
 float    svc_displacement_get_display_delta_diff_mm(void);
+bool     svc_displacement_get_display_doubtful1(void);
+bool     svc_displacement_get_display_doubtful2(void);
+bool     svc_displacement_get_display_doubtful_diff(void);
 uint16_t svc_displacement_get_display_seq(void);
 bool     svc_displacement_get_display_valid(void);
 
@@ -497,32 +508,24 @@ bool svc_displacement_get_quality2_ok(void);
  * getters above). */
 bool svc_displacement_get_quality_diff_ok(void);
 
-/* --- Triggered precision measurement (2026-09-26) --- see Config/config.h's
- * DISPLACEMENT_PRECISION_TARGET_SAMPLES comment for the timing tradeoff.
- * API-driven (Commands API2_RES_CMD_PRECISION_MEASURE, Services/svc_api.c):
- * begin() arms averaging of up to DISPLACEMENT_PRECISION_TARGET_SAMPLES
- * quality-good batches PER SENSOR (svc_displacement_get_quality1/2_ok()
- * above), PLUS a third, differential (S1-S2) accumulator (2026-09-27) that
- * only counts a batch where BOTH sensors are quality-good on it
- * (svc_displacement_get_quality_diff_ok()) -- the headline result for the
- * differential measurement strategy docs/wp10_displacement.md's standard-
- * error analysis found necessary to reach the target repeatability, since
- * the original unit's own two supported configurations (one sensor
- * connected = absolute, both = differential) already anticipated this
- * being the dominant mode. Stops once ALL THREE (S1, S2, and the
- * differential) reach the target or DISPLACEMENT_PRECISION_TIMEOUT_MS
- * elapses, whichever comes first -- the differential count is always
- * <= min(count1, count2), so it's typically the last (and therefore
- * gating) one to reach target. Requires the demod already running and no
- * zero-cal in progress (DRV_ERR_NOT_READY otherwise -- the two averaging
- * consumers of the batch stream are mutually exclusive by design, same
- * reasoning as bulk capture vs. real-time demod). A fresh begin() while
- * already running restarts it; svc_displacement_stop() cancels it (same
- * "stale mid-run state is worse than starting over" reasoning zero-cal
- * uses). Unlike zero-cal, the result never touches EEPROM/settings --
- * it's a pure read-back, so there is no separate "consume" step: once
- * DISP_PRECISION_DONE, get_result() can be read repeatedly and stays
- * valid until the next begin(). */
+/* --- Triggered precision measurement (2026-09-26, redesigned 2026-10-07) ---
+ * see Config/config.h's "Triggered precision measurement" comment for the
+ * reasoning and the data behind it. API-driven (Commands
+ * API2_RES_CMD_PRECISION_MEASURE, Services/svc_api.c; right knob on LIVE).
+ * begin() starts the clock; after DISPLACEMENT_PRECISION_WINDOW_BATCHES (81
+ * = 2 s) contiguous batches every new batch forms a new sliding 81-batch
+ * window, and the FIRST window that is clean for BOTH sensors (window-level
+ * quality indicator <= DISPLACEMENT_QUALITY_K x the quiet floor, so a
+ * disturbance has to have left the window) is the result: the Hann-weighted
+ * means of S1, S2 and the differential S1-S2 over that window. If no clean
+ * window exists within DISPLACEMENT_PRECISION_TIMEOUT_MS (5 s) the
+ * measurement ends in the DONE phase with the failed flag set and no value.
+ * A dropped batch restarts the 2 s fill. Requires the demod already running
+ * and no zero-cal in progress (DRV_ERR_NOT_READY otherwise -- the two
+ * averaging consumers of the batch stream are mutually exclusive by design).
+ * A fresh begin() while already running restarts it; svc_displacement_stop()
+ * cancels it. The result never touches EEPROM/settings; once DISP_PRECISION_DONE,
+ * get_result() can be read repeatedly and stays valid until the next begin(). */
 typedef enum {
     DISP_PRECISION_IDLE = 0,
     DISP_PRECISION_RUNNING,
@@ -534,39 +537,27 @@ void      svc_displacement_precision_cancel(void);   /* back to IDLE from any ph
 
 DisplacementPrecisionPhase svc_displacement_precision_get_phase(void);
 
-/* All out-params may be NULL. count1/2_out are batches averaged so far per
- * sensor (0..DISPLACEMENT_PRECISION_TARGET_SAMPLES); target_out is always
- * DISPLACEMENT_PRECISION_TARGET_SAMPLES (so a host doesn't need to
- * hardcode it); elapsed_ms_out is wall-clock time since begin(), 0 while
- * idle. count_diff_out (2026-09-27) is the differential accumulator's own
- * count -- only incremented on a batch where BOTH sensors are quality-good
- * (svc_displacement_get_quality_diff_ok()), so it generally lags count1/2
- * and is the one that gates completion (below) alongside them. */
+/* While RUNNING: true if the newest full window was not clean (the measurement
+ * is waiting for the disturbance to pass). False otherwise. */
+bool svc_displacement_precision_get_disturbed(void);
+
+/* All out-params may be NULL. count1/2/diff_out are all the same number now:
+ * contiguous batches since begin(), capped at target_out (the window length,
+ * DISPLACEMENT_PRECISION_WINDOW_BATCHES = 81); three fields are kept so the
+ * wire format did not change. elapsed_ms_out is wall-clock time since begin(),
+ * 0 while idle. */
 void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_out,
                                           uint16_t *count_diff_out, uint16_t *target_out,
                                           uint32_t *elapsed_ms_out);
 
-/* Only succeeds (returns true) while phase == DISP_PRECISION_DONE --
- * false (outputs untouched) otherwise. delta1/2_mm_out are the mean of
- * whatever quality-good batches were actually collected per sensor
- * (count may be less than the target if timed_out_out is true, or even
- * 0 in a pathological case -- a caller should check
- * svc_displacement_precision_progress()'s counts alongside this to judge
- * confidence, not just trust that the target was met). delta_diff_mm_out
- * (2026-09-27) is the mean of delta1-delta2 over only the batches where
- * BOTH sensors were quality-good on that same batch -- NOT delta1_mm_out
- * minus delta2_mm_out, which would average over two potentially-different
- * sets of batches and lose the point of excluding jointly. This is the
- * headline number for the differential measurement strategy
- * (docs/wp10_displacement.md's standard-error analysis); delta1/2_mm_out
- * remain available alongside it for diagnosis. All three outputs carry the
- * per-instrument sign flip (disp_s1/s2_invert, 2026-09-29); delta_diff_mm_out
- * is scaled by S1's sign specifically, exact when S1/S2 share the same
- * invert setting (the expected case) -- see the .c file's comment on this
- * function for the edge case where they don't. timed_out_out is true if
- * DISPLACEMENT_PRECISION_TIMEOUT_MS was hit before all three (S1, S2, and
- * the differential) reached the target sample count. */
+/* Only succeeds (returns true) while phase == DISP_PRECISION_DONE -- false
+ * (outputs untouched) otherwise. failed_out is true if no clean window was
+ * found in time: then the three values are 0 and must not be used. Otherwise
+ * delta1/2_mm_out are the Hann-weighted window means and delta_diff_mm_out is
+ * their difference (= the mean of the per-batch differences). All three carry
+ * the per-instrument sign flip (disp_s1/s2_invert); delta_diff_mm_out is scaled
+ * by S1's sign, exact when S1/S2 share the same invert setting. */
 bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,
-                                            float *delta_diff_mm_out, bool *timed_out_out);
+                                            float *delta_diff_mm_out, bool *failed_out);
 
 #endif /* SVC_DISPLACEMENT_H */

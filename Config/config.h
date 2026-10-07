@@ -573,18 +573,36 @@
  * batch rate -- not a new tuning target on its own. */
 #define DISPLACEMENT_MA_SAMPLES            8U
 
-/* Display stream (2026-10-05): the LIVE screen does not show the ~40.7 Hz
- * batch stream (nor its 8-batch boxcar, which still updates at 40.7 Hz for
- * the API) but a condensed ~4 Hz reading. Two cascaded boxcars of
- * DISPLACEMENT_DISPLAY_DECIMATION batches (= a triangular window of
- * 2*N-1 batches) followed by decimation by N: with N = 10 the output rate
- * is 40.7/10 = 4.07 Hz, the window is ~0.47 s, and the filter has exact
- * nulls at multiples of 4.07 Hz -- including 20.35 Hz (the batch Nyquist
- * frequency, where the ~20 Hz pendulum resonance of the sensors lands), so
- * that resonance is suppressed instead of aliasing into the readout
- * (Testing/2026-09-30_bulk_adc_30s_interval/findings.md). */
+/* Display stream (2026-10-05, window changed 2026-10-07): the LIVE screen does
+ * not show the ~40.7 Hz batch stream (nor its 8-batch boxcar, which still
+ * updates at 40.7 Hz for the API) but a condensed ~4 Hz reading: a Hann
+ * window over the newest DISPLACEMENT_DISPLAY_TAPS contiguous batch readings,
+ * published every DISPLACEMENT_DISPLAY_DECIMATION-th batch (40.7 / 10 = 4.07 Hz).
+ * 25 taps = 0.61 s, delay ~0.3 s, -3 dB at 1.1 Hz, and at least -42 dB over
+ * 5 to 20 Hz (worst case per band: -42 dB at 5-10 Hz, -60 dB at 10-15 Hz,
+ * -73 dB at 15-20 Hz), which covers the ~20 Hz sensor resonance wherever it
+ * sits (18 - 21.5 Hz seen) -- a plain boxcar or the earlier triangular window
+ * (two 10-batch boxcars, nulls only at multiples of 4.07 Hz) rejected less
+ * away from 20.35 Hz. Chosen with the 19 h contiguous phasor stream
+ * (Testing/2026-09-30_bulk_adc_30s_interval/findings.md, section 8 and the
+ * display-filter comparison): the scatter of the 4 Hz output fell 2.6x (night) to 5x (day) against a
+ * plain average of 10 and a further 13-30% against triangular-19. */
 #define DISPLACEMENT_DISPLAY_DECIMATION    10U
-#define DISPLACEMENT_DISPLAY_TAPS          (2U * DISPLACEMENT_DISPLAY_DECIMATION - 1U)
+#define DISPLACEMENT_DISPLAY_TAPS          25U
+
+/* Window-level quality indicator (2026-10-07), used by the LIVE display
+ * ("!" next to a doubtful reading) and by the precision measurement below.
+ * The mean squared batch-to-batch step of Im(x) over a window (Math/math_window.h)
+ * is compared with the instrument's own quiet floor -- the lowest such value
+ * over the last while, allowed to creep up so it doubles in about
+ * DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S if every window is noisier; a window is
+ * "doubtful" when its mean step power exceeds DISPLACEMENT_QUALITY_K x floor.
+ * K = 6 (power, ~2.4x in amplitude): on the 19 h stream this flags 0.8% of
+ * display readings at night and 8% by day, and 1% of 2 s precision attempts
+ * fail. The floor needs one full precision window (2 s) after a start before it
+ * is known; until then nothing is flagged. */
+#define DISPLACEMENT_QUALITY_K                 6.0f
+#define DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S  1200U
 
 /* Nominal calibration seeds (DeviceSettings' displacement page, EEPROM-
  * backed past first boot — see system_state.h's comment on those
@@ -733,34 +751,25 @@
 #define DISPLACEMENT_QUALITY_BAD_MULTIPLE     3U
 #define DISPLACEMENT_QUALITY_EWMA_SAMPLES     32U
 
-/* --- Triggered precision measurement (2026-09-26) --- the API-triggered
- * "take the time you need, then report one reliable number" mode
- * (Services/svc_api.c's Commands API2_RES_CMD_PRECISION_MEASURE), as
- * opposed to the continuous live/streaming readout. Averages only
- * quality-good batches (above) per sensor, up to this many, with a hard
- * time ceiling so a host call can never block indefinitely. Also gates the
- * DIFFERENTIAL (S1-S2) result added 2026-09-27 -- see
- * Services/svc_displacement.h's precision-measurement comment -- which only
- * accumulates a batch when BOTH sensors are quality-good on it, so its own
- * count reaches this target somewhat slower than either individual
- * sensor's count in general.
- *
- * The two numbers below were originally in tension at the ~20.3 Hz batch
- * rate DISPLACEMENT_BATCH_CYCLES=128 gave: 64 samples took ~3.15 s minimum
- * even with ZERO discards, already past a strict "~2 s" target before
- * accounting for any bad batches at all. DISPLACEMENT_BATCH_CYCLES' 2026-
- * 09-27 halving to 64 doubled the batch rate to ~40.7 Hz, which
- * incidentally halves that minimum too (~1.6 s clean-channel) -- not the
- * reason for that change (see its own comment), but a welcome side effect
- * here. Resolved as bounded best-effort: target 64 (a real sqrt(64)=8x SNR
- * improvement over one batch) but never wait past
- * DISPLACEMENT_PRECISION_TIMEOUT_MS -- the timeout guarantees a bounded
- * worst case (the result reports how many samples were actually averaged,
- * so a caller always knows the achieved confidence rather than a silent
- * shortfall). Want a firmer ceiling instead? Drop
- * DISPLACEMENT_PRECISION_TARGET_SAMPLES, trading sqrt(N) SNR for it. */
-#define DISPLACEMENT_PRECISION_TARGET_SAMPLES 64U
-#define DISPLACEMENT_PRECISION_TIMEOUT_MS     4000U
+/* --- Triggered precision measurement (2026-09-26, redesigned 2026-10-07) ---
+ * the API/UI-triggered "take a reliable reading" mode (Services/svc_api.c's
+ * Commands API2_RES_CMD_PRECISION_MEASURE, right knob on LIVE). A sliding
+ * window of DISPLACEMENT_PRECISION_WINDOW_BATCHES contiguous batches (81 =
+ * 1.99 s) is weighted with a Hann window; as soon as a window that lies
+ * entirely after the trigger is CLEAN (the window-level indicator above is
+ * <= K x floor for BOTH sensors) its Hann-weighted means (S1, S2 and the
+ * differential S1-S2) are the result. If no clean window exists within
+ * DISPLACEMENT_PRECISION_TIMEOUT_MS the measurement fails with an error (no
+ * value). Replaces the earlier "average 64 quality-flagged batches" scheme:
+ * dropping individual batches breaks the cancellation of the ~20 Hz
+ * resonance (a Nyquist-folded alternation), a window gate does not. On the
+ * 19 h contiguous stream this gave a repeatability of 0.023 um at night and
+ * 0.025 um by day (nominal units), against 0.078 um by day without the gate,
+ * 1% failures, 2.02 s mean duration. A window longer than 2 s did not help
+ * (night -20% for 2.5x the time, day nothing): the daytime excess is rare
+ * disturbed windows, which the gate removes, not averaging noise. */
+#define DISPLACEMENT_PRECISION_WINDOW_BATCHES 81U
+#define DISPLACEMENT_PRECISION_TIMEOUT_MS     5000U
 
 /* --- Bulk raw-ADC capture (API v2 category 0x8: START_BULK/CANCEL_BULK) ---
  * Restored 2026-09-25 -- an important bench diagnostic tool, mistakenly

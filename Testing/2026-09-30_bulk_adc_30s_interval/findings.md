@@ -245,6 +245,28 @@ contiguous averaging; (2) robust estimators (median/trim/flag-filter) help on th
 present) because aliased ring-down bursts look like outliers there, but not on contiguous batches (section 5);
 (3) future long tests should push every batch (event-driven) or log the phasor stream contiguously.
 
+## 9. Display window and precision strategy on the 19 h contiguous phasor stream (2026-10-07)
+
+Data: `Testing/2026-10-04_contiguous_phasor_capture/data/phasor_stream_20261004_204703.csv` (fw 0.10.65 logger,
+2.8 M gapless batches = 19.1 h, 1 break). Scripts: `analysis/display_filters.py`, `precision_strategy.py`,
+`tune_quality.py` .. `tune_quality4.py` (nominal um, nominal k and the firmware's default phase constants).
+
+* **Display window** (4 Hz stream, scatter between consecutive outputs, S1-S2 day / night): plain average of 10 batches
+  0.47 / 0.069 um; triangular 19 (two cascaded 10-batch boxcars) 0.097 / 0.027; Hann 19 0.094 / 0.029; Hann 25
+  0.076 / 0.022. -> Hann 25 chosen (delay ~0.3 s, worst-case stopband -42 dB at 5-10 Hz, -73 dB at 15-20 Hz).
+  The 1 s means were identical for every window (the choice only matters for the fast display).
+* **Precision window**: at >= 2 s the window shape hardly matters (boxcar = Hann within a few %) and longer windows
+  do not help (5 s instead of 2 s: -20% at night, nothing by day). Day vs night differ only through rare disturbed
+  windows (MAD-sigma of adjacent 2 s results 0.024 um both day and night; worst step 8.7 um by day, 0.16 um at night).
+* **Gate**: the window-level indicator (mean squared batch-to-batch step of Im(x) over the window) against a
+  quiet floor (lowest 81-batch value seen, creeping up x2 per 20 min). Any of four indicator definitions gave the
+  same gating result; with K = 6 (power) and the sliding accept-as-soon-as-clean protocol over a 5 s budget:
+  1.0% failures, mean 2.02 s, repeatability 0.0229 um (night) / 0.0248 um (day) against 0.078 um by day ungated.
+  For the display the same indicator over 25 batches at K = 6 flags 0.8% (night) / 7.9% (day) of the readings; flagged
+  outputs move 1.8x more to the next output than unflagged ones.
+* These numbers were reproduced to the digits by replaying the stream through the firmware's own C code
+  (`Math/math_window.c`, built on the host with `zig cc`).
+
 ## Reproducing
 
 ```

@@ -61,13 +61,18 @@ PRECISION_PHASE_NAMES = {0: "IDLE", 1: "RUNNING", 2: "DONE"}
 
 
 def decode_precision_status(d: bytes):
+    """27 B (fw >= 0.10.71; 26 B before). timed_out is now the ERROR flag: no clean
+    2 s window within 5 s (the three values are then 0). count1/2/diff all carry the
+    window fill (batches since the start, capped at target = 81); disturbed (appended
+    byte, 0 for the old 26 B format) = the newest full window was not clean."""
     if len(d) < 26:
         return None
-    phase, target, count1, count2, count_diff, elapsed_ms, timed_out, d1, d2, ddiff = \
-        struct.unpack("<BHHHHIBfff", d[:26])
+    phase, target, count1, count2, count_diff, elapsed_ms, timed_out, d1, d2, ddiff =         struct.unpack("<BHHHHIBfff", d[:26])
+    disturbed = bool(d[26]) if len(d) >= 27 else False
     return dict(phase=phase, phase_name=PRECISION_PHASE_NAMES.get(phase, f"?{phase}"),
                 target=target, count1=count1, count2=count2, count_diff=count_diff,
-                elapsed_ms=elapsed_ms, timed_out=bool(timed_out),
+                elapsed_ms=elapsed_ms, timed_out=bool(timed_out), error=bool(timed_out),
+                disturbed=disturbed,
                 delta1_mm=d1, delta2_mm=d2, delta_diff_mm=ddiff)
 
 # Displacement diagnostics (Raw data 0x7/0x02, OP_RAW_DISPLACEMENT_DIAG

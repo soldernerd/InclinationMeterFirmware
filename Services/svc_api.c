@@ -872,8 +872,9 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
             uint8_t  phase;
             uint16_t target, count1, count2, count_diff;
             uint32_t elapsed_ms;
-            uint8_t  timed_out;
+            uint8_t  timed_out;      /* 1 = error: no clean window in time */
             float    delta1_mm, delta2_mm, delta_diff_mm;
+            uint8_t  disturbed;      /* appended 2026-10-07 */
         } p;
         /* Local (non-packed) temporaries -- svc_displacement_precision_progress()
          * takes pointers, and taking the address of a packed struct's
@@ -893,6 +894,7 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         p.delta1_mm = d1;
         p.delta2_mm = d2;
         p.delta_diff_mm = ddiff;
+        p.disturbed = svc_displacement_precision_get_disturbed() ? 1U : 0U;
         send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
         return;
     }

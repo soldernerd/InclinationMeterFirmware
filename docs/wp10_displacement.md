@@ -1173,3 +1173,45 @@ The 180-degree flip calibration can run for S1 only, S2 only or both. `svc_displ
 (bit 0 = S1, bit 1 = S2); step 2 continues the same sensors; only the selected sensors' `disp_sN_zero_ppm` are
 written. API: Commands 0x06 step 1 accepts an optional 2nd byte (sensor mask, default 3), Raw data 0x03 appends
 `sensor_mask`. Instrument: SETTINGS rows "Zero cal both / S1 / S2". Build-verified only.
+
+## Hann display stream, doubtful-reading flag, sliding-window precision measurement (fw 0.10.71, 2026-10-07)
+
+Background and data: `Testing/2026-09-30_bulk_adc_30s_interval/findings.md` (sections 4-9) and the 19 h
+contiguous phasor stream (`Testing/2026-10-04_contiguous_phasor_capture/data/`, fw 0.10.65 logger).
+
+**LIVE readings.** `svc_displacement.c` keeps the newest 81 contiguous batch readings and squared Im(x)
+steps per sensor in a `MathWindow` (`Math/math_window.c`, pure logic, host-tested). The display value is a
+**Hann window over the newest 25 batches** (was a triangular window over 19), published every 10th batch
+(4.07 Hz), delay ~0.3 s, -3 dB at 1.1 Hz, worst-case stopband gain -42 / -60 / -73 dB at 5-10 / 10-15 /
+15-20 Hz (covers the ~20 Hz sensor resonance wherever it sits). Each published value also carries a
+**doubtful flag per sensor**: the mean squared batch-to-batch step of Im(x) over those 25 batches exceeded
+`DISPLACEMENT_QUALITY_K` (6) x the sensor's quiet floor. The floor is the lowest 81-batch mean seen,
+allowed to creep up (doubling in ~20 min if every window is noisier, `DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S`),
+so a persistent disturbance cannot raise its own limit. The LIVE screen shows the value either way and
+appends ` !` to the S1 / S2 / Diff line when it is doubtful (Diff: either sensor). Replay on the 19 h data
+through the actual C code: flagged 0.84% of readings at night, 7.9% by day. Nothing is flagged until the
+floor exists (one full 81-batch window, ~2 s after a start).
+
+**Precision measurement** (right knob on LIVE, API Commands 0x07). After 81 contiguous batches (1.99 s)
+since the trigger every new batch forms a sliding 81-batch window; the **first window that is clean for both
+sensors** gives the result = Hann-weighted means of S1, S2 and S1-S2. If no clean window exists 5 s after the
+trigger (`DISPLACEMENT_PRECISION_TIMEOUT_MS`) the run ends with an **error**, no value (LIVE shows
+"Precision ERROR: disturbed"; API Raw data 0x04: phase done, `timed_out` = 1 = error flag). While waiting
+the screen shows "Precision: disturbed <t>s". A dropped batch (seq jump) empties the history, so no window
+spans a gap. Replay through the C code on the 19 h stream (chain of back-to-back measurements): 1.0%
+failures, mean duration 2.02 s, repeatability (S1-S2, nominal um) 0.0229 night / 0.0248 day, against 0.078 um by
+day without the gate (the daytime excess was rare disturbed windows; worst step 8.7 -> 0.25 um).
+A longer window did not help (5 s: -20% at night, nothing by day), a boxcar and Hann are equal at >= 2 s.
+
+**API changes.** Raw data 0x04 is now 27 bytes: `target` = 81 (window length), `count1/2/diff` all carry the
+window fill since the trigger, `timed_out` = error flag, deltas are the Hann means (0 on error), appended
+`disturbed` byte (running: newest full window not clean). `PythonTestCode/apiv2.py` decodes both formats.
+The old per-batch quality flag (`quality1/2_ok`, Topic 0x03) is unchanged but the precision measurement no
+longer uses it: dropping individual batches breaks the cancellation of the 20 Hz resonance.
+
+**Verification.** Build clean (`-Werror`). Host: `tests/test_math_window.c` (273 checks: Hann weights, ring wrap,
+burst flagging and recovery, floor creep, break, constant-residual guard), run with `zig cc` (`pip install
+ziglang`) since the dev box has no gcc; a C replay of the 19 h stream through `math_window.c` reproduced the
+Python emulation (Testing/.../analysis/tune_quality*.py) to the digits quoted above. **Not bench-tested**: the
+board was not attached; check on the instrument that the 4 Hz display looks calm, that tapping the plate
+produces "!" and that a precision measurement during a bump waits and then succeeds or errors after 5 s.

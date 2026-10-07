@@ -1936,8 +1936,9 @@ the step of the residual relative to the previous batch.  A running
 baseline (exponentially weighted over 32 batches, about 0.8\,s, updated
 only from good batches so that a noisy patch cannot raise its own limit)
 holds the typical step size; a batch is flagged bad if its step exceeds
-$3\times$ the baseline.  The flag is per sensor and is used by the
-precision measurement; it does not alter the live value.
+$3\times$ the baseline.  The flag is per sensor; it is exposed over the API but does not alter the
+live value, and since fw 0.10.71 the precision measurement no longer uses it
+(it uses the window-level indicator of the previous subsection).
 
 \textbf{Caveat from the 24\,h raw-ADC analysis.}  The steps are not outliers
 but the sensor's \SI{20}{\hertz} pendulum resonance (next subsection): the
@@ -1946,7 +1947,9 @@ made a test estimate $3$ to $10\times$ \emph{worse}, because the pendulum is
 sampled at the batch Nyquist frequency and alternates sign from batch to
 batch; the plain average cancels it, and removing the large batches unbalances
 the cancellation.  The flag is therefore useful as a \emph{vibration
-indicator}, but dropping flagged batches from an average is not recommended.
+indicator}, but dropping flagged batches from an average is not recommended;
+the window-level version of the same idea (previous subsection) is what the
+display and the precision measurement use.
 
 \subsection{Pendulum resonance and the smoothing filter}
 
@@ -1964,14 +1967,43 @@ a topic snapshot at $\le\SI{20}{\hertz}$) aliases it further to low
 frequencies; the contiguous phasor stream (Section~13.10) avoids this.
 
 The 8-batch boxcar of the next subsection cancels the Nyquist-folded part but
-has poor sidelobes elsewhere.  The raw-ADC analysis found that a smooth window
-over about \SI{0.37}{\second} (a triangular window, equal to two cascaded
-boxcars, over 15 batches, or a Hann window) reduces the pendulum leakage to
-about half the rms of the boxcar (about $0.13$ against $0.14$ to $0.28$ in
-the nominal units for the pendulum-dominated channels), and that all smooth
-windows perform alike; choosing an integer number of pendulum periods does
-not help because the resonance is broad.  \textbf{Status: not implemented}
-(a candidate change after the zero calibration is redone).
+has poor sidelobes elsewhere.  The raw-ADC analysis and the 19\,h contiguous
+phasor stream (\texttt{Testing/2026-09-30\_bulk\_adc\_30s\_interval/findings.md})
+found that a smooth window over contiguous batches is the right tool: it
+needs no knowledge of the exact resonance frequency, and dropping individual
+batches does not work (see the quality flag above).  Choosing an integer number
+of pendulum periods does not help because the resonance is broad.
+
+\textbf{Display stream (fw 0.10.71).}  The LIVE screen shows a Hann window over
+the newest 25 contiguous batches (\SI{0.61}{\second}, delay about
+\SI{0.3}{\second}, $-3$\,dB at \SI{1.1}{\hertz}), published every 10th batch
+($\SI{40.7}{\hertz}/10=\SI{4.07}{\hertz}$).  The worst-case gain in the stopband is
+$-42$\,dB at 5 to \SI{10}{\hertz}, $-60$\,dB at 10 to \SI{15}{\hertz} and $-73$\,dB at
+15 to \SI{20}{\hertz}, so the resonance is suppressed wherever it sits
+(18 to \SI{21.5}{\hertz} observed) and so is any other floor or plate mode
+in that range.  The first version (fw 0.10.65) used two cascaded 10-batch
+boxcars, a triangular window over 19 batches with exact nulls at multiples of
+\SI{4.07}{\hertz}; on the contiguous stream the 4\,Hz scatter was $2.6\times$
+(night) to $5\times$ (day) lower than with a plain average of 10, and the Hann
+window over 25 batches a further 13 to 30\,\% lower, for \SI{75}{\milli\second}
+more delay.  A Hann window over 19 batches was within $\pm10$\,\% of the
+triangular one.
+
+\textbf{Doubtful readings.}  The reading is always shown.  A window is
+flagged ``doubtful'', and the LIVE screen appends an exclamation mark to the
+line, when the mean squared batch-to-batch step of $\operatorname{Im}\underline{x}$
+over the 25 batches exceeds $K=6$ times the instrument's quiet floor.  The
+floor is the lowest such value of the last 81 batches seen so far, allowed to
+creep up so that it would double only in about 20 minutes if every window were
+noisier (a persistent disturbance cannot raise its own limit).  On the 19\,h stream this flags
+0.8\,\% of the display readings at night and 8\,\% by day; the flagged readings
+move $1.8\times$ more to the next output than the others.  Nothing is flagged
+until the floor is known (one full 2\,s window after a start), and a dropped
+batch empties the window, so no window ever spans a gap.  Each sensor is
+flagged separately; the differential is flagged if either is.
+\textbf{Status: implemented in fw 0.10.71, build-verified and replayed on the 19\,h
+data on the host, not yet bench-tested.}  The 8-batch average of the API value
+is unchanged.
 
 \subsection{Moving average}
 
@@ -2066,12 +2098,34 @@ cannot remove: that is a gain matter, calibrated separately.
 \subsection{Precision measurement}
 
 A triggered mode reports one reliable number instead of a continuous
-stream.  It averages up to 64 quality-good batches per sensor (about
-\SI{1.6}{\second} if all are good) with a hard limit of \SI{4}{\second},
-and reports how many batches were actually averaged, so the caller knows the
-achieved confidence.  The differential is accumulated only from batches in
-which \emph{both} sensors are good.  The gain is $\sqrt{64}=8$ over a single
-batch.
+stream (right knob on LIVE, API Commands 0x07).  Since fw 0.10.71 it works
+as follows.  After 81 contiguous batches (\SI{1.99}{\second}) have arrived
+since the trigger, every new batch forms a new sliding window of the newest 81
+batches, and the \emph{first window that is clean} for both sensors is the
+result: the Hann-weighted means of $S_1$, of $S_2$ and of their difference over that
+window (the difference of the two means equals the mean of the per-batch
+differences).  ``Clean'' is the window-level indicator of
+Section~13.5 (mean squared step of $\operatorname{Im}\underline{x}$ at most $6\times$
+the quiet floor, both sensors), so a disturbance has to have left the window
+completely before a value is accepted -- ``accept as soon as the last 2\,s are
+clean''.  If no clean window exists \SI{5}{\second} after the trigger the
+measurement ends with an \emph{error} and no value (the LIVE screen shows
+``Precision ERROR: disturbed'', the API reports phase done with the error flag
+set and zeros).  While waiting for calm the screen shows ``Precision: disturbed''
+and the elapsed time.  A dropped batch restarts the 2\,s fill.
+
+The design follows from the contiguous 19\,h stream: the repeatability
+(between consecutive measurements, $S_1-S_2$, nominal units) is
+$0.023\,\mu$m at night and $0.025\,\mu$m by day with this gate, against
+$0.078\,\mu$m by day without it; $1$\,\% of the attempts fail and the mean
+duration is \SI{2.02}{\second}.  The window shape hardly matters at 2\,s or
+longer, and longer windows do not help: 5\,s instead of 2\,s gained about
+$20$\,\% at night and nothing by day, because the daytime excess is rare
+disturbed windows (the largest step between neighbouring results was
+$8.7\,\mu$m without the gate and $0.25\,\mu$m with it), not averaging noise.
+The earlier scheme (average 64 batches that pass the per-batch flag, 4\,s
+limit) is gone: it dropped individual batches, which breaks the cancellation of
+the 20\,Hz resonance.  \textbf{Status: implemented, not yet bench-tested.}
 
 \subsection{Outputs}
 
@@ -2598,7 +2652,8 @@ sampling locked to the excitation; single-bin demodulation over 64 periods
 (per-position integer accumulation, fw 0.10.64); the projection estimator
 $\operatorname{Re}[\underline{S}/(k(\underline{A}-\underline{B}))]$ (fw 0.10.62)
 with per-batch quality flag, moving average, zero calibration and precision
-measurement; continuous phasor stream (fw 0.10.65).
+measurement; continuous phasor stream (fw 0.10.65); Hann display stream with doubtful-reading flag and
+sliding-window precision measurement (fw 0.10.71, not yet bench-tested).
 
 \subsection{Findings that need action}
 
@@ -2645,9 +2700,10 @@ $B$ relative to $A$ (Sec.\,9) &
 $179.0^\circ$ instead of $180^\circ$, unexplained but stable in three runs
 ($178.94$, $178.96$, $179.00^\circ$). \\
 Pendulum resonance (Sec.\,13.5) &
-About $\SI{20}{\hertz}$, at the batch Nyquist frequency; dominates the
-sensor noise.  A triangular/Hann smoother over about $\SI{0.37}{\second}$ is
-recommended and not implemented; do not drop flagged batches. \\
+About \SI{20}{\hertz}, at the batch Nyquist frequency; dominates the
+sensor noise.  The LIVE display and the precision measurement now use Hann
+windows over contiguous batches (fw 0.10.71, bench test pending); the 8-batch
+boxcar of the API value is unchanged; individual batches must not be dropped. \\
 First cycle after start (Sec.\,13.7) &
 The first cycle after \texttt{start()} can be corrupt on all four channels
 (seen in bulk captures); firmware does not yet discard it. \\

@@ -178,7 +178,7 @@ typedef struct {
                                      * tick, not on the underlying value",
                                      * every DISPLAY_CONTENT_CHECK_MS (LIVE,
                                      * DIAGNOSTICS). */
-    char disp1_line[24];   /* pre-formatted once per redraw in
+    char disp1_line[32];   /* pre-formatted once per redraw in
                               * snapshot_capture() -- see that function's
                               * comment for why this can't just be
                               * computed inline in draw_live_screen() the
@@ -186,8 +186,8 @@ typedef struct {
                               * Empty disp2_line means "don't draw a
                               * second line" (the not-running message
                               * only needs one line). */
-    char disp2_line[24];
-    char disp_diff_line[24];   /* S1-S2 differential (2026-09-27) -- see
+    char disp2_line[32];
+    char disp_diff_line[32];   /* S1-S2 differential (2026-09-27) -- see
                                   * svc_displacement.h's comment on why
                                   * this, not longer averaging of either
                                   * absolute channel, is the dominant
@@ -798,9 +798,15 @@ static void snapshot_capture(void)
         format_displacement_mm_4dp(d1, sizeof d1, svc_displacement_get_display_delta1_mm());
         format_displacement_mm_4dp(d2, sizeof d2, svc_displacement_get_display_delta2_mm());
         format_displacement_mm_4dp(ddiff, sizeof ddiff, svc_displacement_get_display_delta_diff_mm());
-        snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "S1 %smm", d1);
-        snprintf(s_last.disp2_line, sizeof s_last.disp2_line, "S2 %smm", d2);
-        snprintf(s_last.disp_diff_line, sizeof s_last.disp_diff_line, "Diff %smm", ddiff);
+        /* A trailing " !" marks a reading whose window looked disturbed (quality
+         * indicator above its threshold, svc_displacement.h); the value is shown
+         * either way. */
+        snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "S1 %smm%s", d1,
+                 svc_displacement_get_display_doubtful1() ? " !" : "");
+        snprintf(s_last.disp2_line, sizeof s_last.disp2_line, "S2 %smm%s", d2,
+                 svc_displacement_get_display_doubtful2() ? " !" : "");
+        snprintf(s_last.disp_diff_line, sizeof s_last.disp_diff_line, "Diff %smm%s", ddiff,
+                 svc_displacement_get_display_doubtful_diff() ? " !" : "");
     } else {
         snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "-- not running --");
         s_last.disp2_line[0] = '\0';
@@ -858,12 +864,17 @@ static void snapshot_capture(void)
     DisplacementPrecisionPhase pphase = svc_displacement_precision_get_phase();
     if (pphase == DISP_PRECISION_RUNNING) {
         s_precision_was_done = false;
-        uint16_t c1 = 0, c2 = 0, cdiff = 0, target = 0;
-        svc_displacement_precision_progress(&c1, &c2, &cdiff, &target, NULL);
-        uint16_t done = (c1 < c2) ? c1 : c2;
-        if (cdiff < done) { done = cdiff; }
-        snprintf(s_last.precision_line, sizeof s_last.precision_line,
-                 "Precision %u/%u...", (unsigned)done, (unsigned)target);
+        uint16_t fill = 0, target = 0;
+        uint32_t elapsed_ms = 0;
+        svc_displacement_precision_progress(&fill, NULL, NULL, &target, &elapsed_ms);
+        unsigned secs_tenths = (unsigned)(elapsed_ms / 100U);
+        if (svc_displacement_precision_get_disturbed()) {
+            snprintf(s_last.precision_line, sizeof s_last.precision_line,
+                     "Precision: disturbed %u.%us", secs_tenths / 10U, secs_tenths % 10U);
+        } else {
+            snprintf(s_last.precision_line, sizeof s_last.precision_line,
+                     "Precision %u/%u...", (unsigned)fill, (unsigned)target);
+        }
     } else if (pphase == DISP_PRECISION_DONE) {
         if (!s_precision_was_done) {
             s_precision_was_done   = true;
@@ -871,12 +882,18 @@ static void snapshot_capture(void)
         }
         if ((uint32_t)(s_render_ms - s_precision_done_at_ms) < PRECISION_RESULT_DISPLAY_MS) {
             float ddiff = 0.0f;
-            bool  timed_out = false;
-            (void)svc_displacement_precision_get_result(NULL, NULL, &ddiff, &timed_out);
-            char v[16];
-            format_displacement_mm_4dp(v, sizeof v, ddiff);
-            snprintf(s_last.precision_line, sizeof s_last.precision_line,
-                     "Precision %smm%s", v, timed_out ? " (partial)" : "");
+            bool  failed = false;
+            (void)svc_displacement_precision_get_result(NULL, NULL, &ddiff, &failed);
+            if (failed) {
+                /* No clean 2 s window within the time limit: an error, no value. */
+                snprintf(s_last.precision_line, sizeof s_last.precision_line,
+                         "Precision ERROR: disturbed");
+            } else {
+                char v[16];
+                format_displacement_mm_4dp(v, sizeof v, ddiff);
+                snprintf(s_last.precision_line, sizeof s_last.precision_line,
+                         "Precision %smm", v);
+            }
         } else {
             s_last.precision_line[0] = '\0';
         }

@@ -1,6 +1,7 @@
 #include "svc_displacement.h"
 #include "drv_ads131m04.h"
 #include "math_phasor.h"
+#include "math_window.h"
 #include "svc_log.h"
 #include "hal_systick.h"
 #include "config.h"
@@ -198,19 +199,36 @@ static uint8_t s_ma_count = 0;   /* ramps 0..DISPLACEMENT_MA_SAMPLES during
                                     * a start aren't biased toward zero by
                                     * an empty window */
 
-/* --- Display stream (2026-10-05, config.h's DISPLACEMENT_DISPLAY_DECIMATION
- * comment): ring of the last DISPLACEMENT_DISPLAY_TAPS raw batch deltas per
- * sensor; every DISPLACEMENT_DISPLAY_DECIMATION-th batch, once the ring is
- * full, a triangular-weighted average of it becomes the displayed value. */
-static float    s_disp_ring1[DISPLACEMENT_DISPLAY_TAPS];
-static float    s_disp_ring2[DISPLACEMENT_DISPLAY_TAPS];
-static uint8_t  s_disp_ring_idx   = 0;
-static uint8_t  s_disp_ring_count = 0;
-static uint8_t  s_disp_phase      = 0;       /* batches since the last output */
-static float    s_disp_out1       = 0.0f;
-static float    s_disp_out2       = 0.0f;
-static bool     s_disp_valid      = false;
-static uint16_t s_disp_seq        = 0;
+/* --- Contiguous batch history + display stream (2026-10-07, config.h's
+ * DISPLACEMENT_DISPLAY_TAPS and DISPLACEMENT_QUALITY_K comments) ---
+ * One MathWindow (Math/math_window.h) holds the newest 81 batches' readings
+ * and squared Im(x) steps per sensor plus the quiet floors. The LIVE display
+ * stream is a Hann window over the newest DISPLACEMENT_DISPLAY_TAPS readings,
+ * published every DISPLACEMENT_DISPLAY_DECIMATION-th batch, with a per-sensor
+ * "doubtful" flag from the window-level quality indicator; the triggered
+ * precision measurement uses the whole 81-batch window. Task context only
+ * (process_one_batch() writes, the getters read -- same context as everything
+ * else here except on_sample()). */
+/* Batches per second (the batch rate the floor creep is expressed in): carrier
+ * cycles per second / cycles per batch. 2604.1667 / 64 = 40.69 Hz. */
+#define BATCH_RATE_HZ  (2604.1667f / (float)DISPLACEMENT_BATCH_CYCLES)
+static MathWindow s_win;
+static float      s_hann_disp[DISPLACEMENT_DISPLAY_TAPS];
+static float      s_hann_disp_sum  = 1.0f;
+static float      s_hann_prec[DISPLACEMENT_PRECISION_WINDOW_BATCHES];
+static float      s_hann_prec_sum  = 1.0f;
+static uint8_t    s_disp_phase     = 0;       /* batches since the last output */
+static float      s_disp_out1      = 0.0f;
+static float      s_disp_out2      = 0.0f;
+static bool       s_disp_doubtful1 = false;
+static bool       s_disp_doubtful2 = false;
+static bool       s_disp_valid     = false;
+static uint16_t   s_disp_seq       = 0;
+/* Contiguity of the batch series: seq of the previous batch (cycle counter of
+ * its last cycle), so a dropped batch (seq jump) breaks the windows instead of
+ * silently spanning the gap. */
+static uint16_t   s_last_batch_seq = 0;
+static bool       s_have_batch_seq = false;
 
 /* Latest completed batch's raw phasors -- same storage/context reasoning
  * as the block above, added 2026-09-25 for the API v2 Topic groups (0x5)
@@ -272,31 +290,19 @@ static bool  s_quality2_seeded        = false;
 static bool  s_quality1_ok            = true;
 static bool  s_quality2_ok            = true;
 
-/* --- Triggered precision measurement state (2026-09-26) --- see
- * svc_displacement.h's comment. Task context only, same reasoning as the
- * zero-cal state above (the "producer" is process_one_batch(), the
- * "consumer" is Services/svc_api.c's command handler). sum1/2 are double,
- * not float: summing up to DISPLACEMENT_PRECISION_TARGET_SAMPLES mm-scale
- * floats is cheap either way at this rate (~20 Hz), so there's no reason
- * to accept float's coarser accumulation precision for a result whose
- * whole purpose is being the "reliable" one. */
+/* --- Triggered precision measurement state (2026-09-26, redesigned
+ * 2026-10-07) --- see svc_displacement.h's comment. Task context only, same
+ * reasoning as the zero-cal state above (the "producer" is
+ * process_one_batch(), the "consumer" is Services/svc_api.c's command
+ * handler). */
 static DisplacementPrecisionPhase s_precision_phase     = DISP_PRECISION_IDLE;
-static uint16_t s_precision_count1    = 0;
-static uint16_t s_precision_count2    = 0;
-static double   s_precision_sum1      = 0.0;
-static double   s_precision_sum2      = 0.0;
+static uint16_t s_precision_fill       = 0;      /* contiguous batches since begin() (capped at the window) */
+static bool     s_precision_disturbed  = false;  /* the newest full window is not clean */
+static bool     s_precision_failed     = false;  /* DONE without a result: no clean window in time */
 static float    s_precision_result1_mm = 0.0f;
 static float    s_precision_result2_mm = 0.0f;
-/* Differential (S1-S2) accumulator (2026-09-27) -- separate from sum1/sum2
- * above because it must average delta1[i]-delta2[i] for the SAME batch i,
- * not sum1/count1 - sum2/count2 (which would average over two potentially
- * different sets of batches, losing the point of excluding jointly). See
- * svc_displacement.h's precision-measurement comment. */
-static uint16_t s_precision_count_diff     = 0;
-static double   s_precision_sum_diff       = 0.0;
 static float    s_precision_result_diff_mm = 0.0f;
-static uint32_t s_precision_start_ms  = 0;
-static bool     s_precision_timed_out = false;
+static uint32_t s_precision_start_ms   = 0;
 
 /* --- Scheduler-gap diagnostic (2026-09-26) --- added specifically to
  * investigate why observed batch throughput and input_drop_count run
@@ -361,49 +367,45 @@ static void ma_reset(void)
     s_ma_idx = s_ma_count = 0;
 }
 
+/* Clears the batch history, the quiet floors and the display stream (task
+ * context, demod not running). */
 static void display_reset(void)
 {
-    s_disp_ring_idx = s_disp_ring_count = s_disp_phase = 0;
+    /* creep per batch so that the floor may double in DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S
+     * if every window is noisier than it: ln2 / (seconds * batches per second) */
+    math_window_reset(&s_win, 0.693147f / ((float)DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S * BATCH_RATE_HZ));
+    s_disp_phase = 0;
     s_disp_out1 = s_disp_out2 = 0.0f;
+    s_disp_doubtful1 = s_disp_doubtful2 = false;
     s_disp_valid = false;
+    s_have_batch_seq = false;
     /* s_disp_seq deliberately keeps counting: a consumer sees the change. */
     s_disp_seq++;
 }
 
-/* Feeds one batch's raw delta_mm pair into the display stream. Once per
- * DISPLACEMENT_DISPLAY_DECIMATION batches (and only with a full window) it
- * publishes a triangular-weighted average: weight of the i-th oldest sample
- * is min(i+1, TAPS-i), weights sum to N*N. */
-static void display_feed(float delta1, float delta2)
+/* Feeds one batch (readings and Im(x) residuals of both sensors) into the
+ * history; every DISPLACEMENT_DISPLAY_DECIMATION-th batch, once the display
+ * window is full, it publishes the Hann-weighted mean of the newest
+ * DISPLACEMENT_DISPLAY_TAPS readings and whether each sensor's window was
+ * doubtful (quality indicator above DISPLACEMENT_QUALITY_K x the quiet
+ * floor). The reading is shown either way. */
+static void history_feed(float delta1, float residual1, float delta2, float residual2)
 {
-    s_disp_ring1[s_disp_ring_idx] = delta1;
-    s_disp_ring2[s_disp_ring_idx] = delta2;
-    s_disp_ring_idx = (uint8_t)((s_disp_ring_idx + 1U) % DISPLACEMENT_DISPLAY_TAPS);
-    if (s_disp_ring_count < DISPLACEMENT_DISPLAY_TAPS) {
-        s_disp_ring_count++;
-    }
+    const float reading[2]  = { delta1, delta2 };
+    const float residual[2] = { residual1, residual2 };
+    math_window_push(&s_win, reading, residual);
+
     if (++s_disp_phase < DISPLACEMENT_DISPLAY_DECIMATION) {
         return;
     }
     s_disp_phase = 0;
-    if (s_disp_ring_count < DISPLACEMENT_DISPLAY_TAPS) {
+    if (s_win.count < DISPLACEMENT_DISPLAY_TAPS) {
         return;   /* window not yet full */
     }
-
-    float acc1 = 0.0f;
-    float acc2 = 0.0f;
-    uint8_t pos = s_disp_ring_idx;   /* oldest sample */
-    for (uint8_t i = 0; i < DISPLACEMENT_DISPLAY_TAPS; ++i) {
-        uint8_t up = (uint8_t)(i + 1U);
-        uint8_t dn = (uint8_t)(DISPLACEMENT_DISPLAY_TAPS - i);
-        float   w  = (float)(up < dn ? up : dn);
-        acc1 += w * s_disp_ring1[pos];
-        acc2 += w * s_disp_ring2[pos];
-        pos = (uint8_t)((pos + 1U) % DISPLACEMENT_DISPLAY_TAPS);
-    }
-    const float norm = 1.0f / (float)(DISPLACEMENT_DISPLAY_DECIMATION * DISPLACEMENT_DISPLAY_DECIMATION);
-    s_disp_out1  = acc1 * norm;
-    s_disp_out2  = acc2 * norm;
+    s_disp_out1 = math_window_hann_mean(&s_win, 0, DISPLACEMENT_DISPLAY_TAPS, s_hann_disp, s_hann_disp_sum);
+    s_disp_out2 = math_window_hann_mean(&s_win, 1, DISPLACEMENT_DISPLAY_TAPS, s_hann_disp, s_hann_disp_sum);
+    s_disp_doubtful1 = !math_window_clean_sensor(&s_win, 0, DISPLACEMENT_DISPLAY_TAPS, DISPLACEMENT_QUALITY_K);
+    s_disp_doubtful2 = !math_window_clean_sensor(&s_win, 1, DISPLACEMENT_DISPLAY_TAPS, DISPLACEMENT_QUALITY_K);
     s_disp_valid = true;
     s_disp_seq++;
 }
@@ -760,55 +762,54 @@ static bool quality_update(float residual, float *prev_residual, float *baseline
     return good;
 }
 
-/* Finishes the current precision-measurement run (target reached on both
- * sensors, or the timeout fired) -- computes the mean of whatever was
- * actually collected per sensor (0 if a sensor never got a single good
- * batch, e.g. a pathological all-bad run) and moves to DONE. Shared by
- * precision_accumulate() (the target-reached path) and
- * svc_displacement_update()'s periodic timeout check below (the
- * timeout-fired path, needed because nothing else drives this state
- * forward if on_sample()/process_one_batch() stalls mid-run). */
-static void precision_finish(bool timed_out)
+/* Ends the precision measurement with a result: the Hann-weighted means of
+ * the 81-batch window (S1, S2, and S1-S2 = the difference of the two means,
+ * identical to the mean of the per-batch differences because the weights are
+ * the same). */
+static void precision_succeed(void)
 {
-    s_precision_timed_out = timed_out;
-    s_precision_result1_mm = (s_precision_count1 > 0U)
-        ? (float)(s_precision_sum1 / (double)s_precision_count1) : 0.0f;
-    s_precision_result2_mm = (s_precision_count2 > 0U)
-        ? (float)(s_precision_sum2 / (double)s_precision_count2) : 0.0f;
-    s_precision_result_diff_mm = (s_precision_count_diff > 0U)
-        ? (float)(s_precision_sum_diff / (double)s_precision_count_diff) : 0.0f;
-    s_precision_phase = DISP_PRECISION_DONE;
+    s_precision_result1_mm = math_window_hann_mean(&s_win, 0, DISPLACEMENT_PRECISION_WINDOW_BATCHES,
+                                                   s_hann_prec, s_hann_prec_sum);
+    s_precision_result2_mm = math_window_hann_mean(&s_win, 1, DISPLACEMENT_PRECISION_WINDOW_BATCHES,
+                                                   s_hann_prec, s_hann_prec_sum);
+    s_precision_result_diff_mm = s_precision_result1_mm - s_precision_result2_mm;
+    s_precision_failed = false;
+    s_precision_phase  = DISP_PRECISION_DONE;
 }
 
-/* Feeds one batch's raw delta_mm + quality verdict into an in-progress
- * precision-measurement run, if one is armed (cheap no-op via the phase
- * check when idle, same shape as zero_cal_accumulate() above). Each
- * sensor accumulates independently -- a channel with a worse quality-good
- * rate simply takes longer to reach the target, up to the shared timeout.
- * The differential (2026-09-27) accumulates delta1-delta2 for this SAME
- * batch, gated on BOTH good1 AND good2 -- "exclude the differential
- * reading if either input is bad" (svc_displacement.h's comment). */
-static void precision_accumulate(float delta1, bool good1, float delta2, bool good2)
+/* Ends the precision measurement with an error: no clean window within
+ * DISPLACEMENT_PRECISION_TIMEOUT_MS. No value is reported. */
+static void precision_fail(void)
+{
+    s_precision_result1_mm = s_precision_result2_mm = s_precision_result_diff_mm = 0.0f;
+    s_precision_failed = true;
+    s_precision_phase  = DISP_PRECISION_DONE;
+}
+
+/* Called once per batch, after the history was updated. While a precision
+ * measurement runs: once DISPLACEMENT_PRECISION_WINDOW_BATCHES contiguous
+ * batches have arrived since the trigger, every new batch makes a new
+ * 81-batch window (sliding by one); the first one that is clean for both
+ * sensors is the result ("accept as soon as the last 2 s are clean"). */
+static void precision_batch(void)
 {
     if (s_precision_phase != DISP_PRECISION_RUNNING) {
         return;
     }
-    if (good1 && s_precision_count1 < DISPLACEMENT_PRECISION_TARGET_SAMPLES) {
-        s_precision_sum1 += (double)delta1;
-        s_precision_count1++;
+    if (s_precision_fill < DISPLACEMENT_PRECISION_WINDOW_BATCHES) {
+        s_precision_fill++;
     }
-    if (good2 && s_precision_count2 < DISPLACEMENT_PRECISION_TARGET_SAMPLES) {
-        s_precision_sum2 += (double)delta2;
-        s_precision_count2++;
+    if (s_precision_fill >= DISPLACEMENT_PRECISION_WINDOW_BATCHES
+        && s_win.count >= DISPLACEMENT_PRECISION_WINDOW_BATCHES) {
+        if (math_window_clean(&s_win, DISPLACEMENT_PRECISION_WINDOW_BATCHES, DISPLACEMENT_QUALITY_K)) {
+            s_precision_disturbed = false;
+            precision_succeed();
+            return;
+        }
+        s_precision_disturbed = true;
     }
-    if (good1 && good2 && s_precision_count_diff < DISPLACEMENT_PRECISION_TARGET_SAMPLES) {
-        s_precision_sum_diff += (double)(delta1 - delta2);
-        s_precision_count_diff++;
-    }
-    if (s_precision_count1 >= DISPLACEMENT_PRECISION_TARGET_SAMPLES
-        && s_precision_count2 >= DISPLACEMENT_PRECISION_TARGET_SAMPLES
-        && s_precision_count_diff >= DISPLACEMENT_PRECISION_TARGET_SAMPLES) {
-        precision_finish(false);
+    if ((uint32_t)(hal_systick_get_ms() - s_precision_start_ms) >= DISPLACEMENT_PRECISION_TIMEOUT_MS) {
+        precision_fail();
     }
 }
 
@@ -868,8 +869,21 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
          * it's degenerate it's degenerate for both -- checked once here
          * instead of once per sensor. */
         note_saturating(&s_degenerate_count);
+        s_have_batch_seq = false;   /* a skipped batch: the next one must not join this window */
         return;
     }
+
+    /* Contiguity: consecutive batches are exactly DISPLACEMENT_BATCH_CYCLES
+     * cycles apart. A dropped batch (or a restart) forgets the window so no
+     * Hann window or quality window ever spans a gap. */
+    if (!s_have_batch_seq
+        || (uint16_t)(seq - s_last_batch_seq) != (uint16_t)DISPLACEMENT_BATCH_CYCLES) {
+        math_window_break(&s_win);
+        s_disp_phase = 0;
+        s_precision_fill = 0;
+    }
+    s_last_batch_seq = seq;
+    s_have_batch_seq = true;
 
     SensorCalF s1_cal, s2_cal;
     load_sensor_cal(&s1_cal, g_device_settings.disp_s1_k_micro, ADS131M04_PGA_S1,
@@ -892,7 +906,7 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     s_delta1_mm_raw = delta1;
     s_delta2_mm_raw = delta2;
     ma_apply(delta1, delta2, &s_delta1_mm, &s_delta2_mm);
-    display_feed(delta1, delta2);
+    history_feed(delta1, residual1, delta2, residual2);
     s_residual1 = residual1;
     s_residual2 = residual2;
     s_disp_ok   = true;
@@ -903,11 +917,13 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
                                     &s_quality2_baseline, &s_quality2_seeded);
 
     zero_cal_accumulate(delta1, delta2);
-    precision_accumulate(delta1, s_quality1_ok, delta2, s_quality2_ok);
+    precision_batch();
 }
 
 DrvStatus svc_displacement_init(void)
 {
+    s_hann_disp_sum = math_hann_weights(s_hann_disp, DISPLACEMENT_DISPLAY_TAPS);
+    s_hann_prec_sum = math_hann_weights(s_hann_prec, DISPLACEMENT_PRECISION_WINDOW_BATCHES);
     accum_reset();
     s_out_head = s_out_tail = 0;
     s_input_drop_count  = 0;
@@ -974,7 +990,7 @@ DrvStatus svc_displacement_start(void)
  * external consumer (API Measurements/Topics, the LIVE screen, the
  * triggered precision measurement's result) reads through one of these
  * getters, so this is the one place that has to know about the flip.
- * zero_cal_accumulate()/precision_accumulate() upstream in
+ * zero_cal_accumulate()/precision_batch() upstream in
  * process_one_batch() use the UNFLIPPED delta1/delta2 locals directly, not
  * these getters -- zero-cal and the precision-run's live progress stay
  * entirely in the sensor's native sign convention; only the finished,
@@ -993,6 +1009,9 @@ float svc_displacement_get_display_delta_diff_mm(void)
 {
     return svc_displacement_get_display_delta1_mm() - svc_displacement_get_display_delta2_mm();
 }
+bool     svc_displacement_get_display_doubtful1(void) { return s_disp_doubtful1; }
+bool     svc_displacement_get_display_doubtful2(void) { return s_disp_doubtful2; }
+bool     svc_displacement_get_display_doubtful_diff(void) { return s_disp_doubtful1 || s_disp_doubtful2; }
 uint16_t svc_displacement_get_display_seq(void)   { return s_disp_seq; }
 bool     svc_displacement_get_display_valid(void) { return s_disp_ok && s_disp_valid; }
 
@@ -1216,14 +1235,13 @@ void svc_displacement_update(void)
     }
 
     /* Precision-measurement timeout, checked every tick regardless of
-     * whether a batch completed this pass -- precision_accumulate() above
-     * only fires the "target reached" path, so this is what guarantees
-     * the timeout still fires even if acquisition stalls or a channel's
-     * quality-good rate is so poor it never reaches the target (see
-     * config.h's DISPLACEMENT_PRECISION_TIMEOUT_MS comment). */
+     * whether a batch completed this pass -- precision_batch() above also
+     * checks it, but only when a batch arrives; this is what guarantees the
+     * error still fires if acquisition stalls (see config.h's
+     * DISPLACEMENT_PRECISION_TIMEOUT_MS comment). */
     if (s_precision_phase == DISP_PRECISION_RUNNING
         && (uint32_t)(hal_systick_get_ms() - s_precision_start_ms) >= DISPLACEMENT_PRECISION_TIMEOUT_MS) {
-        precision_finish(true);
+        precision_fail();
     }
 }
 
@@ -1549,24 +1567,20 @@ DrvStatus svc_displacement_precision_begin(void)
         && s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
         return DRV_ERR_NOT_READY;   /* mutually exclusive with an in-progress zero-cal */
     }
-    s_precision_count1      = 0;
-    s_precision_count2      = 0;
-    s_precision_sum1        = 0.0;
-    s_precision_sum2        = 0.0;
-    s_precision_count_diff  = 0;
-    s_precision_sum_diff    = 0.0;
-    s_precision_timed_out   = false;
-    s_precision_start_ms    = hal_systick_get_ms();
-    s_precision_phase       = DISP_PRECISION_RUNNING;
+    s_precision_fill       = 0;
+    s_precision_disturbed  = false;
+    s_precision_failed     = false;
+    s_precision_result1_mm = s_precision_result2_mm = s_precision_result_diff_mm = 0.0f;
+    s_precision_start_ms   = hal_systick_get_ms();
+    s_precision_phase      = DISP_PRECISION_RUNNING;
     return DRV_OK;
 }
 
 void svc_displacement_precision_cancel(void)
 {
-    s_precision_phase      = DISP_PRECISION_IDLE;
-    s_precision_count1     = 0;
-    s_precision_count2     = 0;
-    s_precision_count_diff = 0;
+    s_precision_phase     = DISP_PRECISION_IDLE;
+    s_precision_fill      = 0;
+    s_precision_disturbed = false;
 }
 
 DisplacementPrecisionPhase svc_displacement_precision_get_phase(void)
@@ -1574,14 +1588,21 @@ DisplacementPrecisionPhase svc_displacement_precision_get_phase(void)
     return s_precision_phase;
 }
 
+bool svc_displacement_precision_get_disturbed(void)
+{
+    return s_precision_phase == DISP_PRECISION_RUNNING && s_precision_disturbed;
+}
+
 void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_out,
                                           uint16_t *count_diff_out, uint16_t *target_out,
                                           uint32_t *elapsed_ms_out)
 {
-    if (count1_out)     *count1_out     = s_precision_count1;
-    if (count2_out)     *count2_out     = s_precision_count2;
-    if (count_diff_out) *count_diff_out = s_precision_count_diff;
-    if (target_out)     *target_out     = DISPLACEMENT_PRECISION_TARGET_SAMPLES;
+    /* All three counts report the same thing now (the window fill since the
+     * trigger); the three fields are kept for wire compatibility. */
+    if (count1_out)     *count1_out     = s_precision_fill;
+    if (count2_out)     *count2_out     = s_precision_fill;
+    if (count_diff_out) *count_diff_out = s_precision_fill;
+    if (target_out)     *target_out     = DISPLACEMENT_PRECISION_WINDOW_BATCHES;
     if (elapsed_ms_out) {
         *elapsed_ms_out = (s_precision_phase == DISP_PRECISION_IDLE)
             ? 0U : (uint32_t)(hal_systick_get_ms() - s_precision_start_ms);
@@ -1589,26 +1610,20 @@ void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_
 }
 
 bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,
-                                            float *delta_diff_mm_out, bool *timed_out_out)
+                                            float *delta_diff_mm_out, bool *failed_out)
 {
     if (s_precision_phase != DISP_PRECISION_DONE) {
         return false;
     }
     /* Same sign-flip-at-the-output-boundary policy as the getters above --
-     * s_precision_result*_mm are accumulated upstream (precision_accumulate())
-     * in the sensor's native sign convention. delta_diff specifically is
-     * its own dedicated quality-gated accumulator (see this function's own
-     * header comment / svc_displacement.h), not delta1-delta2 -- scaling it
-     * by S1's sign alone is exactly correct when S1/S2 share the same
-     * invert setting (the expected case, both rigidly mounted in one
-     * housing) and is the best available answer if they don't, short of
-     * losing the dedicated accumulator's quality-gating by recomputing it
-     * from the two independent results instead. */
+     * the window means are in the sensors' native sign convention. The
+     * differential carries S1's sign; exact when S1 and S2 share the same
+     * invert setting (the expected case, both rigidly mounted in one housing). */
     float sign1 = sensor_sign(g_device_settings.disp_s1_invert);
     float sign2 = sensor_sign(g_device_settings.disp_s2_invert);
     if (delta1_mm_out)      *delta1_mm_out      = sign1 * s_precision_result1_mm;
     if (delta2_mm_out)      *delta2_mm_out      = sign2 * s_precision_result2_mm;
     if (delta_diff_mm_out)  *delta_diff_mm_out  = sign1 * s_precision_result_diff_mm;
-    if (timed_out_out)      *timed_out_out      = s_precision_timed_out;
+    if (failed_out)         *failed_out         = s_precision_failed;
     return true;
 }

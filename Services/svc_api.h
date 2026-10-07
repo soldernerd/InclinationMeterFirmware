@@ -210,16 +210,17 @@ typedef enum {
  * this physical instrument: reads/writes only this device's own
  * g_device_settings and EEPROM, never anything shared across units. */
 #define API2_RES_CMD_ZERO_CAL         0x06U
-/* 0x07 Triggered precision measurement (2026-09-26) -- the "user
- * triggers it, device takes the time it needs, reports one reliable
- * value" mode, as opposed to the continuous live/streaming readout
+/* 0x07 Triggered precision measurement (2026-09-26, redesigned 2026-10-07)
+ * -- the "user triggers it, device takes the time it needs, reports one
+ * reliable value" mode, as opposed to the continuous live/streaming readout
  * (Topic groups 0x3). 1-byte payload:
- *   0x00 start  -- begin averaging quality-good batches per sensor
- *        (Config/config.h's DISPLACEMENT_QUALITY_BAD_MULTIPLE) up to
- *        DISPLACEMENT_PRECISION_TARGET_SAMPLES each, stopping once BOTH
- *        sensors reach the target or DISPLACEMENT_PRECISION_TIMEOUT_MS
- *        elapses (~3.2 s typical/clean, 4 s worst case -- see that
- *        constant's comment for the full ~2s-vs-64-samples tradeoff).
+ *   0x00 start  -- after 2 s (81 contiguous batches) every new batch forms a
+ *        sliding 81-batch Hann window; the first window that is CLEAN for both
+ *        sensors (window-level Im(x) step indicator <= DISPLACEMENT_QUALITY_K x
+ *        the instrument's quiet floor) is the result (Hann-weighted means of S1,
+ *        S2 and S1-S2). If none is found within DISPLACEMENT_PRECISION_TIMEOUT_MS
+ *        (5 s) the run ends with an ERROR and no value (Raw data 0x04: phase done,
+ *        timed_out = 1). Typical duration 2.0 s.
  *        Restarts a fresh run if one was already in progress. Requires
  *        the demod already running (Commands 0x01) and no zero-cal (0x06)
  *        in progress -- BUSY_RESOURCE otherwise.
@@ -600,32 +601,28 @@ typedef enum {
 #define API2_RES_RAW_ZERO_CAL_STATUS    0x03U
 /* 0x04 = triggered precision-measurement progress/result (Commands 0x07,
  * see its comment for the full procedure). GET, no request payload.
- * Response (26 B, LE):
+ * Response (27 B, LE):
  *   u8    phase       (DisplacementPrecisionPhase: 0 idle, 1 running, 2 done)
- *   u16   target       (DISPLACEMENT_PRECISION_TARGET_SAMPLES, so a host
- *                        doesn't need to hardcode it)
- *   u16   count1       (quality-good batches averaged so far for Sensor 1,
- *                        0..target)
- *   u16   count2       (same, for Sensor 2)
- *   u16   count_diff   (2026-09-27: batches averaged into the differential
- *                        accumulator, i.e. where BOTH sensors were
- *                        quality-good on the SAME batch -- generally
- *                        <= min(count1, count2), and the one that gates
- *                        completion alongside count1/count2)
+ *   u16   target       (DISPLACEMENT_PRECISION_WINDOW_BATCHES = 81, the
+ *                        window length in batches)
+ *   u16   count1       (batches since the start, capped at target: the window
+ *                        fill. count2 and count_diff carry the same number;
+ *                        the three fields are kept from the earlier format)
+ *   u16   count2
+ *   u16   count_diff
  *   u32   elapsed_ms   (wall-clock time since the EXECUTE that started
  *                        this run, 0 while idle)
- *   u8    timed_out     (1 if DISPLACEMENT_PRECISION_TIMEOUT_MS was hit
- *                        before all three (S1, S2, differential) reached
- *                        target -- only meaningful once phase == done)
- *   float delta1_mm    (mean of the count1 batches actually collected --
- *                        valid once phase == done; 0 before that)
+ *   u8    timed_out     (ERROR flag: 1 if no clean window was found within
+ *                        DISPLACEMENT_PRECISION_TIMEOUT_MS -- only meaningful
+ *                        once phase == done; the three values are then 0)
+ *   float delta1_mm    (Hann-weighted mean of the clean 81-batch window for
+ *                        Sensor 1 -- valid once phase == done and timed_out == 0)
  *   float delta2_mm    (same, for Sensor 2)
- *   float delta_diff_mm (2026-09-27, THE headline number for the
- *                        differential measurement strategy -- mean of
- *                        delta1-delta2 over the count_diff jointly-good
- *                        batches, NOT delta1_mm - delta2_mm above, which
- *                        would average over two potentially different sets
- *                        of batches) */
+ *   float delta_diff_mm (THE headline number for the differential measurement
+ *                        strategy: delta1_mm - delta2_mm over the same window)
+ *   u8    disturbed    (2026-10-07, appended: while running, 1 if the newest
+ *                        full window was not clean -- the run is waiting for
+ *                        the disturbance to pass. 0 otherwise.) */
 #define API2_RES_RAW_PRECISION_STATUS   0x04U
 
 #define API2_OP_RAW_ADC_DIAG \
