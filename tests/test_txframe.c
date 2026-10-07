@@ -67,22 +67,27 @@ TEST(non_urgent_stops_at_the_reserve_urgent_may_use_it)
 {
     fresh();
     uint8_t f[50];  fill_pattern(f, sizeof f, 0x40);
-    /* need = 52, want(non-urgent) = 52 + 64. free starts at 255:
-     *   k=1 -> free 203 >= 116  ok
-     *   k=2 -> free 151 >= 116  ok
-     *   k=3 -> free  99 <  116  REFUSED  */
+    /* need = 52, want(non-urgent) = 52 + 64 = 116. free starts at 255 and a
+     * push is accepted while free >= 116 (checked BEFORE the push):
+     *   k=1: free 255 -> ok (203 left)
+     *   k=2: free 203 -> ok (151 left)
+     *   k=3: free 151 -> ok ( 99 left)
+     *   k=4: free  99 <  116  REFUSED  */
+    CHECK(svc_txframe_push(&g_r, f, sizeof f, false));
     CHECK(svc_txframe_push(&g_r, f, sizeof f, false));
     CHECK(svc_txframe_push(&g_r, f, sizeof f, false));
     CHECK(!svc_txframe_push(&g_r, f, sizeof f, false));
     uint16_t free_after = svc_txframe_free_bytes(&g_r);
+    CHECK_EQ(free_after, 99);
     CHECK(free_after >= SVC_TXFRAME_RESERVE_BYTES);   /* the reserve is intact */
 
     /* an urgent frame that fits in what's left (incl. the reserve) is accepted */
-    uint8_t u[80];  fill_pattern(u, sizeof u, 0x80);   /* need = 82 <= free_after (151) */
+    uint8_t u[80];  fill_pattern(u, sizeof u, 0x80);   /* need = 82 <= free_after (99) */
     CHECK(svc_txframe_push(&g_r, u, sizeof u, true));
 
-    /* drain and check the urgent frame is the 3rd out, intact */
+    /* drain and check the urgent frame is the 4th out, intact */
     uint8_t out[100];
+    CHECK_EQ(svc_txframe_pop(&g_r, out, sizeof out), 50);
     CHECK_EQ(svc_txframe_pop(&g_r, out, sizeof out), 50);
     CHECK_EQ(svc_txframe_pop(&g_r, out, sizeof out), 50);
     CHECK_EQ(svc_txframe_pop(&g_r, out, sizeof out), 80);

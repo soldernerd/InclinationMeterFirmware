@@ -16,10 +16,8 @@ void      drv_sharp_lcd_write_row(uint16_t row, const uint8_t *src);
  * those rows (merged into a few runs, one CS-framed transaction each) and
  * returns DRV_OK without touching the bus if nothing changed;
  * DRV_ERR_NOT_READY if a previous flush is still on the wire (rows stay
- * dirty). mark_all_dirty() forces the whole panel to be resent;
- * has_dirty() lets the App layer retry a flush that was refused. */
+ * dirty). has_dirty() lets the App layer retry a flush that was refused. */
 DrvStatus drv_sharp_lcd_flush_dirty(void);
-void      drv_sharp_lcd_mark_all_dirty(void);
 bool      drv_sharp_lcd_has_dirty(void);
 bool      drv_sharp_lcd_is_busy(void);
 

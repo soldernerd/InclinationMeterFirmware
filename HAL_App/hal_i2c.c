@@ -48,15 +48,6 @@ DrvStatus hal_i2c_write(HalI2cInstance instance, uint8_t addr,
                                     len, I2C_TIMEOUT_MS) == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
 }
 
-DrvStatus hal_i2c_read(HalI2cInstance instance, uint8_t addr,
-                       uint8_t *data, uint16_t len)
-{
-    I2C_HandleTypeDef *h = handle_for(instance);
-    if (h == 0 || data == 0) return DRV_ERR_INVALID;
-    return (HAL_I2C_Master_Receive(h, (uint16_t)(addr << 1), data,
-                                   len, I2C_TIMEOUT_MS) == HAL_OK) ? DRV_OK : DRV_ERR_COMM;
-}
-
 DrvStatus hal_i2c_write_read(HalI2cInstance instance, uint8_t addr,
                              const uint8_t *tx, uint16_t tx_len,
                              uint8_t *rx, uint16_t rx_len)
@@ -108,15 +99,6 @@ bool hal_i2c_is_busy(HalI2cInstance instance)
         return s_busy[instance];
     }
     return false;
-}
-
-bool hal_i2c_device_ready(HalI2cInstance instance, uint8_t addr)
-{
-    I2C_HandleTypeDef *h = handle_for(instance);
-    if (h == 0) return false;
-    /* Poll one trial with a short timeout — used to detect EEPROM ACK
-     * after a write cycle completes. */
-    return HAL_I2C_IsDeviceReady(h, (uint16_t)(addr << 1), 1, 2) == HAL_OK;
 }
 
 void hal_i2c_abort(HalI2cInstance instance, uint8_t addr)

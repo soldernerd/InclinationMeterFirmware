@@ -37,9 +37,5 @@ adc_results_t  hal_adc_get_results(void);
  * (no valid scan yet), avoiding a divide-by-zero. */
 uint32_t       hal_adc_raw_to_mv(uint16_t channel_raw, uint16_t vrefint_raw);
 
-uint16_t          hal_adc_read_vbat_raw(void);
-uint16_t          hal_adc_read_temp_raw(void);
-uint16_t          hal_adc_read_temp_ext_raw(void);
-uint16_t          hal_adc_read_vrefint_raw(void);
 
 #endif /* HAL_ADC_H */

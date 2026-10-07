@@ -6,6 +6,5 @@
 
 void svc_usb_init(void);
 void svc_usb_update(void);
-bool svc_usb_is_connected(void);
 
 #endif /* SVC_USB_H */

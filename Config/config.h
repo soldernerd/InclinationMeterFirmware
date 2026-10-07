@@ -110,7 +110,6 @@
  * 256 bytes/page (24LC256 has 32 KB total, so this uses well under 5%
  * of it) leaves each subsystem generous room to grow without ever
  * needing to shift addresses again. */
-#define EEPROM_MAGIC                     0xA55A
 
 #define EEPROM_SCHEDULER_SETTINGS_ADDR    0x0000  /* task periods */
 #define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0002  /* 0x0002: dropped the REV A
@@ -263,10 +262,7 @@
  *
  * SolarCharger PID is 0xF08E. Picking 0xF08F here so the two don't
  * collide on the same host. */
-#define USB_VID                         0x04D8
-#define USB_PID                         0xF08F
 #define USB_HID_REPORT_SIZE             64
-#define USB_MANUFACTURER_STR            "soldernerd"
 #define USB_PRODUCT_STR                 "InclinationMeter"
 /* No USB_SERIAL_STR here anymore — the API v2 IDENTITY response's
  * serial_str is derived per-board from the MCU's factory UID
@@ -375,32 +371,15 @@
  * latching ERROR). */
 #define ADC_FRAME_RING_FRAMES          64U
 
-/* --- Displacement demodulation (WP10, Services/svc_displacement.c) ---
- * [2026-10-03: this depth now sizes only the OUTPUT ring (computed
- * results); the input side is the batch ring, DISPLACEMENT_BATCH_RING_DEPTH
- * below. The text that follows describes the original per-cycle input ring.]
- * Producer (the per-sample callback, called from the SysTick frame
- * drain above) -> consumer (svc_displacement_update(), every scheduler
- * tick) ring depth, one entry per completed 8-sample carrier cycle
- * (~2.6 kHz production rate — see math_phasor.h). Same
- * shape/reasoning as ADC_FRAME_RING_FRAMES above, just one layer up the
- * pipeline (cycles, not raw frames) and used for two SPSC rings (raw
- * I/Q in, computed delta out — see svc_displacement.c). Power of two,
- * index math uses & (N-1). Doubled from 64 to 128 (~49.2 ms of slack)
- * 2026-09-25 as part of the general margin-hardening below -- see that
- * comment for why. */
-#define DISPLACEMENT_RING_DEPTH        128U
-
 /* Scheduler-gap diagnostic threshold (2026-09-26, added to investigate an
  * observed batch-throughput shortfall -- docs/wp10_displacement.md has
  * the full writeup). svc_displacement_update()'s "how many calls saw a
  * gap this big since the last one" counter, Services/svc_displacement.c's
- * s_gap_over_threshold_count. Set just under DISPLACEMENT_RING_DEPTH's
- * ~49.2 ms buffering margin (128 cycles / ~2.604 kHz) -- "close enough to
- * start threatening the ring, whether or not it actually overflowed this
- * specific time." Purely a diagnostic knob, not a behavioral one --
- * changing it doesn't affect drops themselves, only how the counter
- * buckets them. */
+ * s_gap_over_threshold_count. Chosen well below the batch ring's slack
+ * ((DISPLACEMENT_BATCH_RING_DEPTH - 1) x 24.6 ms) -- "close enough to start
+ * threatening the ring, whether or not it actually overflowed this specific
+ * time." Purely a diagnostic knob, not a behavioral one -- changing it
+ * doesn't affect drops themselves, only how the counter buckets them. */
 #define DISPLACEMENT_GAP_WARN_THRESHOLD_MS  40U
 
 /* ROOT-CAUSED 2026-09-24 with a real debugger session (STM32_Programmer_CLI
@@ -533,9 +512,11 @@
  * carries one entry per completed BATCH (4 channels x 8 sums x int32 + seq =
  * 130 B), not one per cycle:
  *   DISPLACEMENT_BATCH_RING_DEPTH -- batches of slack between the sample
- *       callback and svc_displacement_update() (power of two). 4 batches =
- *       4 x 24.6 ms = ~98 ms (the old 128-cycle input ring gave ~49 ms) for
- *       520 B of RAM (the old ring was 128 x 66 B = 8.4 KB). If the task falls
+ *       callback and svc_displacement_update() (power of two). 16 entries, 15
+ *       usable = ~370 ms (it was 4: 3 usable, ~74 ms, which a 190 ms display
+ *       redraw overran, and every dropped batch breaks the Hann and quality
+ *       windows) for 2.1 KB of RAM (the original per-cycle ring was 128 x 66 B
+ *       = 8.4 KB). If the task falls
  *       further behind, the whole newest batch is dropped (input_drop_count
  *       += BATCH_CYCLES; the seq counter still advances, so a gap shows up as
  *       a seq jump of a multiple of BATCH_CYCLES) -- there are no partial
@@ -546,36 +527,13 @@
  *       call. Each costs a few thousand soft-float cycles, so a transient
  *       backlog degrades to dropped batches instead of ever livelocking the
  *       scheduler. */
-#define DISPLACEMENT_BATCH_RING_DEPTH     4U
+#define DISPLACEMENT_BATCH_RING_DEPTH     16U
 #define DISPLACEMENT_MAX_BATCHES_PER_TICK 2U
 
-/* --- Post-division moving average (2026-09-26) --- a second, independent
- * smoothing stage on top of DISPLACEMENT_BATCH_CYCLES' pre-division
- * coherent averaging, applied in Services/svc_displacement.c's
- * process_one_batch() to the already-divided delta_mm before it's exposed
- * via svc_displacement_get_delta1/2_mm() (so it's transparent to every
- * consumer -- the LIVE screen, the API Measurements resources, and any
- * future consumer alike). A plain boxcar over the last N batches: cheap
- * (one add/subtract per batch, no division-heavy complex math -- doesn't
- * touch the CPU-margin problem DISPLACEMENT_BATCH_CYCLES solves), buys a
- * further sqrt(N) SNR improvement at the cost of roughly
- * N/(2*batch_rate) added lag. At the default 4 and the (then) ~20.3 Hz
- * batch rate, that was sqrt(4)=2x (~6 dB) for about 100 ms of lag --
- * imperceptible for a mechanical displacement reading. zero-cal
- * deliberately bypasses this (svc_displacement.c's zero_cal_accumulate()
- * is fed the pre-MA raw batch delta) -- it already does its own much
- * longer, independent averaging over DISPLACEMENT_ZERO_CAL_SAMPLES
- * batches and doesn't need a second smoothing stage stacked on top.
- *
- * BUMPED 4 -> 8 2026-09-27 alongside DISPLACEMENT_BATCH_CYCLES' 128->64
- * halving, specifically to keep the smoothed value's total SNR and lag
- * both unchanged (see that constant's comment) while doubling the raw
- * batch rate -- not a new tuning target on its own. */
-#define DISPLACEMENT_MA_SAMPLES            8U
-
 /* Display stream (2026-10-05, window changed 2026-10-07): the LIVE screen does
- * not show the ~40.7 Hz batch stream (nor its 8-batch boxcar, which still
- * updates at 40.7 Hz for the API) but a condensed ~4 Hz reading: a Hann
+ * not show the ~40.7 Hz batch stream but a condensed ~4 Hz reading (the
+ * API's polled/subscribed delta values are this same stream since 2026-10-07;
+ * the raw batch value is Topic 0x03): a Hann
  * window over the newest DISPLACEMENT_DISPLAY_TAPS contiguous batch readings,
  * published every DISPLACEMENT_DISPLAY_DECIMATION-th batch (40.7 / 10 = 4.07 Hz).
  * 25 taps = 0.61 s, delay ~0.3 s, -3 dB at 1.1 Hz, and at least -42 dB over
@@ -603,6 +561,13 @@
  * is known; until then nothing is flagged. */
 #define DISPLACEMENT_QUALITY_K                 6.0f
 #define DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S  1200U
+
+/* If a sensor's windows stay flagged this long (10 minutes) the quiet level has
+ * really changed -- a frozen or dead channel came back, a sensor was swapped --
+ * and the floor is re-seeded from the current window instead of staying stuck
+ * near zero for hours (Math/math_window.h). Shorter than that, a disturbance
+ * can not raise its own limit. */
+#define DISPLACEMENT_QUALITY_RESEED_S          600U
 
 /* Nominal calibration seeds (DeviceSettings' displacement page, EEPROM-
  * backed past first boot — see system_state.h's comment on those
@@ -730,27 +695,6 @@
  * unchanged. */
 #define DISPLACEMENT_ZERO_CAL_SAMPLES        64U
 
-/* --- Per-batch quality flag (2026-09-26) --- bench-validated on real data
- * (a 10-minute streaming capture, see docs/wp10_displacement.md): a
- * batch's residual (Im(x), Services/svc_displacement.c's compute_sensor_delta())
- * steps by ~4-4.6x its typical (non-jump) size at the exact same moment
- * delta_mm has one of the discrete "jumps" this session's noise
- * investigation found -- residual quality-gates delta quality. Tracked as
- * a per-channel EWMA baseline of |residual step|, updated ONLY on batches
- * already judged good (so a sustained noisy patch can't inflate the
- * baseline and silently raise its own bar); a batch is flagged bad when
- * its residual step exceeds DISPLACEMENT_QUALITY_BAD_MULTIPLE times that
- * baseline. Chosen with real margin below the observed ~4x ratio so
- * ordinary noise doesn't false-positive. EWMA window in batches, not ms --
- * ~0.8 s at the current ~40.7 Hz batch rate (was ~1.6 s at the original
- * ~20.3 Hz -- DISPLACEMENT_BATCH_CYCLES' 2026-09-27 halving shrank this
- * window along with it; not re-tuned, since a faster-adapting baseline is
- * a reasonable side effect here, not a problem), long enough to average
- * out ordinary noise, short enough to track real drift in the baseline
- * noise level itself (e.g. after a gain/calibration change). */
-#define DISPLACEMENT_QUALITY_BAD_MULTIPLE     3U
-#define DISPLACEMENT_QUALITY_EWMA_SAMPLES     32U
-
 /* --- Triggered precision measurement (2026-09-26, redesigned 2026-10-07) ---
  * the API/UI-triggered "take a reliable reading" mode (Services/svc_api.c's
  * Commands API2_RES_CMD_PRECISION_MEASURE, right knob on LIVE). A sliding
@@ -801,54 +745,15 @@
  * mid-transfer (docs/api-v2-spec.md §4.1). */
 #define ADC_BULK_CHUNKS_PER_TICK      4U
 
-/* --- Displacement phasor diagnostics (2026-09-25) ---
+/* --- Displacement phasor diagnostics ---
  * Exposes the demod's intermediate I/Q phasors (Services/svc_displacement.c's
- * BatchSums -- the batch-summed values feeding process_one_batch()'s
- * complex division, one step upstream of delta_mm/residual) for bench
- * diagnosis: a consistently-off phasor points at a calibration or wiring
- * problem in a way delta_mm alone can't distinguish from "device working,
- * instrument tilted".
- *
- * Real-time: API v2 Topic groups (0x5) resource API2_RES_TOPIC_PHASORS --
- * the latest completed batch's 8 floats, GET + SUBSCRIBE, same as any
- * other topic. ~81 updates/s available at the source (DISPLACEMENT_BATCH_CYCLES
- * below); a subscriber picks its own poll interval
- * (API2_MEASUREMENT_MIN_INTERVAL_MS floor, 50 ms) -- genuinely "real time"
- * is fine here specifically BECAUSE phasors are one bundled 32-byte
- * snapshot, not a per-sample stream like the raw ADC bulk capture below
- * (32 bytes @ 50 ms = 640 B/s, trivial next to UART's 115200 baud budget;
- * the raw ADC would be ~230x that).
- *
- * Longer time slots: API v2 Bulk (0x8) resource API2_RES_BULK_PHASORS.
- * Reuses the exact same accumulation/batching pipeline as normal
- * operation (on_sample() untouched) -- svc_displacement_update()'s
- * "batch complete" branch stores instead of demodulating while a capture
- * is armed. Storing every batch would only buy ~32x the raw-ADC capture's
- * ~295 ms window (batches complete DISPLACEMENT_BATCH_CYCLES=32x slower
- * than raw ADC samples) -- decimating further, storing only every
- * DISPLACEMENT_PHASOR_LOG_DECIMATIONth batch, trades that resolution for
- * duration instead: (2604.167/32)/2 =~ 40.7 Hz effective, matching the
- * old WP8 signal-analysis module's update rate (this constant was
- * re-derived 2026-09-25 when DISPLACEMENT_BATCH_CYCLES quadrupled 8->32
- * as part of the margin-hardening below it -- decimation dropped
- * 8->2 to land on the same ~40.7 Hz/~12.6 s target as before, not a
- * 4x-longer capture by accident). */
-/* SET TO 1 2026-10-03 (was 2): store EVERY completed batch, i.e. a
- * contiguous 40.7 Hz series (512 entries = ~12.6 s) instead of every other
- * one. Every-other-batch (20.35 Hz) puts the ~20 Hz pendulum right at the
- * sampling rate, which aliases it to <1 Hz and defeats the purpose of this
- * log (see Testing/2026-09-30_bulk_adc_30s_interval/findings.md): a
- * contiguous batch series is what the smoothing-filter design needs. */
-#define DISPLACEMENT_PHASOR_LOG_DECIMATION    1U
-
-/* 512 entries x 34 B (8 floats + a u16 seq, packed) = 17408 B (~17 KB) --
- * at the ~40.7 Hz effective rate above, ~12.6 s of history. Picked to
- * leave a comfortable RAM margin alongside the raw-ADC capture buffer
- * (both exist, but the two captures are mutually exclusive at runtime so
- * only one is ever actively written at a time -- this is a static
- * allocation trade, not a runtime one). */
-#define DISPLACEMENT_PHASOR_LOG_DEPTH          512U
-
+ * BatchSums -- the batch-summed values feeding process_one_batch()'s complex
+ * division, one step upstream of delta_mm/residual) for bench diagnosis.
+ * Real-time snapshot: API v2 Topic 0x5 / resource 0x02 (latest batch, 8 floats,
+ * GET + SUBSCRIBE; an interval snapshot, so it aliases the 20 Hz sensor
+ * resonance -- not for analysis). Gapless: the continuous stream below. (The
+ * one-shot "bulk phasor log", Bulk 0x8 / 0x01, was removed 2026-10-07: the
+ * stream replaced it and its 17 KB buffer was the biggest dead-weight RAM user.) */
 /* Continuous phasor batch stream FIFO (API Topic 0x5 / res 0x05, added
  * 2026-10-04): 64 entries x 34 B = 2176 B, ~1.57 s of batches at 40.7 Hz.
  * It only has to ride out main-loop stalls and UART back-pressure (the
@@ -859,15 +764,6 @@
 /* Stream frames handed to the transport per svc_api_update() tick, upper
  * bound (the transport's ready hook limits it further). */
 #define DISPLACEMENT_PHASOR_STREAM_PER_TICK    4U
-
-/* Entries per bulk chunk packet. Payload is [page:1][entry:34]xN; the
- * whole API2 packet must fit API2_PACKET_MAX_SIZE (128): 4 (frame) + 1
- * (status) + 1 (page) + 34*N + 2 (crc) <= 128 -> N <= 3. */
-#define DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES  3U
-
-/* Chunks pushed per svc_api_update() tick, upper bound -- same reasoning
- * as ADC_BULK_CHUNKS_PER_TICK above. */
-#define DISPLACEMENT_PHASOR_LOG_CHUNKS_PER_TICK 4U
 
 /* --- BME280 environmental sensor (WP9) ---
  * Shares I2C1 with the EEPROM (see pin_config.h) — no CubeMX changes

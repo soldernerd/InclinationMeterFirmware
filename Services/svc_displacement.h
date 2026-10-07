@@ -56,45 +56,11 @@
  * DISPLACEMENT_BATCH_CYCLES comment for why
  * (root-caused 2026-09-24: the division-heavy math alone can't sustain
  * 2.6 kHz once its result is stored anywhere, and doing so unbatched
- * livelocked the whole scheduler). Each batch's result is pushed into a
- * second, output ring buffer -- the per-batch delta1/delta2 stream this
- * module retains (not just a filtered/averaged single value), for later
- * analysis of higher-frequency effects such as pendulum swinging.
- * The svc_displacement_get_*() getters below return the latest batch's
- * snapshot, for the API v2 Measurements (0x4) GET/SUBSCRIBE resources
- * (Services/svc_api.c); svc_displacement_pop() is how a caller gets the
- * full stream instead -- nothing drains it yet on this REV B port's
- * first pass. */
-
-typedef struct {
-    float    delta1_mm;    /* S1 displacement, mm -- one DISPLACEMENT_BATCH_CYCLES batch */
-    float    residual1;    /* Im(x1) -- diagnostic, should sit near 0 */
-    float    delta2_mm;    /* S2 displacement, mm */
-    float    residual2;    /* Im(x2) */
-    uint16_t seq;           /* Rolling per-CYCLE counter (not per-batch) --
-                              * assigned in on_sample() to every completed
-                              * 8-sample cycle, including those of a batch
-                              * later dropped by a full input ring -- and
-                              * copied here as the LAST cycle of this
-                              * batch, so a consumer that isn't draining
-                              * every single entry can still detect gaps
-                              * (consecutive batches' seq values differing
-                              * by more than DISPLACEMENT_BATCH_CYCLES;
-                              * always a whole number of batches) by their
-                              * absence from the sequence. Wraps every
-                              * 65536 cycles (~25 s at ~2.6 kHz) --
-                              * consumers doing gap detection MUST use
-                              * wraparound-safe (modular) comparison, not
-                              * naive equality/increment checks, or they'll
-                              * see a false gap at every rollover.
-                              * Deliberately last/uint16_t rather than
-                              * packed in front of the floats: this struct
-                              * is read/written by plain field access (the
-                              * ring buffer), not memcpy'd onto the wire
-                              * directly -- Cortex-M0+ doesn't reliably
-                              * support unaligned float access, so this
-                              * stays naturally aligned. */
-} DisplacementCycle;
+ * livelocked the whole scheduler). The svc_displacement_get_*() getters
+ * below return the latest values, for the API v2 Measurements (0x4)
+ * GET/SUBSCRIBE resources (Services/svc_api.c); the per-batch stream itself
+ * is available as the continuous phasor stream (Topic 0x05) and as the raw
+ * per-batch delta (Topic 0x03). */
 
 /* The 8 raw batch-summed phasors feeding process_one_batch()'s complex
  * division -- one step upstream of delta_mm/residual, exposed 2026-09-25
@@ -121,9 +87,11 @@ typedef struct {
 DrvStatus svc_displacement_init(void);
 
 /* Start / stop the ADC sample stream + per-cycle demodulation. start()
- * also clears any half-accumulated cycle and both ring buffers so the
- * first results after a start are clean, not a stale mix from before a
- * stop. Idempotent; task context only. Toggled at runtime over the API
+ * also clears any half-accumulated batch and the ring so the first results
+ * after a start are clean, not a stale mix from before a stop. start() while
+ * the acquisition is already running is a no-op (it must not reset state under
+ * the live sample callback); it returns DRV_ERR_NOT_READY if the ADC never
+ * initialised. Task context only. Toggled at runtime over the API
  * (EXECUTE / Commands / API2_RES_CMD_DISPLACEMENT). */
 DrvStatus svc_displacement_start(void);
 void      svc_displacement_stop(void);
@@ -132,10 +100,8 @@ bool      svc_displacement_is_running(void);
 /* Drains the completed batches queued since the last call (the
  * per-position-sum ISR-adjacent ring buffer; at most
  * DISPLACEMENT_MAX_BATCHES_PER_TICK per call), computing
- * x1/x2/delta1/delta2 for each and pushing the result into the output ring
- * buffer svc_displacement_pop()
- * reads, and into this module's own latest-value snapshot (the
- * svc_displacement_get_*() getters below). Call every scheduler tick --
+ * x1/x2/delta1/delta2 for each and updating this module's latest-value
+ * snapshot (the svc_displacement_get_*() getters below). Call every scheduler tick --
  * see the .c file for why this can't wait for a slower task period the
  * way WP9's BME280 task does. */
 void svc_displacement_update(void);
@@ -145,11 +111,11 @@ void svc_displacement_update(void);
  * svc_displacement_get_ok() is true (mirrors g_system_state.ads_ok:
  * acquisition running + at least one cycle processed); all return 0.0f
  * (false, for _ok) before that. Task context only. delta1/2_mm are the
- * POST-moving-average value (config.h's DISPLACEMENT_MA_SAMPLES, added
- * 2026-09-26) -- see svc_displacement_get_delta1_mm_raw()/
- * get_delta2_mm_raw() below for the pre-MA value. residual1/2 were never
- * run through the MA (zero-cal's own comment explains why) so there is
- * only one version of each. delta1/2_mm (and _raw) carry the per-instrument
+ * smoothed value: the Hann display stream below once it exists (about 0.6 s
+ * after a start), the raw batch value until then (2026-10-07: replaces the
+ * 8-batch moving average). See svc_displacement_get_delta1_mm_raw()/
+ * get_delta2_mm_raw() below for the per-batch value. residual1/2 are per
+ * batch. delta1/2_mm (and _raw) carry the per-instrument
  * sign flip (disp_s1/s2_invert, system_state.h, 2026-09-29) -- residual1/2
  * do not, since they're an internal quality signal, not a directional
  * physical reading. */
@@ -159,10 +125,10 @@ float svc_displacement_get_delta2_mm(void);
 float svc_displacement_get_residual2(void);
 bool  svc_displacement_get_ok(void);
 
-/* Pre-moving-average delta_mm -- the value computed directly from one
- * DISPLACEMENT_BATCH_CYCLES batch, before DISPLACEMENT_MA_SAMPLES'
- * boxcar smoothing is applied (added 2026-09-26, at the user's request,
- * for granular analysis of the raw ~40.7 updates/s batch stream --
+/* Per-batch delta_mm -- the value computed directly from one
+ * DISPLACEMENT_BATCH_CYCLES batch, with no smoothing (added 2026-09-26, at
+ * the user's request, for granular analysis of the raw ~40.7 updates/s batch
+ * stream --
  * Services/svc_api.c's Topic groups (0x5) API2_RES_TOPIC_RAW_DISPLACEMENT
  * exposes this as a subscribable stream). Same validity contract as
  * svc_displacement_get_delta1_mm() above. */
@@ -176,12 +142,9 @@ float svc_displacement_get_delta2_mm_raw(void);
  * cannot, because the dominant noise/drift is common-mode between S1/S2 and
  * cancels in the difference -- the original unit's own two supported
  * configurations (one sensor connected = absolute, both connected =
- * differential) already anticipated this. Just delta1 - delta2 (or the raw
- * pair, before MA) -- no separate moving-average state needed: a boxcar
- * average is linear, so MA(delta1) - MA(delta2) equals MA(delta1-delta2)
- * exactly, meaning these getters can derive the smoothed differential from
- * the two smoothed per-sensor values already computed, with no additional
- * accumulator. Same validity contract as svc_displacement_get_delta1_mm()
+ * differential) already anticipated this. Just delta1 - delta2 (smoothed or
+ * raw, matching the getters above) -- the filters are linear, so no separate
+ * state is needed. Same validity contract as svc_displacement_get_delta1_mm()
  * (meaningless before the first batch / while !get_ok()). */
 float svc_displacement_get_delta_diff_mm(void);
 float svc_displacement_get_delta_diff_mm_raw(void);
@@ -201,7 +164,8 @@ float svc_displacement_get_delta_diff_mm_raw(void);
  * step of Im(x) over the 25 batches exceeded DISPLACEMENT_QUALITY_K times the
  * instrument's own quiet floor (Math/math_window.h). The LIVE screen puts a "!"
  * next to a doubtful reading. doubtful_diff() = either sensor. Nothing is
- * flagged until the floor is known (about 2 s after a start). */
+ * flagged until the quiet floor rests on two independent 2 s windows (about
+ * 4 s after a start). */
 float    svc_displacement_get_display_delta1_mm(void);
 float    svc_displacement_get_display_delta2_mm(void);
 float    svc_displacement_get_display_delta_diff_mm(void);
@@ -252,30 +216,17 @@ void svc_displacement_get_signal_diag(DisplacementSignalDiag *out);
  * acquisition driver (Drivers_App/drv_ads131m04.c) has latched an
  * integrity fault (lost/duplicated conversion, ring overrun, or lost
  * framing), emits one API2_LOG_ERROR to the debug-log stream and stops
- * the pipeline. One-shot per start() -- ported unchanged from WP8's
+ * the service (svc_displacement_stop(): the reading is no longer "ok", a
+ * running zero-cal / precision measurement is cancelled). One-shot per start() -- ported unchanged from WP8's
  * svc_signal_analysis.c, which this module replaces as the driver's
  * sole sample-callback consumer. */
 void svc_displacement_check_integrity(void);
 
-/* Pops the oldest not-yet-read cycle result into *out. Returns false
- * (out untouched) if the output ring buffer is empty -- callers should
- * loop this until it returns false to drain everything available, same
- * pattern as HAL_App/hal_uart.c's hal_uart_read_byte(). If nothing has
- * called this in a while, the buffer overwrites its oldest entries
- * rather than discarding new ones (see the .c file's push_output()
- * comment) -- it always holds the most recent ~24.6 ms of results, not a
- * permanent snapshot of whatever happened to be produced first after a
- * start(). Nothing drains this yet on the REV B port's first pass (the
- * high-rate stream is deferred) -- reserved for that follow-up. */
-bool svc_displacement_pop(DisplacementCycle *out);
-
 /* Saturating counts (CLAUDE.md 7.6) -- input_drop: carrier cycles lost
  * because the batch ring was full when a batch completed (consumer not
  * keeping up); counted in cycles, DISPLACEMENT_BATCH_CYCLES per dropped
- * whole batch (there are no partial batches). output_drop: a computed result was dropped because
- * the output ring buffer was full (nothing has called
- * svc_displacement_pop() in a while -- expected on this port until a
- * stream consumer exists). degenerate: a cycle's complex division had an
+ * whole batch (there are no partial batches). output_drop: always 0 (the
+ * output ring was removed 2026-10-07; the wire field is kept). degenerate: a cycle's complex division had an
  * exactly-zero denominator (A and B phasors identical) and was skipped
  * entirely -- should not occur in practice. Surfaced over the API on
  * Raw data (0x7) GET API2_RES_RAW_ADC_DIAG. */
@@ -363,54 +314,28 @@ uint16_t       svc_displacement_capture_drops(void);    /* acquisition ring over
 void svc_displacement_last_capture(uint16_t *samples, uint16_t *drops,
                                     uint32_t *elapsed_ms);
 
-/* --- Bulk phasor log capture (feeds the API v2 category 0x8 bulk
- * transfer, resource API2_RES_BULK_PHASORS) ---
- * Added 2026-09-25 for bench diagnosis of behaviour on timescales the
- * ~0.3 s raw-ADC capture above can't reach (drift, degenerate-denominator
- * excursions, a pendulum swinging) -- see Config/config.h's "Displacement
- * phasor diagnostics" comment for the full reasoning. Unlike the raw-ADC
- * capture, this does NOT bypass the phasor accumulation -- it reuses the
- * exact same on_sample()/batching pipeline as normal operation and only
- * changes what svc_displacement_update() does once a batch completes:
- * store a decimated (Config/config.h DISPLACEMENT_PHASOR_LOG_DECIMATION)
- * snapshot here instead of running process_one_batch()'s delta/residual
- * math. Same one-shot arm/fill/drain shape and the same "not for
- * concurrent use with the real-time _start()/_stop() path, caller
- * enforces exclusivity" contract as the raw-ADC capture. Task context
- * only. */
+/* One batch's raw phasors as the continuous phasor stream carries them
+ * (API Topic 0x05 / resource 0x05); 34 bytes on the wire. */
 typedef struct {
     float    iB, qB;
     float    iA, qA;
     float    iS1, qS1;
     float    iS2, qS2;
-    uint16_t seq;   /* the last raw cycle folded into this stored batch --
-                       * same wraparound-safe-comparison caveat as
-                       * DisplacementCycle::seq above. */
+    uint16_t seq;   /* the last raw cycle folded into this batch: a rolling
+                       * per-cycle counter (wraps every 65536 cycles, ~25 s), so
+                       * compare with modular arithmetic. */
 } __attribute__((packed)) DisplacementPhasorLogEntry;
 
-DrvStatus                         svc_displacement_phasor_log_begin(void);
-bool                               svc_displacement_phasor_log_done(void);
-void                               svc_displacement_phasor_log_end(void);
-const DisplacementPhasorLogEntry *svc_displacement_phasor_log_buffer(void);
-uint16_t                          svc_displacement_phasor_log_count(void);   /* always DISPLACEMENT_PHASOR_LOG_DEPTH */
-
-/* Entries stored so far in the current (or most recently finished)
- * capture, 0..DISPLACEMENT_PHASOR_LOG_DEPTH -- lets a host poll progress
- * instead of guessing how long a capture has left. Surfaced over the API
- * on Raw data (0x7) GET API2_RES_RAW_DISPLACEMENT_DIAG. */
-uint16_t svc_displacement_phasor_log_progress(void);
-
 /* --- Continuous phasor batch stream (API Topic 0x5 / resource 0x05) ---
- * Added 2026-10-04 (fw 0.10.65). Unlike the one-shot phasor log above (512
- * entries, then a pause while it is sent out), this delivers EVERY completed
- * batch: svc_displacement_update() pushes each batch's raw phasors into a
+ * Added 2026-10-04 (fw 0.10.65; it replaced the one-shot bulk phasor log,
+ * removed 2026-10-07). It delivers EVERY completed batch: svc_displacement_update() pushes each batch's raw phasors into a
  * FIFO (DISPLACEMENT_PHASOR_STREAM_DEPTH entries) and the API layer drains
  * it one frame per batch. Same exclusivity contract as the log/capture
  * (refused while the real-time demod runs; the demod math is bypassed while
  * the stream is active). Entries carry the cycle seq, so a lost batch shows
  * as a seq jump; batches the FIFO had no room for are counted separately.
  * Task context only. */
-DrvStatus svc_displacement_phasor_stream_begin(void);
+DrvStatus svc_displacement_phasor_stream_begin(void);   /* DRV_ERR_NOT_READY if the acquisition is already in use */
 void      svc_displacement_phasor_stream_end(void);
 bool      svc_displacement_phasor_stream_active(void);
 /* Oldest queued entry without removing it (false if empty); consume()
@@ -486,26 +411,17 @@ bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offs
 /* sensor_mask_out (may be NULL): which sensors the run covered; the caller
  * must only update those sensors' stored zeros. */
 
-/* --- Per-batch quality flag (2026-09-26) --- see Config/config.h's
- * DISPLACEMENT_QUALITY_BAD_MULTIPLE comment for the derivation (bench-
- * validated: a batch's residual step runs ~4-4.6x its typical size at
- * the exact same batches delta_mm has one of the discrete "jumps" this
- * session's noise investigation found). true = this latest batch's
- * delta_mm is trustworthy; false = its residual moved anomalously and
- * the delta_mm from that specific batch should be treated with
- * suspicion. Same validity contract as svc_displacement_get_delta1_mm()
- * (meaningless before the first batch / while !get_ok()). Surfaced over
- * the API on Topic groups (0x5) API2_RES_TOPIC_RAW_DISPLACEMENT, and
- * used internally to gate which batches the precision-measurement
- * feature below averages. */
+/* --- Window-level quality verdict (2026-10-07) --- true = the newest display
+ * window (25 batches) was NOT doubtful, i.e. its Im(x) step power was within
+ * DISPLACEMENT_QUALITY_K of the instrument's quiet floor (see the display
+ * stream above). Surfaced over the API on Topic 0x03 where the per-batch flag
+ * used to be (that flag, which compared each batch's residual step with an
+ * EWMA of earlier ones, was retired: it fired on the sensor's 20 Hz resonance
+ * and dropping the flagged batches made averages worse). Same validity
+ * contract as svc_displacement_get_delta1_mm(). The differential is "ok" only
+ * when both sensors are. */
 bool svc_displacement_get_quality1_ok(void);
 bool svc_displacement_get_quality2_ok(void);
-
-/* Differential quality (2026-09-27): true only when BOTH sensors' batches
- * are individually quality-good on this SAME batch -- "exclude the
- * differential reading if either input is bad," per the analysis above.
- * A derived AND, not independent state (same reasoning as the delta_diff
- * getters above). */
 bool svc_displacement_get_quality_diff_ok(void);
 
 /* --- Triggered precision measurement (2026-09-26, redesigned 2026-10-07) ---
@@ -520,7 +436,9 @@ bool svc_displacement_get_quality_diff_ok(void);
  * means of S1, S2 and the differential S1-S2 over that window. If no clean
  * window exists within DISPLACEMENT_PRECISION_TIMEOUT_MS (5 s) the
  * measurement ends in the DONE phase with the failed flag set and no value.
- * A dropped batch restarts the 2 s fill. Requires the demod already running
+ * A verdict needs the quiet floor (two independent windows, about 4 s after a
+ * start of the acquisition): a measurement begun earlier waits for it, which
+ * can use up the 5 s. A dropped batch restarts the 2 s fill. Requires the demod already running
  * and no zero-cal in progress (DRV_ERR_NOT_READY otherwise -- the two
  * averaging consumers of the batch stream are mutually exclusive by design).
  * A fresh begin() while already running restarts it; svc_displacement_stop()
@@ -555,8 +473,8 @@ void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_
  * found in time: then the three values are 0 and must not be used. Otherwise
  * delta1/2_mm_out are the Hann-weighted window means and delta_diff_mm_out is
  * their difference (= the mean of the per-batch differences). All three carry
- * the per-instrument sign flip (disp_s1/s2_invert); delta_diff_mm_out is scaled
- * by S1's sign, exact when S1/S2 share the same invert setting. */
+ * the per-instrument sign flip (disp_s1/s2_invert); the differential is
+ * computed from the flipped values, so it is right for any combination. */
 bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,
                                             float *delta_diff_mm_out, bool *failed_out);
 

@@ -207,7 +207,6 @@ DrvStatus drv_rn4871_init(void)
 
 void drv_rn4871_register_rx_callback(Rn4871RxCallback cb) { s_rx_cb = cb; }
 
-bool drv_rn4871_is_ready(void)     { return s_state == ST_READY; }
 bool drv_rn4871_is_connected(void) { return s_state == ST_READY && s_connected; }
 
 DrvStatus drv_rn4871_send(const uint8_t *data, uint16_t len)

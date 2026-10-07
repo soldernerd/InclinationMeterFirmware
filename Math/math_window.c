@@ -4,8 +4,9 @@
 
 /* Smallest floor allowed: keeps a pathological all-identical-residual stretch
  * (q == 0) from pinning the floor at 0, where the multiplicative creep could
- * never lift it. Real residual steps are ~1e-14 in the firmware's units. */
-#define MATH_WINDOW_MIN_FLOOR  1.0e-30f
+ * never lift it. Real residual step power is ~1e-14 in the firmware's units; the
+ * re-seed rule (math_window_reset()) recovers within minutes even from here. */
+#define MATH_WINDOW_MIN_FLOOR  1.0e-20f
 
 float math_hann_weights(float *w, uint16_t n)
 {
@@ -16,7 +17,7 @@ float math_hann_weights(float *w, uint16_t n)
     return (float)(n + 1U) * 0.5f;
 }
 
-void math_window_reset(MathWindow *w, float creep_per_batch)
+void math_window_reset(MathWindow *w, float creep_per_batch, uint32_t reseed_batches)
 {
     for (uint8_t s = 0; s < 2U; ++s) {
         for (uint16_t i = 0; i < MATH_WINDOW_LEN; ++i) {
@@ -28,6 +29,9 @@ void math_window_reset(MathWindow *w, float creep_per_batch)
         w->floor[s]  = MATH_WINDOW_MIN_FLOOR;
     }
     w->creep       = creep_per_batch;
+    w->reseed_batches = reseed_batches;
+    w->flag_run[0] = w->flag_run[1] = 0;
+    w->floor_age   = 0;
     w->next        = 0;
     w->count       = 0;
     w->total       = 0;
@@ -90,13 +94,33 @@ void math_window_push(MathWindow *w, const float reading[2], const float residua
                 if (m < w->floor[s]) {
                     w->floor[s] = m;                /* ... and falls as soon as a quieter window appears */
                 }
+                /* ... except that a quiet level which has really changed must not leave
+                 * every window flagged for hours (e.g. after a frozen channel recovers). */
+                if (m > MATH_WINDOW_RESEED_RATIO * w->floor[s]) {
+                    if (++w->flag_run[s] >= w->reseed_batches) {
+                        w->floor[s]    = m;
+                        w->flag_run[s] = 0;
+                    }
+                } else {
+                    w->flag_run[s] = 0;
+                }
             }
             if (w->floor[s] < MATH_WINDOW_MIN_FLOOR) {
                 w->floor[s] = MATH_WINDOW_MIN_FLOOR;
             }
         }
         w->floor_valid = true;
+        if (w->floor_age < UINT32_MAX) {
+            w->floor_age++;
+        }
     }
+}
+
+bool math_window_floor_ready(const MathWindow *w)
+{
+    /* the first full window seeds the floor (age 1); the second, independent
+     * window is complete MATH_WINDOW_LEN batches later */
+    return w->floor_valid && w->floor_age > MATH_WINDOW_LEN;
 }
 
 float math_window_mean_q(const MathWindow *w, uint8_t s, uint16_t n)
@@ -119,7 +143,7 @@ float math_window_mean_q(const MathWindow *w, uint8_t s, uint16_t n)
 
 bool math_window_clean_sensor(const MathWindow *w, uint8_t s, uint16_t n, float k)
 {
-    if (!w->floor_valid) {
+    if (!math_window_floor_ready(w)) {
         return true;
     }
     return math_window_mean_q(w, s, n) <= k * w->floor[s];

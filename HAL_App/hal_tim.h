@@ -11,14 +11,12 @@ void hal_tim_vcom_stop(void);
  * on PB3). Prescaler set to 63 in CubeMX so the timer ticks at 1 MHz;
  * ARR/CCR4 are programmed dynamically per call.
  *
- * hal_tim_buzzer_start()  — sound the tone until hal_tim_buzzer_stop().
- * hal_tim_buzzer_beep()   — sound the tone for exactly duration_ms, then
+ * hal_tim_buzzer_beep()   - sound the tone for exactly duration_ms, then
  *   stop it from the TIM3 update ISR. The length is counted in whole PWM
  *   periods by hardware, so it does NOT depend on scheduler / display-
- *   render timing (which is why the old polled stop gave uneven beeps).
- *   A second call while a beep is still sounding only ever lengthens it.
- * hal_tim_buzzer_isr()    — call from TIM3_TIM4_IRQHandler(). */
-void hal_tim_buzzer_start(uint16_t freq_hz);
+ *   render timing. A second call while a beep is still sounding only ever
+ *   lengthens it.
+ * hal_tim_buzzer_isr()    - call from TIM3_TIM4_IRQHandler(). */
 void hal_tim_buzzer_beep(uint16_t freq_hz, uint16_t duration_ms);
 void hal_tim_buzzer_isr(void);
 void hal_tim_buzzer_stop(void);

@@ -39,7 +39,6 @@ DrvStatus hal_spi_transmit_receive(HalSpiInstance instance,
 void hal_spi_register_dma_callback(HalSpiInstance instance, HalSpiDmaCallback cb);
 void hal_spi_cs_assert(HalSpiInstance instance);
 void hal_spi_cs_deassert(HalSpiInstance instance);
-bool hal_spi_is_busy(HalSpiInstance instance);
 
 /* --- ADS131M04 raw-DMA streaming path (HAL_SPI_ADC / SPI1 only) ---
  * The HAL's HAL_SPI_TransmitReceive_DMA + SPI_EndRxTxTransaction wrapper

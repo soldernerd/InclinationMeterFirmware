@@ -259,7 +259,9 @@ typedef struct {
 
     /* Counts API frames svc_usb.c's send_via_usb() could not enqueue in
      * the per-transport TX ring (Services/svc_txframe.c) because it was
-     * full past the point its admission rule allows for that frame.
+     * full past the point its admission rule allows for that frame, or a
+     * frame longer than one 64-byte HID report was dropped by svc_usb.c
+     * (the 56 B diagnostics topic and bulk chunks only fit UART/BLE).
      * hal_usb_send() returning USBD_BUSY is NOT counted here — that frame
      * stays queued and is retried on the next pump. There's no retry
      * queue for a ring-full drop: the frame is gone. This counter is the

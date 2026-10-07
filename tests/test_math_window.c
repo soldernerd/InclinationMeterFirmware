@@ -8,6 +8,7 @@
 #include "../Math/math_window.c"   /* single-TU test: pull the impl in directly */
 
 #define CREEP 1.42e-5f
+#define RESEED 2000u
 
 static uint32_t s_rng = 987654321u;
 static float rnd_unit(void)      /* uniform in [-1, 1) */
@@ -51,7 +52,7 @@ TEST(hann_mean_of_a_ramp_is_its_centre_even_after_the_ring_wraps)
     static float w25[25], w81[81];
     float s25 = math_hann_weights(w25, 25);
     float s81 = math_hann_weights(w81, 81);
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     /* push 300 batches, reading = batch number (a linear ramp); the ring (81) wraps 3 times */
     for (int i = 0; i < 300; ++i) {
         push_sample(&w, (float)i, 0.0f);
@@ -66,26 +67,45 @@ TEST(a_constant_signal_averages_to_itself)
     static MathWindow w;
     static float w81[81];
     float s81 = math_hann_weights(w81, 81);
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     for (int i = 0; i < 200; ++i) push_sample(&w, 0.1234f, 1e-4f);
     CHECK(fabsf(math_window_hann_mean(&w, 0, 81, w81, s81) - 0.1234f) < 1e-6f);
 }
 
-TEST(window_is_reported_clean_until_a_floor_exists)
+TEST(window_is_reported_clean_until_a_floor_is_ready)
 {
     static MathWindow w;
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     for (int i = 0; i < 40; ++i) push_sample(&w, 0.0f, 1e-4f);
     CHECK(!w.floor_valid);
+    CHECK(!math_window_floor_ready(&w));
     CHECK(math_window_clean(&w, 25, 6.0f));
-    for (int i = 0; i < 100; ++i) push_sample(&w, 0.0f, 1e-4f);
+    for (int i = 0; i < 60; ++i) push_sample(&w, 0.0f, 1e-4f);   /* 100: first full window seeds the floor */
     CHECK(w.floor_valid);
+    CHECK(!math_window_floor_ready(&w));                        /* ... but it rests on one window only */
+    for (int i = 0; i < 100; ++i) push_sample(&w, 0.0f, 1e-4f);  /* 200 > 2 windows */
+    CHECK(math_window_floor_ready(&w));
+}
+
+TEST(a_disturbed_first_window_is_not_judged_against_itself)
+{
+    static MathWindow w;
+    math_window_reset(&w, CREEP, RESEED);
+    /* the instrument starts in the middle of a disturbance: loud for 90 batches, then quiet */
+    for (int i = 0; i < 90; ++i) push_sample(&w, 0.0f, 2e-3f);
+    CHECK(!math_window_floor_ready(&w));
+    CHECK(math_window_clean(&w, 81, 6.0f));                      /* "clean" only because nothing can be judged yet */
+    for (int i = 0; i < 100; ++i) push_sample(&w, 0.0f, 1e-4f);
+    CHECK(math_window_floor_ready(&w));
+    CHECK(math_window_clean(&w, 81, 6.0f));                      /* the floor has fallen to the quiet level */
+    for (int i = 0; i < 30; ++i) push_sample(&w, 0.0f, 2e-3f);
+    CHECK(!math_window_clean(&w, 81, 6.0f));                     /* and a new disturbance is now caught */
 }
 
 TEST(steady_noise_is_clean_a_burst_is_flagged_and_it_recovers)
 {
     static MathWindow w;
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     for (int i = 0; i < 600; ++i) push_sample(&w, 0.0f, 1e-4f);          /* quiet history */
     CHECK(w.floor_valid);
     CHECK(math_window_clean(&w, 81, 6.0f));
@@ -105,7 +125,7 @@ TEST(steady_noise_is_clean_a_burst_is_flagged_and_it_recovers)
 TEST(per_sensor_flags_are_independent)
 {
     static MathWindow w;
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     for (int i = 0; i < 600; ++i) push_sample(&w, 0.0f, 1e-4f);
     for (int i = 0; i < 30; ++i) {                 /* disturb only sensor 1 (index 1) */
         float rd[2] = { 0.0f, 0.0f };
@@ -120,7 +140,7 @@ TEST(per_sensor_flags_are_independent)
 TEST(floor_creeps_up_slowly_under_a_persistent_disturbance_and_falls_at_once)
 {
     static MathWindow w;
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, 20000u);   /* re-seed time longer than the 2 minutes simulated */
     for (int i = 0; i < 600; ++i) push_sample(&w, 0.0f, 1e-4f);
     float quiet_floor = w.floor[0];
     /* 2 minutes (4900 batches) of a persistent 10x-amplitude disturbance */
@@ -136,10 +156,10 @@ TEST(floor_creeps_up_slowly_under_a_persistent_disturbance_and_falls_at_once)
 TEST(a_constant_residual_cannot_pin_the_floor_at_zero)
 {
     static MathWindow w;
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     for (int i = 0; i < 400; ++i) push_sample(&w, 0.0f, 0.0f);   /* residual identically 0 */
     CHECK(w.floor_valid);
-    CHECK(w.floor[0] >= 1.0e-30f);
+    CHECK(w.floor[0] >= 1.0e-20f);
     CHECK(math_window_clean(&w, 81, 6.0f));
     for (int i = 0; i < 100; ++i) push_sample(&w, 0.0f, 1e-4f);  /* noise appears: flagged, not NaN/inf */
     CHECK(!math_window_clean(&w, 81, 6.0f));
@@ -148,7 +168,7 @@ TEST(a_constant_residual_cannot_pin_the_floor_at_zero)
 TEST(running_sum_matches_a_direct_recomputation)
 {
     static MathWindow w;
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     for (int i = 0; i < 5000; ++i) push_sample(&w, 0.0f, 1e-4f * (1.0f + (i % 7)));
     double direct = 0.0;
     for (int i = 0; i < (int)MATH_WINDOW_LEN; ++i) direct += (double)w.q[0][i];
@@ -161,7 +181,7 @@ TEST(a_break_forgets_the_window_but_keeps_the_floor)
     static MathWindow w;
     static float w81[81];
     float s81 = math_hann_weights(w81, 81);
-    math_window_reset(&w, CREEP);
+    math_window_reset(&w, CREEP, RESEED);
     for (int i = 0; i < 300; ++i) push_sample(&w, 5.0f, 1e-4f);
     float fl = w.floor[0];
     math_window_break(&w);
@@ -175,17 +195,42 @@ TEST(a_break_forgets_the_window_but_keeps_the_floor)
     CHECK(math_window_clean(&w, 81, 6.0f));
 }
 
+TEST(a_frozen_channel_that_recovers_does_not_leave_the_floor_stuck)
+{
+    static MathWindow w;
+    math_window_reset(&w, CREEP, 300u);          /* short re-seed time for the test */
+    for (int i = 0; i < 200; ++i) push_sample(&w, 0.0f, 0.0f);   /* frozen: residual steps are exactly 0 */
+    CHECK(w.floor[0] <= 1.0e-19f);
+    for (int i = 0; i < 100; ++i) push_sample(&w, 0.0f, 1e-4f);  /* it comes back: everything is "noisy" ... */
+    CHECK(!math_window_clean(&w, 81, 6.0f));
+    for (int i = 0; i < 400; ++i) push_sample(&w, 0.0f, 1e-4f);  /* ... until the re-seed rule re-bases the floor */
+    CHECK(math_window_clean(&w, 81, 6.0f));
+    CHECK(w.floor[0] > 1.0e-10f);
+}
+
+TEST(a_persistent_disturbance_is_not_adopted_before_the_reseed_time)
+{
+    static MathWindow w;
+    math_window_reset(&w, CREEP, 2000u);
+    for (int i = 0; i < 600; ++i) push_sample(&w, 0.0f, 1e-4f);
+    for (int i = 0; i < 1500; ++i) push_sample(&w, 0.0f, 1e-3f);   /* shorter than the re-seed time */
+    CHECK(!math_window_clean(&w, 81, 6.0f));
+}
+
 int main(void)
 {
     RUN(hann_weights_sum_symmetry_and_shape);
     RUN(hann_mean_of_a_ramp_is_its_centre_even_after_the_ring_wraps);
     RUN(a_constant_signal_averages_to_itself);
-    RUN(window_is_reported_clean_until_a_floor_exists);
+    RUN(window_is_reported_clean_until_a_floor_is_ready);
+    RUN(a_disturbed_first_window_is_not_judged_against_itself);
     RUN(steady_noise_is_clean_a_burst_is_flagged_and_it_recovers);
     RUN(per_sensor_flags_are_independent);
     RUN(floor_creeps_up_slowly_under_a_persistent_disturbance_and_falls_at_once);
     RUN(a_constant_residual_cannot_pin_the_floor_at_zero);
     RUN(running_sum_matches_a_direct_recomputation);
     RUN(a_break_forgets_the_window_but_keeps_the_floor);
+    RUN(a_frozen_channel_that_recovers_does_not_leave_the_floor_stuck);
+    RUN(a_persistent_disturbance_is_not_adopted_before_the_reseed_time);
     return test_summary();
 }

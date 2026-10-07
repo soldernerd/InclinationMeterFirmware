@@ -68,18 +68,6 @@ static uint32_t buzzer_program_freq(uint16_t freq_hz)
     return arr + 1U;
 }
 
-void hal_tim_buzzer_start(uint16_t freq_hz)
-{
-    if (freq_hz == 0U) {
-        hal_tim_buzzer_stop();
-        return;
-    }
-    __HAL_TIM_DISABLE_IT(&htim3, TIM_IT_UPDATE);
-    s_buzzer_periods_left = 0U;
-    (void)buzzer_program_freq(freq_hz);
-    HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
-}
-
 void hal_tim_buzzer_beep(uint16_t freq_hz, uint16_t duration_ms)
 {
     if (freq_hz == 0U || duration_ms == 0U) {

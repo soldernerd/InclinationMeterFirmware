@@ -26,7 +26,6 @@ void      drv_rn4871_register_rx_callback(Rn4871RxCallback cb);
 /* Module configured and in data mode — usable, whether or not a central
  * is currently connected. False while still configuring, or if config
  * failed (no module, or it never answered). */
-bool      drv_rn4871_is_ready(void);
 
 /* A central has an open Transparent UART stream right now. */
 bool      drv_rn4871_is_connected(void);

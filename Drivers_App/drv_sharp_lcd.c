@@ -175,7 +175,7 @@ static void start_run(uint8_t i)
     hal_spi_write_dma(HAL_SPI_DISPLAY, &s_tx_buf[s_saved_cmd_idx], len);
 }
 
-void drv_sharp_lcd_mark_all_dirty(void)
+static void mark_all_dirty(void)
 {
     for (uint8_t w = 0; w < DIRTY_WORDS; ++w) {
         s_dirty[w] = 0xFFFFFFFFU;
@@ -232,7 +232,7 @@ void drv_sharp_lcd_update(void)
     restore_run_bytes();
     if (timed_out) {
         /* The panel may have received a partial frame: resend everything. */
-        drv_sharp_lcd_mark_all_dirty();
+        mark_all_dirty();
         s_busy = false;
         return;
     }
@@ -262,7 +262,7 @@ void drv_sharp_lcd_init(void)
     s_busy                 = true;    /* held busy until the settle wait clears it */
     s_awaiting_drain       = false;
     prime_tx_buffer();
-    drv_sharp_lcd_mark_all_dirty();   /* panel contents unknown at power-up */
+    mark_all_dirty();   /* panel contents unknown at power-up */
 
     hal_spi_init(HAL_SPI_DISPLAY);
     hal_spi_register_dma_callback(HAL_SPI_DISPLAY, on_dma_complete);

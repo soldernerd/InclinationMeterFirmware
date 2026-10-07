@@ -17,7 +17,6 @@ void             svc_battery_update(void);
 battery_state_t  svc_battery_get_state(void);
 uint8_t      svc_battery_get_soc_pct(void);
 uint16_t     svc_battery_get_vbat_mv(void);
-bool         svc_battery_is_usb_connected(void);
 bool         svc_battery_is_charging(void);
 
 /* Manual override: enable the charger irrespective of Vbat / SOC for as

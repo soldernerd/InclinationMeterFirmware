@@ -85,8 +85,8 @@ bool hal_usb_is_connected(void)
 
 bool hal_usb_send(const uint8_t *data, uint16_t len)
 {
-    if (!hal_usb_is_connected() || data == 0 || len == 0) {
-        return false;
+    if (!hal_usb_is_connected() || data == 0 || len == 0 || len > USB_HID_REPORT_SIZE) {
+        return false;   /* never truncate a longer frame silently */
     }
     /* Pad to full HID report size — the descriptor advertises a fixed
      * 64-byte IN report and host stacks expect that exact length. The

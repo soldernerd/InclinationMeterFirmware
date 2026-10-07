@@ -123,6 +123,7 @@ static const uint8_t s_tx_zero[FRAME_BYTES] = { 0 };   /* NULL command, no CRC *
  * only by SysTick; 16-bit aligned index loads/stores are atomic on M0+,
  * so no locking. FRAME_RING_FRAMES is a power of two -> mask, not modulo. */
 #define FRAME_RING_MASK  (ADC_FRAME_RING_FRAMES - 1U)
+static bool              s_inited = false;   /* init verified the chip; start() refuses otherwise */
 static uint8_t           s_ring[ADC_FRAME_RING_FRAMES][FRAME_BYTES];
 static volatile uint16_t s_ring_head;   /* produced count (free-running) */
 static volatile uint16_t s_ring_tail;   /* drained count  (free-running) */
@@ -404,7 +405,7 @@ static void on_trigger(void)
          * it by advancing head — unless the drain is a whole ring behind,
          * in which case leave head put (drop-newest) and fault. */
         uint16_t head = s_ring_head;
-        if ((uint16_t)(head - s_ring_tail) >= ADC_FRAME_RING_FRAMES) {
+        if ((uint16_t)(head - s_ring_tail) >= (ADC_FRAME_RING_FRAMES - 1U)) {   /* keep one slot free: the DMA writes s_ring[head] */
             s_integ.ring_overflow++;
             integ_fault(ADS_FAULT_OVERRUN);
         } else {
@@ -469,6 +470,14 @@ DrvStatus drv_ads131m04_init(void)
      * landed (drv_ads131m04_get_regs()). */
     read_all_registers();
 
+    /* Presence check: a missing or dead chip answers 0xFFFF/0x0000 for every
+     * register, and the CLOCK register we just wrote must read back. Without
+     * this the init "succeeded" with no chip and ads_ok stayed true. */
+    if (!s_regs.read_ok || s_regs.clock != s_regs.clock_expected) {
+        s_inited = false;
+        return DRV_ERR_COMM;
+    }
+
     /* Hand SPI1 + its DMA channels over to the raw streaming path (no more
      * blocking/HAL-SPI calls on this bus after this point). */
     hal_spi_adc_stream_init();
@@ -487,6 +496,7 @@ DrvStatus drv_ads131m04_init(void)
      * drv_ads131m04_start() arms it. See the header comment. */
     hal_tim_adc_trigger_register_callback(on_trigger);
 
+    s_inited = true;
     return DRV_OK;
 }
 
@@ -505,6 +515,9 @@ DrvStatus drv_ads131m04_start(void)
 {
     if (s_running) {
         return DRV_OK;
+    }
+    if (!s_inited) {
+        return DRV_ERR_NOT_READY;   /* no chip / init failed: never arm the trigger */
     }
     s_xfer_active   = false;
     ring_reset();

@@ -148,6 +148,7 @@ int main(void)
   MX_TIM2_Init();
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
+  svc_log_init();             /* log ring up first: every later init may log into it */
   /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
    * directly between the individual MX_*_Init() calls above, each step a
    * checkpoint observable on LED_STS without a debugger attached — but
@@ -294,7 +295,6 @@ int main(void)
    * the transport table already zeroed. svc_ble_init() also pulses the
    * RN4871's ~RESET and kicks off its (non-blocking) config state
    * machine, pumped thereafter from task_ble. */
-  svc_log_init();             /* log ring up before anything logs into it */
   svc_powertest_init();       /* power-investigation mask defaults to "all on" */
   svc_api_init();
   /* App owns "re-apply DeviceSettings after a host SET" — svc_api calls
@@ -343,7 +343,13 @@ int main(void)
    * failure mode is the ADS131M04 not having init'd, already reported
    * via ads_ok above (same reasoning Services/svc_api.c's
    * cmd_displacement() documents for this exact call). */
-  (void)svc_displacement_start();
+  if (g_system_state.ads_ok) {
+    if (svc_displacement_start() != DRV_OK) {
+      svc_log(API2_LOG_ERROR, "displacement: start failed at boot");
+    }
+  } else {
+    svc_log(API2_LOG_WARN, "displacement: not started (ADC init failed)");
+  }
   /* USER CODE END 2 */
 
   /* Infinite loop */

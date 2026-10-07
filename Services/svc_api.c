@@ -118,6 +118,15 @@ typedef struct {
 
 _Static_assert(sizeof(Api2IdentityPayload)    + 1U <= MAX_PAYLOAD, "IDENTITY response too large");
 _Static_assert(sizeof(Api2DeviceStatePayload) + 1U <= MAX_PAYLOAD, "DEVICE_STATE response too large");
+/* Largest topic payload any builder may write (GET/SUBSCRIBE buffers are this
+ * big). It was 32 while the signal-diagnostics topic is 56 bytes: a 24 byte
+ * stack overflow on every read of that topic, fixed 2026-10-07. */
+#define TOPIC_VALUE_MAX_LEN 64U
+_Static_assert(sizeof(Api2TopicEnvPayload)            <= TOPIC_VALUE_MAX_LEN, "TOPIC env payload > buffer");
+_Static_assert(sizeof(Api2TopicStatusPayload)         <= TOPIC_VALUE_MAX_LEN, "TOPIC status payload > buffer");
+_Static_assert(sizeof(Api2TopicPhasorsPayload)        <= TOPIC_VALUE_MAX_LEN, "TOPIC phasors payload > buffer");
+_Static_assert(sizeof(Api2TopicRawDisplacementPayload) <= TOPIC_VALUE_MAX_LEN, "TOPIC raw displacement payload > buffer");
+_Static_assert(sizeof(Api2TopicSignalDiagPayload)     <= TOPIC_VALUE_MAX_LEN, "TOPIC signal diag payload > buffer");
 /* +3: stream pushes prefix [status][issue_seq][page] */
 _Static_assert(sizeof(Api2TopicEnvPayload)    + 3U <= MAX_PAYLOAD, "TOPIC env push too large");
 _Static_assert(sizeof(Api2TopicStatusPayload) + 3U <= MAX_PAYLOAD, "TOPIC status push too large");
@@ -158,19 +167,15 @@ static ApiTransportState s_t[API_TRANSPORT_COUNT];
 static ApiSettingsChangedFn s_settings_changed_fn = 0;
 
 /* ---------------- bulk transfer state (docs/api-v2-spec.md §4.5) ----------------
- * One at a time, device-wide, either resource. CAPTURING while the RAM
- * buffer fills; SENDING streams it out in chunks paced by the transport's
- * ready_fn. `resource` (added 2026-09-25 alongside API2_RES_BULK_PHASORS)
- * tells bulk_pump()/bulk_abort() which capture's begin/done/end/buffer
- * functions to drive -- both resources share this one transfer state
- * since only one bulk transfer is ever active at a time regardless of
- * which resource it's for. */
+ * One at a time, device-wide (the raw-ADC capture is the only bulk resource;
+ * the phasor log, resource 0x01, was removed 2026-10-07). CAPTURING while the
+ * RAM buffer fills; SENDING streams it out in chunks paced by the
+ * transport's ready_fn. */
 static struct {
     bool         active;
     enum { BULK_IDLE = 0, BULK_CAPTURING, BULK_SENDING } phase;
     ApiTransport transport;
     uint16_t     opcode;
-    uint8_t      resource;
     uint16_t     send_pos;   /* next sample/entry index to send, during SENDING */
     uint8_t      page;       /* wrapping chunk counter */
 } s_bulk;
@@ -405,13 +410,23 @@ static void cmd_displacement(ApiTransport t, uint16_t opcode,
         send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
         return;
     }
+    /* The ADC can only serve one consumer: a raw bulk capture and the phasor
+     * stream own it while they run. A "stop" would leave the capture never
+     * finishing (every later bulk request BUSY), a "start" would look like it
+     * worked while the demod math stays bypassed. */
+    if (s_bulk.active || svc_displacement_phasor_stream_active()) {
+        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
+        return;
+    }
     if (on) {
-        /* Return dropped deliberately: svc_displacement_start() is
-         * idempotent (no-op if already running) and its only failure mode
-         * is the ADS131M04 not having init'd at boot, already reported via
-         * g_system_state.ads_ok. The OK below acks the command, not that
-         * acquisition is healthy — the host polls Raw data 0x00 for that. */
-        (void)svc_displacement_start();
+        /* A start while the demod is already running is a true no-op
+         * (svc_displacement_start()); the only failure is the ADS131M04 not
+         * having initialised at boot (g_system_state.ads_ok false), which is
+         * reported as BUSY_RESOURCE. */
+        if (svc_displacement_start() != DRV_OK) {
+            send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+            return;
+        }
     } else {
         svc_displacement_stop();
     }
@@ -506,9 +521,17 @@ static void cmd_zero_cal(ApiTransport t, uint16_t opcode,
     /* Payload: 1 byte action, optionally followed (step 1 only) by a sensor
      * mask, bit 0 = S1, bit 1 = S2 (default and 3 = both). Step 2 continues
      * the sensors chosen in step 1. */
+    if (paylen < 1U || paylen > 2U) {            /* the table says CMD_LEN_ANY: pl[0] would be the CRC */
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
     uint8_t action = pl[0];
     uint8_t mask   = (paylen >= 2U) ? pl[1] : ZERO_CAL_SENSORS_BOTH;
     DrvStatus rc;
+    if (action != 1U && paylen != 1U) {          /* only step 1 carries a sensor mask */
+        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+        return;
+    }
     switch (action) {
         case 0U:
             svc_displacement_zero_cal_cancel();
@@ -615,11 +638,7 @@ static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
 
 static void bulk_abort(void)
 {
-    if (s_bulk.resource == API2_RES_BULK_PHASORS) {
-        svc_displacement_phasor_log_end();
-    } else {
-        svc_displacement_capture_end();
-    }
+    svc_displacement_capture_end();
     s_bulk.active = false;
     s_bulk.phase  = BULK_IDLE;
 }
@@ -631,7 +650,7 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
         return;
     }
-    if (res != API2_RES_BULK_RAW_ADC && res != API2_RES_BULK_PHASORS) {
+    if (res != API2_RES_BULK_RAW_ADC) {
         send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
         return;
     }
@@ -642,7 +661,7 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
     }
 
     if (verb == API2_VERB_CANCEL_BULK) {
-        if (!s_bulk.active || s_bulk.resource != res) {
+        if (!s_bulk.active) {
             send_response(t, opcode, API2_STATUS_NOTHING_TO_CANCEL, 0, 0);
             return;
         }
@@ -665,8 +684,7 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
         send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
         return;
     }
-    DrvStatus rc = (res == API2_RES_BULK_PHASORS) ? svc_displacement_phasor_log_begin()
-                                                   : svc_displacement_capture_begin();
+    DrvStatus rc = svc_displacement_capture_begin();
     if (rc != DRV_OK) {
         send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
         return;
@@ -675,16 +693,13 @@ static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
     s_bulk.phase     = BULK_CAPTURING;
     s_bulk.transport = t;
     s_bulk.opcode    = opcode;
-    s_bulk.resource  = res;
     s_bulk.send_pos  = 0;
     s_bulk.page      = 0;
-    svc_logf(API2_LOG_INFO, "bulk: %s capture started",
-             (res == API2_RES_BULK_PHASORS) ? "phasor log" : "raw adc");
+    svc_log(API2_LOG_INFO, "bulk: raw adc capture started");
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
-/* Chunk pump for the raw-ADC capture (API2_RES_BULK_RAW_ADC) half of
- * bulk_pump() below. */
+/* Chunk pump for the raw-ADC capture (called from bulk_pump() below). */
 static void bulk_pump_raw_adc(ApiTransport t)
 {
     if (s_bulk.phase == BULK_CAPTURING) {
@@ -724,48 +739,6 @@ static void bulk_pump_raw_adc(ApiTransport t)
     }
 }
 
-/* Chunk pump for the phasor log capture (API2_RES_BULK_PHASORS) half of
- * bulk_pump() below -- same CAPTURING/SENDING shape as
- * bulk_pump_raw_adc(), one DisplacementPhasorLogEntry per wire entry
- * instead of one raw ADC sample. */
-static void bulk_pump_phasors(ApiTransport t)
-{
-    if (s_bulk.phase == BULK_CAPTURING) {
-        if (!svc_displacement_phasor_log_done()) return;
-        svc_displacement_phasor_log_end();   /* stop the stream ASAP */
-        s_bulk.phase    = BULK_SENDING;
-        s_bulk.send_pos = 0;
-        s_bulk.page     = 0;
-        svc_log(API2_LOG_INFO, "bulk: phasor log capture full");
-    }
-
-    const DisplacementPhasorLogEntry *buf = svc_displacement_phasor_log_buffer();
-    const uint16_t total = svc_displacement_phasor_log_count();
-    const ApiReadyFn ready = s_t[t].ready_fn;
-    enum { EPS = sizeof(DisplacementPhasorLogEntry) };
-
-    for (uint8_t c = 0; c < DISPLACEMENT_PHASOR_LOG_CHUNKS_PER_TICK && s_bulk.send_pos < total; ++c) {
-        if (ready != 0 && !ready()) break;   /* let the link drain */
-
-        uint16_t k = (uint16_t)(total - s_bulk.send_pos);
-        if (k > DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES) k = DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES;
-
-        uint8_t payload[1U + DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES * EPS];
-        payload[0] = s_bulk.page++;
-        memcpy(&payload[1], &buf[s_bulk.send_pos], (size_t)k * EPS);
-
-        send_framed(t, s_bulk.opcode, API2_STATUS_OK, payload,
-                    (uint16_t)(1U + (size_t)k * EPS), false);
-        s_bulk.send_pos = (uint16_t)(s_bulk.send_pos + k);
-    }
-
-    if (s_bulk.send_pos >= total) {
-        svc_logf(API2_LOG_INFO, "bulk: phasor log sent (%u entries)", (unsigned)total);
-        s_bulk.active = false;
-        s_bulk.phase  = BULK_IDLE;
-    }
-}
-
 /* Chunk pump — runs from svc_api_update() each tick while a bulk transfer
  * is active. CAPTURING: wait for the RAM buffer to fill. SENDING: emit a
  * few chunks, but only while the owning transport's TX ring has headroom
@@ -781,12 +754,17 @@ static void bulk_pump(void)
         bulk_abort();
         return;
     }
-
-    if (s_bulk.resource == API2_RES_BULK_PHASORS) {
-        bulk_pump_phasors(t);
-    } else {
-        bulk_pump_raw_adc(t);
+    /* The acquisition died while the buffer was still filling (an ADC integrity
+     * fault stops it): capture_done() would never become true and every later
+     * bulk request would get BUSY_EXCLUSIVE until a host cancelled. */
+    if (s_bulk.phase == BULK_CAPTURING && !svc_displacement_capture_done()
+        && !svc_displacement_is_running()) {
+        svc_log(API2_LOG_ERROR, "bulk: acquisition stopped during the capture -- aborted");
+        bulk_abort();
+        return;
     }
+
+    bulk_pump_raw_adc(t);
 }
 
 /* ---------------- Raw data (0x7: GET) ---------------- */
@@ -835,7 +813,7 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
         p.output_drop = svc_displacement_get_output_drop_count();
         p.degenerate  = svc_displacement_get_degenerate_count();
         p.disp_ok     = svc_displacement_get_ok() ? 1U : 0U;
-        p.phasor_log_progress = svc_displacement_phasor_log_progress();
+        p.phasor_log_progress = 0U;   /* the bulk phasor log was removed 2026-10-07; field kept for the wire layout */
         p.clip_count            = svc_displacement_get_clip_count();
         p.amplitude_fault_count = svc_displacement_get_amplitude_fault_count();
         /* Local temporaries -- see the zero-cal/precision-status blocks
@@ -876,6 +854,7 @@ static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
             float    delta1_mm, delta2_mm, delta_diff_mm;
             uint8_t  disturbed;      /* appended 2026-10-07 */
         } p;
+        _Static_assert(sizeof p == 27U, "precision status response layout (27 B, see svc_api.h)");
         /* Local (non-packed) temporaries -- svc_displacement_precision_progress()
          * takes pointers, and taking the address of a packed struct's
          * members directly is a real -Werror=address-of-packed-member
@@ -1161,7 +1140,6 @@ static void dispatch_measurements(ApiTransport t, uint16_t opcode, uint8_t verb,
 
 /* ---------------- Topic groups (0x5: GET, SUBSCRIBE, UNSUBSCRIBE) ---------------- */
 
-#define TOPIC_VALUE_MAX_LEN 32U
 typedef uint16_t (*TopicBuildFn)(uint8_t *buf);
 
 static uint16_t build_topic_env(uint8_t *buf)
@@ -1412,8 +1390,13 @@ typedef struct {
     { (res), (type), (uint8_t)sizeof(((DeviceSettings *)0)->field), \
       offsetof(DeviceSettings, field), (lo), (hi) }
 
-/* Bounds: *_ms 1..60000 (1 ms scheduler tick .. effectively-disabled);
- * battery_*_mv 2500..4200 (single-cell Li-ion real range); tmp236 voffs /
+/* Bounds (tightened 2026-10-07: a host could persist a USB/BLE period of a
+ * minute, or a critical-battery level above the normal operating range, and
+ * brick the transports / force Standby on every boot): task_sensors_ms 1..1000,
+ * task_ble/usb_ms 1..250, task_battery_ms 100..10000, task_temperature_ms
+ * 100..60000, task_display_ms 1..60000 (no longer used by the scheduler);
+ * battery_critical_mv 2500..3600, battery_low/charge_start_mv 3000..4200
+ * (single-cell Li-ion real range); tmp236 voffs /
  * boundary 0..3300 (ADC VDDA); num/den ratio pairs 1..10000 (nonzero
  * divisors); lm35_scale 1..1000; encoder_counts 1..100; tmp236 tinfl
  * 0..20000 (0..200.00 degC); auto_poweroff_s 0..65535 (0 = disabled).
@@ -1422,15 +1405,15 @@ typedef struct {
  * stream_interval / settling / complementary-filter fields) — the gaps
  * are left so the surviving IDs keep their numbers. */
 static const SettingsFieldDesc s_settings_fields[] = {
-    SF(API2_RES_SET_TASK_SENSORS_MS,         SF_UNSIGNED,  task_sensors_ms,              1, 60000),
+    SF(API2_RES_SET_TASK_SENSORS_MS,         SF_UNSIGNED,  task_sensors_ms,              1, 1000),
     SF(API2_RES_SET_TASK_DISPLAY_MS,         SF_UNSIGNED,  task_display_ms,              1, 60000),
-    SF(API2_RES_SET_TASK_BLE_MS,             SF_UNSIGNED,  task_ble_ms,                  1, 60000),
-    SF(API2_RES_SET_TASK_USB_MS,             SF_UNSIGNED,  task_usb_ms,                  1, 60000),
-    SF(API2_RES_SET_TASK_BATTERY_MS,         SF_UNSIGNED,  task_battery_ms,              1, 60000),
-    SF(API2_RES_SET_TASK_TEMPERATURE_MS,     SF_UNSIGNED,  task_temperature_ms,          1, 60000),
-    SF(API2_RES_SET_BATTERY_CRITICAL_MV,     SF_UNSIGNED,  battery_critical_mv,       2500, 4200),
-    SF(API2_RES_SET_BATTERY_LOW_MV,          SF_UNSIGNED,  battery_low_mv,            2500, 4200),
-    SF(API2_RES_SET_BATTERY_CHARGE_START_MV, SF_UNSIGNED,  battery_charge_start_mv,   2500, 4200),
+    SF(API2_RES_SET_TASK_BLE_MS,             SF_UNSIGNED,  task_ble_ms,                  1, 250),
+    SF(API2_RES_SET_TASK_USB_MS,             SF_UNSIGNED,  task_usb_ms,                  1, 250),
+    SF(API2_RES_SET_TASK_BATTERY_MS,         SF_UNSIGNED,  task_battery_ms,            100, 10000),
+    SF(API2_RES_SET_TASK_TEMPERATURE_MS,     SF_UNSIGNED,  task_temperature_ms,        100, 60000),
+    SF(API2_RES_SET_BATTERY_CRITICAL_MV,     SF_UNSIGNED,  battery_critical_mv,       2500, 3600),
+    SF(API2_RES_SET_BATTERY_LOW_MV,          SF_UNSIGNED,  battery_low_mv,            3000, 4200),
+    SF(API2_RES_SET_BATTERY_CHARGE_START_MV, SF_UNSIGNED,  battery_charge_start_mv,   3000, 4200),
     SF(API2_RES_SET_VBAT_SCALE_NUM,          SF_UNSIGNED,  vbat_scale_num,               1, 10000),
     SF(API2_RES_SET_VBAT_SCALE_DEN,          SF_UNSIGNED,  vbat_scale_den,               1, 10000),
     SF(API2_RES_SET_TMP236_SEG1_VOFFS_MV,    SF_UNSIGNED,  tmp236_seg1_voffs_mv,         0, 3300),
@@ -1842,20 +1825,15 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
  * that should ever be "invalid" in normal use. */
 static void zero_cal_apply_if_ready(void)
 {
-    float offset1_mm, offset2_mm;
-    uint8_t mask;
-    if (!svc_displacement_zero_cal_consume_result(&offset1_mm, &offset2_mm, &mask)) {
+    if (svc_displacement_zero_cal_get_phase() != DISP_ZERO_CAL_RESULT_READY) {
         return;
     }
     if (svc_storage_is_busy()) {
-        /* Extremely unlikely (a settings SET landing on the exact same
-         * tick), but don't silently drop a completed calibration --
-         * the phase already reset to IDLE in consume_result(), so
-         * without a retry this result would just be lost. Re-run the
-         * whole procedure instead of queuing: simplest correct
-         * response to a one-in-many-thousands race, and the host
-         * already knows how to drive the two-step flow. */
-        svc_log(API2_LOG_WARN, "zero-cal: EEPROM busy, result dropped -- retry the calibration");
+        return;   /* a settings write is in flight: leave the result ready and retry next tick */
+    }
+    float offset1_mm, offset2_mm;
+    uint8_t mask;
+    if (!svc_displacement_zero_cal_consume_result(&offset1_mm, &offset2_mm, &mask)) {
         return;
     }
     /* svc_displacement.c hands back the new absolute zero in OUTPUT-mm
@@ -1863,15 +1841,33 @@ static void zero_cal_apply_if_ready(void)
      * from). The stored zero is in ppm of the ratio r, independent of k, so
      * a later k calibration cannot invalidate it: zero_ppm = zero_mm * k_micro
      * (k_micro is guarded > 0 by svc_storage_validate_settings()). Round to
-     * the nearest ppm, clamp (not reject: a computed result). */
+     * the nearest ppm. A result outside +-DISPLACEMENT_ZERO_PPM_MAX is NOT
+     * clamped and stored (that would silently store a wrong zero): it is
+     * refused and logged -- the instrument is far from level, or the two
+     * orientations were not a 180 degree flip. */
     float p1 = offset1_mm * (float)g_device_settings.disp_s1_k_micro;
     float p2 = offset2_mm * (float)g_device_settings.disp_s2_k_micro;
-    int32_t off1_ppm = (int32_t)(p1 + (p1 >= 0.0f ? 0.5f : -0.5f));
-    int32_t off2_ppm = (int32_t)(p2 + (p2 >= 0.0f ? 0.5f : -0.5f));
-    if (off1_ppm < -DISPLACEMENT_ZERO_PPM_MAX) off1_ppm = -DISPLACEMENT_ZERO_PPM_MAX;
-    else if (off1_ppm > DISPLACEMENT_ZERO_PPM_MAX) off1_ppm = DISPLACEMENT_ZERO_PPM_MAX;
-    if (off2_ppm < -DISPLACEMENT_ZERO_PPM_MAX) off2_ppm = -DISPLACEMENT_ZERO_PPM_MAX;
-    else if (off2_ppm > DISPLACEMENT_ZERO_PPM_MAX) off2_ppm = DISPLACEMENT_ZERO_PPM_MAX;
+    bool in_range = true;
+    int32_t off1_ppm = 0, off2_ppm = 0;
+    if ((mask & ZERO_CAL_SENSOR_S1) != 0U) {
+        if (p1 > (float)DISPLACEMENT_ZERO_PPM_MAX || p1 < -(float)DISPLACEMENT_ZERO_PPM_MAX) {
+            in_range = false;
+        } else {
+            off1_ppm = (int32_t)(p1 + (p1 >= 0.0f ? 0.5f : -0.5f));
+        }
+    }
+    if ((mask & ZERO_CAL_SENSOR_S2) != 0U) {
+        if (p2 > (float)DISPLACEMENT_ZERO_PPM_MAX || p2 < -(float)DISPLACEMENT_ZERO_PPM_MAX) {
+            in_range = false;
+        } else {
+            off2_ppm = (int32_t)(p2 + (p2 >= 0.0f ? 0.5f : -0.5f));
+        }
+    }
+    if (!in_range) {
+        svc_logf(API2_LOG_ERROR, "zero-cal: result out of range (S1 %ld ppm, S2 %ld ppm, limit +-%ld) -- NOT applied",
+                 (long)p1, (long)p2, (long)DISPLACEMENT_ZERO_PPM_MAX);
+        return;
+    }
     /* Only the sensors this run covered are updated; the other keeps its
      * stored zero (per-sensor calibration, 2026-10-06). */
     if (mask & ZERO_CAL_SENSOR_S1) g_device_settings.disp_s1_zero_ppm = off1_ppm;

@@ -93,11 +93,6 @@ uint32_t hal_adc_raw_to_mv(uint16_t channel_raw, uint16_t vrefint_raw)
     return ((uint32_t)channel_raw * vdda_mv) / 4095U;
 }
 
-uint16_t hal_adc_read_vrefint_raw(void)  { return s_results.vrefint_raw; }
-uint16_t hal_adc_read_vbat_raw(void)     { return s_results.vbat_raw; }
-uint16_t hal_adc_read_temp_raw(void)     { return s_results.temp_raw; }
-uint16_t hal_adc_read_temp_ext_raw(void) { return s_results.temp_ext_raw; }
-
 /* HAL weak override — fires on DMA full-buffer complete. With circular
  * mode disabled (Normal mode), this fires once per scan triggered by
  * hal_adc_start(). */

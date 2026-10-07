@@ -221,14 +221,6 @@ void hal_spi_cs_deassert(HalSpiInstance instance)
     }
 }
 
-bool hal_spi_is_busy(HalSpiInstance instance)
-{
-    if (instance < (unsigned)HAL_SPI_COUNT) {
-        return s_busy[instance];
-    }
-    return false;
-}
-
 bool hal_spi_tx_idle(HalSpiInstance instance)
 {
     if (instance != HAL_SPI_DISPLAY) {

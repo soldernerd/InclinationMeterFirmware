@@ -93,11 +93,6 @@ void svc_ble_init(void)
     (void)drv_rn4871_init();
 }
 
-bool svc_ble_is_connected(void)
-{
-    return drv_rn4871_is_connected();
-}
-
 void svc_ble_task(void)
 {
     drv_rn4871_task();

@@ -120,16 +120,10 @@ ADC_BULK_CHUNK_SAMPLES    = 10     # must match Config/config.h
 ADC_BULK_BYTES_PER_SAMPLE = 12     # 4 ch x 3-byte packed signed LE
 ADC_RAW_LSB_V             = 2.4 / (1 << 24)   # 1 raw code = 2.4 V / 2^24 (gain 1; FSR +-1.2 V = +-2^23 codes). Was 2^23 (2x too big) before 2026-10-06.
 
-# Bulk phasor log capture (category 0x8, resource 0x01) -- WP10 diagnostics,
-# added 2026-09-25. START_BULK has no request payload; chunks come back
-# under the SAME opcode, each: [status=OK][page:1][entry:34]xN, one entry =
-# 8x float32 LE (iB,qB,iA,qA,iS1,qS1,iS2,qS2) + uint16 LE seq.
-BULK_PHASORS                       = 0x01
-OP_BULK_PHASORS_START              = opcode(START_BULK,  CAT_BULK, BULK_PHASORS)
-OP_BULK_PHASORS_CANCEL             = opcode(CANCEL_BULK, CAT_BULK, BULK_PHASORS)
-DISPLACEMENT_PHASOR_LOG_DEPTH         = 512   # must match Config/config.h
-DISPLACEMENT_PHASOR_LOG_DECIMATION    = 1     # must match Config/config.h
-DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES = 3     # must match Config/config.h
+# One phasor-stream entry (Topic 0x5 / resource 0x05): 8x float32 LE
+# (iB,qB,iA,qA,iS1,qS1,iS2,qS2) + uint16 LE seq. (The one-shot Bulk 0x8/0x01
+# phasor log was removed from the firmware 2026-10-07; the id answers
+# UNKNOWN_RESOURCE.)
 DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES   = 34    # 8x float32 (32) + u16 seq (2), packed
 
 # Raw data (category 0x7) — ADS131M04 register / capture diagnostics
@@ -263,18 +257,6 @@ def decode_phasor_log_entry(d: bytes):
     return dict(iB=iB, qB=qB, iA=iA, qA=qA, iS1=iS1, qS1=qS1, iS2=iS2, qS2=qS2, seq=seq)
 
 
-def decode_phasor_log_chunk(data: bytes):
-    """A bulk phasor-log chunk's payload-after-status:
-    [page:1][entry:34]xN. Returns (page, [entry_dict, ...])."""
-    if not data:
-        return (None, [])
-    page = data[0]
-    body = data[1:]
-    n = len(body) // DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES
-    entries = [decode_phasor_log_entry(body[DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES * i:
-                                            DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES * (i + 1)])
-               for i in range(n)]
-    return (page, entries)
 
 # Settings resource indices — a few useful ones. IDs are stable wire
 # values with gaps (0x01, 0x07..0x0B retired with the REV A fields).

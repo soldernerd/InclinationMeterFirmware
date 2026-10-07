@@ -22,7 +22,7 @@
  *   I = 16384*(s0 - s4) + 11585*(s1 - s3 - s5 + s7)
  *   Q = 16384*(s2 - s6) + 11585*(s1 + s3 - s5 - s7)
  * -- bit-for-bit what summing sample*weight per sample (the old
- * math_phasor_accumulate()) gives, at ~1/30 of the cycles on a Cortex-M0+
+ * the per-sample reference in tests/test_math_phasor.c) gives, at ~1/30 of the cycles on a Cortex-M0+
  * (which has no 64-bit multiply: every int64 product was a ~50 cycle
  * library call, 8 per ADC sample).
  *
@@ -39,13 +39,6 @@
 
 void math_phasor_combine(const int32_t pos_sum[MATH_PHASOR_SAMPLES_PER_CYCLE],
                          int64_t *i_out, int64_t *q_out);
-
-/* REFERENCE implementation, not used by the firmware's hot path any more
- * (kept as the oracle for tests/test_math_phasor.c): adds one sample's
- * weighted contribution to a running I/Q sum. sample_idx is the sample's
- * position within the cycle (0..7); no-ops if out of range. */
-void math_phasor_accumulate(int32_t sample, uint8_t sample_idx,
-                             int64_t *i_sum, int64_t *q_sum);
 
 /* Complex reciprocal: (inv_re_out + j*inv_im_out) = 1 / (re + j*im).
  * Returns false (outputs left untouched) if re/im are exactly zero,

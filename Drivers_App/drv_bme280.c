@@ -358,7 +358,3 @@ DrvStatus drv_bme280_get_result(bme280_data_t *out)
     return DRV_OK;
 }
 
-uint16_t drv_bme280_get_error_count(void)
-{
-    return s_error_count;
-}

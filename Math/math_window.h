@@ -42,15 +42,33 @@ typedef struct {
     double q_sum[2];                    /* sum of q over the ring contents (double: exact enough, no drift) */
     float  floor[2];                    /* quiet floor of the full-window mean q (min-follower with creep) */
     float  creep;                       /* fractional upward creep of the floor per batch */
+    uint32_t reseed_batches;            /* flagged this long in a row -> the floor is re-seeded */
+    uint32_t flag_run[2];               /* consecutive full-window batches above the reseed ratio */
+    uint32_t floor_age;                 /* full-window batches seen since reset (survives a break) */
     uint16_t next;                      /* ring index the next batch is written to */
     uint16_t count;                     /* batches held, saturates at MATH_WINDOW_LEN */
     uint32_t total;                     /* batches pushed since reset (never saturates before ~3 years) */
     bool   floor_valid;                 /* true once a full window has been seen */
 } MathWindow;
 
+/* Windows whose mean step power exceeds MATH_WINDOW_RESEED_RATIO x the floor
+ * count as "flagged" for the re-seed rule below (same value as the display /
+ * precision threshold, DISPLACEMENT_QUALITY_K). */
+#define MATH_WINDOW_RESEED_RATIO 6.0f
+
 /* creep_per_batch: how fast the floor may rise when every window is noisier
- * than it (a doubling every ~20 minutes = ln2/(1200 s * 40.7 Hz) = 1.4e-5). */
-void math_window_reset(MathWindow *w, float creep_per_batch);
+ * than it (a doubling every ~20 minutes = ln2/(1200 s * 40.7 Hz) = 1.4e-5).
+ * reseed_batches: if a sensor's windows stay flagged for this many batches in a
+ * row (10 minutes), the quiet level evidently changed (a channel that was frozen
+ * or dead has come back, a sensor was swapped): the floor is re-seeded from the
+ * current window instead of staying stuck near zero for hours. */
+void math_window_reset(MathWindow *w, float creep_per_batch, uint32_t reseed_batches);
+
+/* True once the floor rests on at least two independent full windows (so the
+ * first window after a start is never judged against itself). Until then
+ * math_window_clean*() report clean (nothing to judge against) and a caller
+ * that needs a verdict (the precision measurement) must wait. Survives a break. */
+bool math_window_floor_ready(const MathWindow *w);
 
 /* The batch series is no longer contiguous (a batch was dropped, or the
  * caller skipped one): forget the window contents so no window ever spans the
@@ -66,9 +84,9 @@ void math_window_push(MathWindow *w, const float reading[2], const float residua
 float math_window_mean_q(const MathWindow *w, uint8_t s, uint16_t n);
 
 /* True when the newest n batches are clean for BOTH sensors: mean squared
- * residual step <= k * (the sensor's quiet floor). Until the floor is known (no
- * full window held yet) there is nothing to judge against, so the window is
- * reported clean. Needs n <= count. */
+ * residual step <= k * (the sensor's quiet floor). Until the floor is ready
+ * (math_window_floor_ready()) there is nothing to judge against, so the window
+ * is reported clean. Needs n <= count. */
 bool math_window_clean(const MathWindow *w, uint16_t n, float k);
 
 /* Same, per sensor (the display flags each reading separately). */

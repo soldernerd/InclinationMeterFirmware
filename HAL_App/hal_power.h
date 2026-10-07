@@ -48,7 +48,6 @@ void hal_power_enter_standby(void);
  * issues NVIC_SystemReset() to return the device to a working state
  * rather than hang. Reach DFU for real by power-cycling with BOOT0
  * asserted. Never returns. */
-void hal_power_reboot_to_dfu(void);
 
 /* Current commanded state of the two switched rails, read back from the
  * enable pins (PWR_3V3_EN active-LOW, PWR_5V_EN active-HIGH). Reflects

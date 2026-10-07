@@ -555,11 +555,9 @@ typedef enum {
  *   u16 disp_output_drop_count   (svc_displacement_get_output_drop_count())
  *   u16 disp_degenerate_count    (svc_displacement_get_degenerate_count())
  *   u8  disp_ok                  (svc_displacement_get_ok())
- *   u16 phasor_log_progress      (svc_displacement_phasor_log_progress() --
- *                                  entries stored so far in the current/most
- *                                  recent Bulk 0x8/0x01 capture, 0..
- *                                  DISPLACEMENT_PHASOR_LOG_DEPTH; lets a host
- *                                  poll progress instead of guessing)
+ *   u16 phasor_log_progress      (always 0 since 2026-10-07: the Bulk 0x8/0x01
+ *                                  phasor log was removed; field kept so the
+ *                                  response layout did not change)
  *   u16 clip_count                (svc_displacement_get_clip_count() -- a raw
  *                                  ADC code rode near a rail; added 2026-09-26
  *                                  alongside the S1/S2 PGA=16 bump)
@@ -654,30 +652,14 @@ typedef enum {
  *      separate driver callbacks. */
 #define API2_RES_BULK_RAW_ADC   0x00U
 
-/* 0x01 Phasor log capture. Added 2026-09-25 (Config/config.h's
- *      "Displacement phasor diagnostics" comment) -- a longer-duration,
- *      decimated companion to 0x00 above: instead of ~0.3 s of every raw
- *      ADC sample, this captures Config/config.h DISPLACEMENT_PHASOR_LOG_DEPTH
- *      entries of the demod's batch-level phasors at every
- *      DISPLACEMENT_PHASOR_LOG_DECIMATIONth batch (~40.7 Hz effective at
- *      the defaults), spanning ~12.6 s -- for diagnosing drift,
- *      degenerate-denominator excursions, or slow mechanical behaviour
- *      the short raw-ADC window can't reach. Same START_BULK/CANCEL_BULK
- *      shape and the same exclusivity with the real-time demod as 0x00.
- *      Chunk payload is [page:1][entry:34]xN, N <=
- *      DISPLACEMENT_PHASOR_LOG_CHUNK_ENTRIES; one entry is 8x float32 LE
- *      (iB,qB,iA,qA,iS1,qS1,iS2,qS2 -- same layout/units as Topic groups
- *      0x5 resource 0x02) plus a uint16 seq (the last raw cycle folded
- *      into that stored batch, for gap detection). */
-#define API2_RES_BULK_PHASORS   0x01U
+/* 0x01 was the Phasor log capture (2026-09-25); REMOVED 2026-10-07 -- the
+ *      continuous phasor stream (Topic 0x5 / resource 0x05) replaced it. The ID
+ *      stays reserved: START_BULK on it answers UNKNOWN_RESOURCE. */
+#define API2_RES_BULK_PHASORS   0x01U   /* retired */
 
 #define API2_OP_BULK_RAW_ADC_START \
     API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
 #define API2_OP_BULK_RAW_ADC_CANCEL \
     API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
-#define API2_OP_BULK_PHASORS_START \
-    API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_PHASORS)
-#define API2_OP_BULK_PHASORS_CANCEL \
-    API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_PHASORS)
 
 #endif /* SVC_API_H */

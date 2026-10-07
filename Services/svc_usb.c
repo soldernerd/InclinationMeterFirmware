@@ -54,6 +54,17 @@ static void usb_tx_pump(void)
             s_tx_overflowed = false;   /* drained — re-arm the WARN */
             break;
         }
+        if (n > USB_HID_REPORT_SIZE) {
+            /* One HID report carries 64 bytes; a longer frame (the 56 B diag
+             * topic and bulk chunks are 65+ with the header) used to be cut
+             * silently. Drop it and say so -- use UART/BLE for those. */
+            if (g_system_state.usb_tx_dropped_count < UINT16_MAX) {
+                g_system_state.usb_tx_dropped_count++;
+            }
+            svc_log(API2_LOG_WARN, "usb: frame > 64 B dropped (use UART/BLE for this resource)");
+            svc_txframe_drop_front(&s_tx);
+            continue;
+        }
         if (!hal_usb_send(s_stage, n)) {
             break;                     /* USBD_BUSY — retry next tick */
         }
@@ -91,11 +102,6 @@ void svc_usb_init(void)
     svc_api_register_transport(API_TRANSPORT_USB, send_via_usb);
     hal_usb_register_rx_callback(rx_handler);
     hal_usb_init();
-}
-
-bool svc_usb_is_connected(void)
-{
-    return hal_usb_is_connected();
 }
 
 void svc_usb_update(void)

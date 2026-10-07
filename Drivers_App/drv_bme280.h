@@ -70,6 +70,5 @@ DrvStatus drv_bme280_get_result(bme280_data_t *out);
 /* Saturating count of drv_bme280_update() cycles that failed (I2C
  * error, status-poll timeout, or skipped because the bus was busy) --
  * CLAUDE.md 7.6 escalation; no retry queue exists otherwise. */
-uint16_t drv_bme280_get_error_count(void);
 
 #endif /* DRV_BME280_H */

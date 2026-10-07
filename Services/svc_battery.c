@@ -374,7 +374,6 @@ void svc_battery_update(void)
 battery_state_t svc_battery_get_state(void)      { return s_state; }
 uint8_t      svc_battery_get_soc_pct(void)       { return s_soc_pct; }
 uint16_t     svc_battery_get_vbat_mv(void)       { return s_vbat_mv; }
-bool         svc_battery_is_usb_connected(void)  { return s_usb_connected; }
 bool         svc_battery_is_charging(void)       { return s_charging; }
 bool         svc_battery_is_force_charging(void) { return s_force_charge; }
 

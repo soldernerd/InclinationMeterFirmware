@@ -18,8 +18,6 @@ void hal_i2c_init(HalI2cInstance instance);
 /* Blocking primitives */
 DrvStatus hal_i2c_write(HalI2cInstance instance, uint8_t addr,
                         const uint8_t *data, uint16_t len);
-DrvStatus hal_i2c_read(HalI2cInstance instance, uint8_t addr,
-                       uint8_t *data, uint16_t len);
 DrvStatus hal_i2c_write_read(HalI2cInstance instance, uint8_t addr,
                              const uint8_t *tx, uint16_t tx_len,
                              uint8_t *rx, uint16_t rx_len);
@@ -35,7 +33,6 @@ bool hal_i2c_is_busy(HalI2cInstance instance);
 
 /* True if device at addr ACKs an empty write (used to poll EEPROM
  * write-cycle completion, t_WC up to 5 ms). */
-bool hal_i2c_device_ready(HalI2cInstance instance, uint8_t addr);
 
 /* Aborts an in-flight DMA transfer (best-effort — issues a NACK+STOP via
  * the HAL). Use when a caller has given up waiting (e.g. a blocking

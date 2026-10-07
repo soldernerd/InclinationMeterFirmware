@@ -1,8 +1,7 @@
 # Host unit tests for the firmware's pure-logic pieces.
 #
-# Needs a native C compiler (gcc / clang) — NOT the arm-none-eabi one.
-# The dev box currently has no host compiler; these build+run under any
-# gcc/clang or in CI. See README.md.
+# Needs a native C compiler (gcc / clang / zig cc) — NOT the arm-none-eabi one.
+# On the dev box:  CC="python -m ziglang cc" make   (pip install ziglang). See README.md.
 #
 #   make            build + run every test
 #   make test_math_crc && ./test_math_crc     one suite

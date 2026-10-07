@@ -2,12 +2,25 @@
  * (2026-10-03): the firmware's hot path adds each sample into a plain int32
  * sum for its position in the 8-sample cycle, and math_phasor_combine()
  * applies the Q14 DFT weights once per batch. This must give exactly the
- * integers the old per-sample weighted accumulation (math_phasor_accumulate(),
- * kept as the oracle) gives, and the int32 sums must never overflow. */
+ * integers the old per-sample weighted accumulation (math_phasor_accumulate() below) gives, and the int32 sums must never overflow. */
 #include "test.h"
 #include <string.h>
 
 #include "../Math/math_phasor.c"   /* single-TU test: pull the impl in directly */
+
+/* Reference weights and per-sample accumulate: the firmware's former hot path,
+ * kept here as the oracle (cos/sin at n*45 degrees, Q14). */
+static const int32_t s_cos_table[MATH_PHASOR_SAMPLES_PER_CYCLE] = {
+    16384, 11585, 0, -11585, -16384, -11585, 0, 11585
+};
+static const int32_t s_sin_table[MATH_PHASOR_SAMPLES_PER_CYCLE] = {
+    0, 11585, 16384, 11585, 0, -11585, -16384, -11585
+};
+static void math_phasor_accumulate(int32_t sample, uint8_t sample_idx, int64_t *i_sum, int64_t *q_sum)
+{
+    *i_sum += (int64_t)sample * s_cos_table[sample_idx];
+    *q_sum += (int64_t)sample * s_sin_table[sample_idx];
+}
 
 #define CODE_MAX   8388607L    /* 2^23 - 1, ADS131M04 24-bit two's complement */
 #define CODE_MIN  (-8388608L)
