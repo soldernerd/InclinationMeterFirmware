@@ -37,14 +37,22 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
   sensor (~30 °C / 973 hPa / 37 %RH, compensation math verified). See
   `docs/wp9_bme280_env_sensor.md`.
 
-Builds clean (zero warnings, `-Wall -Wextra -Werror`), ~RAM 78% / FLASH 30% (the WP8 bulk
-capture buffer is ~50% of SRAM on its own). Tagged `wp1-debugged` … `wp9-debugged`. The
-`wp2`–`wp9` branch pointers track `master`.
+- **WP10** — displacement / tilt measurement on the analog front end (`Services/svc_displacement.c`,
+  `Math/math_phasor.c`, `Math/math_window.c`): the ADS131M04 samples exactly 8 points per period of the
+  2604 Hz excitation; the ISR-side hot path only adds samples into per-position int32 sums, and once
+  per 64-cycle batch (40.7/s) the Q14 DFT weights, the ratio `S/(PGA*(A-B))` and the phase correction are
+  applied in float. The LIVE value is a Hann-25 window (about 4 Hz) with a "doubtful" flag from a
+  window-level Im(x) step-power indicator against a self-tracked quiet floor; the precision measurement
+  is a sliding 2 s Hann window accepted as soon as it is clean (error after 5 s). Per-sensor k, zero
+  (flip calibration) and phase calibrations are stored in EEPROM. Over the API: Measurements, Topics
+  (raw per-batch delta, phasors, a gapless **phasor stream**, diagnostics), Calibrations and the
+  precision command. See `docs/signal_processing.pdf` (theory and the 19 h analysis),
+  `docs/wp10_displacement.md` (history) and `docs/decisions.md` (tuning rationale). Everything since fw
+  0.10.64 is build- and host-test-verified but not yet bench-tested.
 
-The `wp10`–`wp11` branches hold sketched-but-not-bench-tested code (displacement demod,
-remaining API v2 resources). Each is squash-ported onto `master` and bench-validated one at
-a time. `docs/wp2-5_rebase_status.md` is the historical
-record of the August branch-rebase effort (superseded by the September bench work).
+Builds clean (zero warnings, `-Wall -Wextra -Werror`), Debug and Release, ~RAM 76% / FLASH 35% (Debug)
+(the 72 KiB raw-ADC bulk-capture buffer is half of the SRAM on its own). The `wp2`-`wp9` branch pointers
+track `master`; `docs/wp2-5_rebase_status.md` is the historical record of the August branch-rebase effort.
 
 ## Hardware
 
@@ -70,16 +78,25 @@ Open the project root in VS Code with the STM32 VS Code Extension installed. Cli
 
 ### From the command line
 
-With STM32CubeCLT installed and `arm-none-eabi-gcc`, `cmake`, and `ninja` on `PATH`:
+With `arm-none-eabi-gcc`, `cmake` and `ninja` on `PATH` (a portable install works; see `docs/`):
 
 ```bash
-cmake -B build -G Ninja \
-      -DCMAKE_TOOLCHAIN_FILE=cmake/gcc-arm-none-eabi.cmake \
-      -DCMAKE_BUILD_TYPE=Debug
-cmake --build build
+cmake --preset Debug          # configures into build/Debug
+cmake --build build/Debug
 ```
 
-Output: `build/InclinationMeterFirmware.elf`.
+Output: `build/Debug/InclinationMeterFirmware.elf` (`cmake --preset Release` for the optimised build).
+
+### Host unit tests
+
+The pure-logic code (CRC, phasor combination, the display/quality windows, the TX frame ring, transfer
+functions) has hardware-free tests in `tests/`; they need a native C compiler:
+
+```bash
+cd tests
+make                           # gcc/clang
+CC="python -m ziglang cc" make # or zig cc (pip install ziglang)
+```
 
 ## Layout
 
@@ -91,9 +108,12 @@ Output: `build/InclinationMeterFirmware.elf`.
 ├── USB_Device/App+Target/ — CubeMX-style USB Device glue (hand-adapted, WP4)
 ├── Config/               — Project-wide constants (config.h, pin_config.h)
 ├── HAL_App/              — Application HAL wrappers (gpio, spi, tim, systick, …)
-├── Drivers_App/          — Device drivers (sharp_lcd, scl3300, pcap04, …)
-├── Services/             — Higher-level services (storage, calibration, …)
-├── Math/                 — Filter, settling, CRC
+├── Drivers_App/          — Device drivers (sharp_lcd, ads131m04, ad9833, bme280, 24lc256, …)
+├── Services/             — Higher-level services (api, displacement, storage, battery, transports, …)
+├── Math/                 — Pure maths, host-testable (CRC, phasor combine, windows/quality)
+├── tests/                — Host unit tests (make)
+├── docs/                 — Theory (signal_processing.pdf), API reference, per-WP notes, decisions.md
+├── PythonTestCode/       — apiv2.py client + bench scripts;  Testing/ — archived bench tests
 ├── App/                  — Scheduler, UI, display, u8g2 callback, version
 ├── Middleware/u8g2/      — u8g2 graphics library (cloned from olikraus/u8g2)
 ├── system_state.{h,c}    — Global SystemState + DeviceSettings
@@ -106,7 +126,7 @@ CubeMX-generated code lives in `Core/` and `Drivers/`. Application code never go
 
 - **Cooperative scheduler** (no RTOS) running tasks on configurable periods
 - **Layered design**: App → Services → Drivers_App → HAL_App → ST HAL/LL
-- **No floats, no dynamic allocation** in HAL/driver code
+- **No dynamic allocation anywhere; no floats in HAL/driver code** (the Cortex-M0+ has no FPU, so float work is kept off the per-sample path)
 - **u8g2** for fonts and graphics, with a custom callback that bridges to the Sharp LCD framebuffer in [drv_sharp_lcd.c](Drivers_App/drv_sharp_lcd.c)
 
 ## License

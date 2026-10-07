@@ -199,7 +199,7 @@ static DisplacementPhasors s_phasors = {0};
 #if (DISPLACEMENT_PHASOR_STREAM_DEPTH & PSTREAM_MASK) != 0
 #error "DISPLACEMENT_PHASOR_STREAM_DEPTH must be a power of two"
 #endif
-static DisplacementPhasorLogEntry s_pstream[DISPLACEMENT_PHASOR_STREAM_DEPTH];
+static DisplacementPhasorEntry s_pstream[DISPLACEMENT_PHASOR_STREAM_DEPTH];
 static uint16_t s_pstream_head   = 0;
 static uint16_t s_pstream_tail   = 0;
 static uint16_t s_pstream_drops  = 0;
@@ -978,7 +978,7 @@ static void store_phasor_stream_entry(const BatchSums *s, uint16_t seq)
         if (s_pstream_drops < UINT16_MAX) s_pstream_drops++;
         return;
     }
-    DisplacementPhasorLogEntry *e = &s_pstream[s_pstream_head];
+    DisplacementPhasorEntry *e = &s_pstream[s_pstream_head];
     e->iB  = (float)s->iB;  e->qB  = (float)s->qB;
     e->iA  = (float)s->iA;  e->qA  = (float)s->qA;
     e->iS1 = (float)s->iS1; e->qS1 = (float)s->qS1;
@@ -1220,7 +1220,7 @@ void svc_displacement_phasor_stream_end(void)
     s_pstream_active = false;   /* the measurement keeps running; only the tap is removed */
 }
 
-bool svc_displacement_phasor_stream_peek(DisplacementPhasorLogEntry *out)
+bool svc_displacement_phasor_stream_peek(DisplacementPhasorEntry *out)
 {
     if (s_pstream_tail == s_pstream_head) return false;
     *out = s_pstream[s_pstream_tail];

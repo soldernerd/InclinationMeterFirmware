@@ -209,7 +209,7 @@ def main():
                 if op != OP_SUB or status != 0 or len(data) < 2 + 34:
                     continue
                 frame_seq = data[0]
-                e = a.decode_phasor_log_entry(data[2:2 + 34])
+                e = a.decode_phasor_entry(data[2:2 + 34])
                 if e is None:
                     bad += 1
                     continue

@@ -289,14 +289,11 @@ typedef enum {
 #define API2_RES_MEAS_EXT_TEMP       0x07U   /* int16 centi-degC */
 #define API2_RES_MEAS_EXT_TEMP_OK    0x08U   /* uint8 0/1 — in-range reading present */
 /* Displacement (WP10), Services/svc_displacement.c. delta_mm is the
- * POST-moving-average value (config.h's DISPLACEMENT_MA_SAMPLES, added
- * 2026-09-26 -- a boxcar smoothing stage over the last few completed
- * batches, applied on top of the coherent per-batch sum config.h's
- * DISPLACEMENT_BATCH_CYCLES already does; ~40.7 raw batches/s at the
- * default batch size, but the smoothed value here updates no faster than
- * that regardless). Want the raw, pre-MA per-batch value instead (e.g.
- * for granular noise analysis)? Subscribe to Topic groups (0x5)
- * API2_RES_TOPIC_RAW_DISPLACEMENT below instead of polling this.
+ * Hann display value (Config/config.h's DISPLACEMENT_DISPLAY_TAPS batches, ~4 Hz;
+ * the raw per-batch value until the first display window exists -- the
+ * 8-batch moving average of earlier firmware was removed in fw 0.10.72). For
+ * the per-batch value (granular noise analysis) subscribe to Topic groups
+ * (0x5) API2_RES_TOPIC_RAW_DISPLACEMENT below instead of polling this.
  * float32 LE, IEEE-754 — the first floats on this wire; MEAS_VALUE_MAX_LEN
  * is 4 bytes, an exact fit. Both only meaningful while disp_ok is true —
  * GET/SUBSCRIBE that first if freshness matters, same pattern as
@@ -370,18 +367,18 @@ typedef enum {
  *   float iS1, qS1   (Sensor 1, CH3)
  *   float iS2, qS2   (Sensor 2, CH0)
  *
- * 0x03 Raw displacement -- PRE-moving-average per-batch delta/residual
+ * 0x03 Raw displacement -- per-batch (unsmoothed) delta/residual
  * (23 B, added 2026-09-26 at the user's request for granular analysis of
- * the demod's raw output, before config.h's DISPLACEMENT_MA_SAMPLES
- * boxcar smoothing that Measurements 0x09/0x0B apply). Same source rate as
+ * the demod's raw output, before the Hann display stream that
+ * Measurements 0x09/0x0B report). Same source rate as
  * the phasors topic above (both come from process_one_batch(),
  * config.h's DISPLACEMENT_BATCH_CYCLES -- ~40.7 updates/s at the current
  * 64-cycle batch size); subscribe at the API2_MEASUREMENT_MIN_INTERVAL_MS
  * floor (50 ms) to track it essentially 1:1. Valid only while Measurements
  * 0x0D (disp_ok) is true:
- *   float delta1_mm_raw   (Sensor 1, pre-MA)
+ *   float delta1_mm_raw   (Sensor 1, per batch)
  *   float residual1       (Im(x1) -- identical to Measurements 0x0A,
- *                           never had MA applied to begin with)
+ *                           per batch)
  *   float delta2_mm_raw   (Sensor 2, pre-MA)
  *   float residual2       (identical to Measurements 0x0C)
  *   u8    quality1_ok      (svc_displacement_get_quality1_ok(), added
@@ -455,8 +452,7 @@ typedef enum {
  * theoretical baseline (traceable to the Wyler handbook's 20uV RMS = 1um/m
  * spec) and this sensor's real measured sensitivity, so "how far off
  * theory this specific sensor's real electronics are" is visible on the
- * wire, in physical units, not just in firmware source. See Config/config.h's
- * DEFAULT_DISP_S1_D0_THEORETICAL_UM comment for the full derivation. Gaps
+ * wire, in physical units, not just in firmware source. See docs/signal_processing.tex Sec. 13.3 for the derivation. Gaps
  * stay so 0x00/0x01/0x03/0x04/0x06 keep their numbers, same convention
  * Settings (0x3) already uses for its own retired resources. */
 /* 0x00 retired 2026-10-06 (shared A/B attenuator; folded into |k|) */

@@ -1900,7 +1900,7 @@ static void phasor_stream_pump(void)
 
         for (uint8_t k = 0; k < DISPLACEMENT_PHASOR_STREAM_PER_TICK; ++k) {
             if (ready != 0 && !ready()) break;
-            DisplacementPhasorLogEntry e;
+            DisplacementPhasorEntry e;
             if (!svc_displacement_phasor_stream_peek(&e)) break;
 
             uint8_t push[2U + sizeof e];

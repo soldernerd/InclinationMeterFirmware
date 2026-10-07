@@ -329,7 +329,7 @@ int main(void)
    * unconditionally at boot starved the cooperative scheduler before the
    * batching fix existed). That caution predates this project's
    * margin-hardening work (config.h's DISPLACEMENT_BATCH_CYCLES/
-   * _RING_DEPTH/_MAX_CYCLES_PER_TICK) -- with that headroom restored,
+   * _BATCH_RING_DEPTH/_MAX_BATCHES_PER_TICK) -- with that headroom restored,
    * and given the whole point of this instrument is to show an
    * inclination reading without needing a host connected, requiring an
    * API call just to see the primary measurement was the wrong default.

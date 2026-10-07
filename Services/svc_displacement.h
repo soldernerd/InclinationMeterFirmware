@@ -324,7 +324,7 @@ typedef struct {
     uint16_t seq;   /* the last raw cycle folded into this batch: a rolling
                        * per-cycle counter (wraps every 65536 cycles, ~25 s), so
                        * compare with modular arithmetic. */
-} __attribute__((packed)) DisplacementPhasorLogEntry;
+} __attribute__((packed)) DisplacementPhasorEntry;
 
 /* --- Continuous phasor batch stream (API Topic 0x5 / resource 0x05) ---
  * Added 2026-10-04 (fw 0.10.65; it replaced the one-shot bulk phasor log,
@@ -343,7 +343,7 @@ void      svc_displacement_phasor_stream_end(void);
 bool      svc_displacement_phasor_stream_active(void);
 /* Oldest queued entry without removing it (false if empty); consume()
  * drops it once it has been handed to the transport. */
-bool      svc_displacement_phasor_stream_peek(DisplacementPhasorLogEntry *out);
+bool      svc_displacement_phasor_stream_peek(DisplacementPhasorEntry *out);
 void      svc_displacement_phasor_stream_consume(void);
 /* Batches discarded because the FIFO was full, since stream_begin(). */
 uint16_t  svc_displacement_phasor_stream_drops(void);

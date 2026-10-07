@@ -329,12 +329,12 @@ granite-plate session): if the device reads high by some factor, divide
 | 0x06 BME280 fresh | `0x0406` | u8, 0/1 (1 = last reading current) |
 | 0x07 external temp | `0x0407` | i16, centi-°C (LM35) |
 | 0x08 external temp valid | `0x0408` | u8, 0/1 |
-| 0x09 displacement S1 delta | `0x0409` | f32 LE, mm — **post**-moving-average (smoothed over the last 4 batches) |
+| 0x09 displacement S1 delta | `0x0409` | f32 LE, mm — Hann-25 display value (~4 Hz; raw batch value until the first window exists) |
 | 0x0A displacement S1 residual | `0x040A` | f32 LE, Im(x1) — should sit near 0; a consistently nonzero value usually means a Calibrations constant is off |
-| 0x0B displacement S2 delta | `0x040B` | f32 LE, mm — post-moving-average |
+| 0x0B displacement S2 delta | `0x040B` | f32 LE, mm — Hann-25 display value |
 | 0x0C displacement S2 residual | `0x040C` | f32 LE, Im(x2) |
 | 0x0D displacement ok | `0x040D` | u8, 0/1 — 0x09–0x0C are meaningless while this is 0 |
-| 0x0E displacement differential | `0x040E` | f32 LE, mm — S1 - S2, post-moving-average (2026-09-27) |
+| 0x0E displacement differential | `0x040E` | f32 LE, mm — S1 - S2, from the two display values (2026-09-27) |
 
 - **GET**: request payload none → response `[OK][value]`.
 - **SUBSCRIBE** (`0x34xx`): request payload = `u32 interval_ms` LE, range
@@ -344,11 +344,11 @@ granite-plate session): if the device reads high by some factor, divide
 - **UNSUBSCRIBE** (`0x44xx`): payload none. `NOT_SUBSCRIBED` if there was
   no active subscription on this transport.
 - All subscriptions are per-transport and cleared on connect/disconnect.
-- **0x09/0x0B are smoothed** (an 8-sample boxcar on top of the underlying
-  ~40.7 Hz batch rate). If you want the raw, pre-smoothing value at the
+- **0x09/0x0B are smoothed** (since fw 0.10.72 the Hann-25 display stream,
+  ~4 Hz, delay ~0.3 s; earlier firmware used an 8-sample boxcar). If you want the raw, pre-smoothing value at the
   full batch rate for tighter-loop analysis, use Topic groups `0x5/0x03`
   instead (below) — it carries the same two deltas/residuals unsmoothed,
-  plus a per-batch quality flag.
+  plus the window-level quality bytes.
 - **0x0E is exactly `0x09 - 0x0B`**, provided directly so a client doesn't
   need to subtract two floats itself. **This is the recommended reading
   once both sensors are connected** — see the "Absolute vs differential"
@@ -428,27 +428,23 @@ essentially 1:1 (batch period is ~24.6 ms). Valid only while Measurements
 
 | off | type | field |
 |---|---|---|
-| 0 | f32 | delta1_mm_raw — Sensor 1, **pre**-moving-average |
+| 0 | f32 | delta1_mm_raw — Sensor 1, per-batch (unsmoothed) |
 | 4 | f32 | residual1 — Im(x1), identical to Measurements 0x0A |
-| 8 | f32 | delta2_mm_raw — Sensor 2, pre-moving-average |
+| 8 | f32 | delta2_mm_raw — Sensor 2, per-batch (unsmoothed) |
 | 12 | f32 | residual2 — Im(x2), identical to Measurements 0x0C |
 | 16 | u8 | quality1_ok — 0/1, see below |
 | 17 | u8 | quality2_ok — 0/1, see below |
-| 18 | f32 | delta_diff_mm_raw — S1 - S2, pre-moving-average (2026-09-27) |
+| 18 | f32 | delta_diff_mm_raw — S1 - S2, per-batch (unsmoothed) (2026-09-27) |
 | 22 | u8 | quality_diff_ok — 0/1, see below |
 
-**Quality flag (bench-validated 2026-09-26):** a real jump/glitch in a
-sensor's underlying signal makes its residual step by ~4-4.6x its normal
-size in the *same* batch. `quality1/2_ok` tracks a rolling baseline of the
-residual's typical step size and flags a batch `0` (bad) when the current
-step exceeds 3x that baseline. `0` means: treat this specific batch's
-`delta*_mm_raw` with suspicion — it is *not* a hard guarantee of error,
-just a statistically-motivated warning. `quality_diff_ok` is simply
-`quality1_ok AND quality2_ok` on this same batch — exclude the
-differential reading if EITHER input is bad. A host doing its own
-averaging (rather than using the triggered precision measurement, which
-already does this) should discard or downweight batches where the
-relevant `quality*_ok` is 0.
+**Quality bytes (changed in fw 0.10.72):** `quality1/2_ok` is now the *window-level*
+verdict of the display stream: `1` = the newest 25-batch display window was not
+doubtful (its Im(x) step power was within 6x of the instrument's quiet floor), `0` =
+doubtful (the LIVE screen shows `!`). It updates every 10th batch and says nothing
+about an individual batch -- it no longer flags single-batch jumps (the earlier
+per-batch EWMA flag was retired: dropping flagged batches made averages worse).
+`quality_diff_ok` is `quality1_ok AND quality2_ok`. Nothing is flagged for the first
+~4 s after a start (the quiet floor is not yet known).
 
 ### `0x5/0x04` — Signal diagnostics  → GET `0x0504`, SUBSCRIBE `0x3504` (56 B payload)
 

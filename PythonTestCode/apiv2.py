@@ -124,7 +124,7 @@ ADC_RAW_LSB_V             = 2.4 / (1 << 24)   # 1 raw code = 2.4 V / 2^24 (gain 
 # (iB,qB,iA,qA,iS1,qS1,iS2,qS2) + uint16 LE seq. (The one-shot Bulk 0x8/0x01
 # phasor log was removed from the firmware 2026-10-07; the id answers
 # UNKNOWN_RESOURCE.)
-DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES   = 34    # 8x float32 (32) + u16 seq (2), packed
+PHASOR_ENTRY_BYTES   = 34    # 8x float32 (32) + u16 seq (2), packed
 
 # Raw data (category 0x7) — ADS131M04 register / capture diagnostics
 OP_RAW_ADC_DIAG           = opcode(GET, CAT_RAW, 0x00)
@@ -153,8 +153,8 @@ MEAS_DISP_DIFF_MM   = 0x0E   # float32 mm, S1 - S2 (2026-09-27)
 
 # Displacement calibration (CAT_CALIB = 2) -- see svc_api.h's Calibrations
 # comment. 0x02/0x05 (old S1/S2 D0_UM) retired 2026-09-27, replaced by the
-# theoretical-baseline + multiplier pair below (Config/config.h's
-# DEFAULT_DISP_S1_D0_THEORETICAL_UM has the Wyler-handbook derivation).
+# theoretical-baseline + multiplier pair below (since replaced by k/zero, see
+# docs/signal_processing.tex Sec. 13.3).
 # 0x00 (CALIB_DISP_ATTEN_MILLI) retired 2026-10-06: the attenuator is folded into |k| (the gain constants)
 CALIB_DISP_S1_K_MICRO            = 0x01   # i32, k at PGA 1 x1e-6 per (mm/m); tilt = (r - zero)/k (2026-10-06 redesign)
 CALIB_DISP_S1_ZERO_PPM          = 0x03   # i32, zero in ppm of the ratio r, k-independent (2026-10-06)
@@ -249,9 +249,9 @@ def decode_topic_signal_diag(d: bytes):
                 theoretical_tilt1_mm_per_m=vals[12], theoretical_tilt2_mm_per_m=vals[13])
 
 
-def decode_phasor_log_entry(d: bytes):
-    """One DisplacementPhasorLogEntry (34 B): 8x float32 LE + u16 LE seq."""
-    if len(d) < DISPLACEMENT_PHASOR_LOG_ENTRY_BYTES:
+def decode_phasor_entry(d: bytes):
+    """One DisplacementPhasorEntry (34 B): 8x float32 LE + u16 LE seq."""
+    if len(d) < PHASOR_ENTRY_BYTES:
         return None
     iB, qB, iA, qA, iS1, qS1, iS2, qS2, seq = struct.unpack("<8fH", d[:34])
     return dict(iB=iB, qB=qB, iA=iA, qA=qA, iS1=iS1, qS1=qS1, iS2=iS2, qS2=qS2, seq=seq)
