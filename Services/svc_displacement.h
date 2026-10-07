@@ -330,12 +330,15 @@ typedef struct {
  * Added 2026-10-04 (fw 0.10.65; it replaced the one-shot bulk phasor log,
  * removed 2026-10-07). It delivers EVERY completed batch: svc_displacement_update() pushes each batch's raw phasors into a
  * FIFO (DISPLACEMENT_PHASOR_STREAM_DEPTH entries) and the API layer drains
- * it one frame per batch. Same exclusivity contract as the log/capture
- * (refused while the real-time demod runs; the demod math is bypassed while
- * the stream is active). Entries carry the cycle seq, so a lost batch shows
- * as a seq jump; batches the FIFO had no room for are counted separately.
+ * it one frame per batch. The stream is a TAP on the running measurement
+ * (changed in fw 0.10.74; before, it replaced the demod and the display
+ * showed "not running"): the demod runs as usual and the readings stay
+ * valid. begin() starts the measurement if it is not running, end() leaves
+ * it running. Refused only while a raw-ADC bulk capture uses the
+ * acquisition. Entries carry the cycle seq, so a lost batch shows as a seq
+ * jump; batches the FIFO had no room for are counted separately.
  * Task context only. */
-DrvStatus svc_displacement_phasor_stream_begin(void);   /* DRV_ERR_NOT_READY if the acquisition is already in use */
+DrvStatus svc_displacement_phasor_stream_begin(void);   /* DRV_ERR_NOT_READY if a stream / bulk capture is already active */
 void      svc_displacement_phasor_stream_end(void);
 bool      svc_displacement_phasor_stream_active(void);
 /* Oldest queued entry without removing it (false if empty); consume()

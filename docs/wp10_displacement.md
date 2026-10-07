@@ -1215,3 +1215,16 @@ ziglang`) since the dev box has no gcc; a C replay of the 19 h stream through `m
 Python emulation (Testing/.../analysis/tune_quality*.py) to the digits quoted above. **Not bench-tested**: the
 board was not attached; check on the instrument that the 4 Hz display looks calm, that tapping the plate
 produces "!" and that a precision measurement during a bump waits and then succeeds or errors after 5 s.
+
+## Phasor stream is a tap on the running measurement (2026-10-07, fw 0.10.74)
+
+fw 0.10.65-0.10.73 routed batches into the stream FIFO *instead of* `process_one_batch()` while the
+Topic 0x05/0x05 stream was subscribed, so no displacement reading was computed and the LIVE screen
+showed "-- not running --" during a capture (the data itself was fine). Now `svc_displacement_update()`
+always runs `process_one_batch()` and, while the stream is active, also copies each batch into the FIFO.
+`svc_displacement_phasor_stream_begin()` starts the measurement if it is not running (via
+`svc_displacement_start()`), `_end()` only removes the tap and leaves the measurement running, and the
+API no longer refuses a subscribe while the demod runs (only while a raw-ADC bulk capture does). The
+logger `phasor_stream.py` no longer stops or restarts the measurement and needs fw >= 0.10.74 (0.10.73
+refuses the subscribe with BUSY_EXCLUSIVE while the demod runs). Build-verified only; not yet
+bench-tested (the 24 h run of 2026-10-07 was still using 0.10.73).

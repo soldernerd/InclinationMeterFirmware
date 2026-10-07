@@ -421,10 +421,13 @@ typedef enum {
 #define API2_RES_TOPIC_SIGNAL_DIAG      0x04U
 /* 0x05 "Phasor batch stream" (fw 0.10.65): EVERY completed 64-cycle batch,
  * event-driven (not the interval snapshot of the topics above). SUBSCRIBE
- * (the 4-byte interval payload is required but ignored) starts the ADC and
- * routes batches into a FIFO instead of the demod; UNSUBSCRIBE / disconnect
- * stops it. Refused with BUSY_EXCLUSIVE while the demod or a bulk capture
- * runs. GET is not supported. One push per batch:
+ * (the 4-byte interval payload is required but ignored) taps the running
+ * measurement: every batch is copied into a FIFO while the demod keeps
+ * running (readings / LIVE screen stay valid; since fw 0.10.74 -- before,
+ * the stream replaced the demod). The measurement is started if it is not
+ * running and left running by UNSUBSCRIBE / disconnect. Refused with
+ * BUSY_EXCLUSIVE only while a raw-ADC bulk capture runs. GET is not
+ * supported. One push per batch:
  *   [status][issue_seq:1][page:1=0] + 34 B (8 x float32 LE iB,qB,iA,qA,
  *   iS1,qS1,iS2,qS2, then u16 seq = the batch's last cycle counter).
  * A lost batch shows as a jump in the cycle seq (multiple of 64); a lost

@@ -25,8 +25,12 @@ long run -- an unconditional inhibit let the 2026-10-05 run drain the battery un
 board reset and the stream died. A new 3 h charging limit then applies. The inhibit is also
 cleared when the script exits normally (it lives in RAM: a reboot clears it too).
 
+Demod: needs fw >= 0.10.74, where the stream is a tap on the running measurement: the instrument
+keeps measuring and showing readings while it logs (older firmware replaced the demod and the
+LIVE screen read "-- not running --"). The script never stops or restarts the measurement.
+
 Stall recovery: if no batch arrives for --stall-s seconds (e.g. the board reset), the script
-stops the demod, re-subscribes and re-applies the inhibit if one was active; the first batch
+re-subscribes and re-applies the inhibit if one was active; the first batch
 after that has first_batch = 1 and `cycles` restarts from the device's cycle counter.
 
 Usage:
@@ -58,7 +62,6 @@ OP_UNSUB = a.opcode(a.UNSUBSCRIBE, a.CAT_TOPICS, a.TOPIC_PHASOR_STREAM)
 OP_TEMP = a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP)
 OP_STATUS = a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_STATUS)
 OP_INHIBIT = a.opcode(a.EXECUTE, a.CAT_COMMANDS, 0x09)   # API2_RES_CMD_CHARGE_INHIBIT, payload 0/1
-OP_STOP = a.OP_CMD_SIGNAL_ANALYSIS                       # payload 0 = stop the displacement demod
 
 
 def find_port():
@@ -95,9 +98,6 @@ def main():
     ap.add_argument("--stall-s", type=float, default=10.0,
                     help="re-subscribe if no batch arrives for this many seconds (0 = off)")
     ap.add_argument("--keep-autopoweroff", action="store_true")
-    ap.add_argument("--no-restore", action="store_true",
-                    help="leave the displacement demod stopped at the end (default: restart it, so the "
-                         "instrument goes back to measuring / showing readings)")
     args = ap.parse_args()
 
     out = args.out or os.path.join(HERE, "data", datetime.now().strftime("phasor_stream_%Y%m%d_%H%M%S.csv"))
@@ -112,9 +112,6 @@ def main():
     if st != 0:
         sys.exit("IDENTITY failed -- check --port / that the board is awake")
     print("IDENTITY:", a.decode_identity(d), flush=True)
-
-    st, _ = request(ser, reasm, a.OP_CMD_SIGNAL_ANALYSIS, bytes([0]))   # the stream needs the demod stopped
-    print("stop displacement demod ->", st, flush=True)
 
     getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
     setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
@@ -165,8 +162,6 @@ def main():
                 recoveries += 1
                 print(f"  STALL: no batch for {time.time() - last_row_t:.0f} s at t={(time.time() - t0)/60:.1f}min "
                       f"-> re-subscribing (recovery #{recoveries})", flush=True)
-                ser.write(a.build(OP_STOP, bytes([0])))      # a reset restarts the demod, which blocks the stream
-                time.sleep(0.3)
                 ser.write(a.build(OP_SUB, a.build_interval(50)))
                 if inhibited:
                     ser.write(a.build(OP_INHIBIT, bytes([1])))   # a reset clears the inhibit
@@ -265,9 +260,6 @@ def main():
         if saved_apo is not None:
             st, _ = request(ser, reasm, setop, struct.pack("<H", saved_apo))
             print(f"restore auto_poweroff_s = {saved_apo} [{a.STATUS.get(st, st)}]", flush=True)
-        if not args.no_restore:
-            st, _ = request(ser, reasm, a.OP_CMD_SIGNAL_ANALYSIS, bytes([1]))
-            print("restart displacement demod ->", st, flush=True)
         ser.close()
 
 

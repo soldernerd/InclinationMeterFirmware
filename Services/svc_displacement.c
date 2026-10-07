@@ -1035,13 +1035,13 @@ void svc_displacement_update(void)
         drained++;
 
         /* The continuous phasor stream (svc_displacement_phasor_stream_begin())
-         * wants the raw batch sums, not demodulated -- same accumulation /
-         * batching pipeline either way, this is the only fork point. */
+         * is a tap on the running measurement: it copies each batch's raw sums out
+         * and the demod runs as usual, so the LIVE screen / API readings stay valid
+         * while a host logs the phasors. */
         if (s_pstream_active) {
             store_phasor_stream_entry(&sums, batch_seq);
-        } else {
-            process_one_batch(&sums, batch_seq);
         }
+        process_one_batch(&sums, batch_seq);
     }
 
     /* Precision-measurement timeout, checked every tick regardless of
@@ -1191,19 +1191,23 @@ uint16_t svc_displacement_capture_drops(void)
 
 DrvStatus svc_displacement_phasor_stream_begin(void)
 {
-    if (s_pstream_active || s_cap_active || drv_ads131m04_is_running()) {
+    if (s_pstream_active || s_cap_active) {
         return DRV_ERR_NOT_READY;
     }
-    accum_reset();   /* on_sample() runs only once the driver is armed below, so this is safe */
     s_pstream_head   = 0;
     s_pstream_tail   = 0;
     s_pstream_drops  = 0;
-    s_pstream_active = true;   /* svc_displacement_update() now routes batches here */
-    DrvStatus rc = drv_ads131m04_start();
-    if (rc != DRV_OK) {
-        s_pstream_active = false;
+    s_pstream_active = true;   /* svc_displacement_update() now copies every batch into the FIFO */
+    if (!drv_ads131m04_is_running()) {
+        /* Not measuring (e.g. stopped over the API): start the real measurement, so the
+         * demod state is initialised properly and the stream is a tap on it, as always. */
+        DrvStatus rc = svc_displacement_start();
+        if (rc != DRV_OK) {
+            s_pstream_active = false;
+            return rc;
+        }
     }
-    return rc;
+    return DRV_OK;
 }
 
 bool svc_displacement_phasor_stream_active(void)
@@ -1213,9 +1217,7 @@ bool svc_displacement_phasor_stream_active(void)
 
 void svc_displacement_phasor_stream_end(void)
 {
-    if (!s_pstream_active) return;
-    s_pstream_active = false;
-    drv_ads131m04_stop();
+    s_pstream_active = false;   /* the measurement keeps running; only the tap is removed */
 }
 
 bool svc_displacement_phasor_stream_peek(DisplacementPhasorLogEntry *out)

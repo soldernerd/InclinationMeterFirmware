@@ -1271,7 +1271,7 @@ static void dispatch_phasor_stream(ApiTransport t, uint16_t opcode, uint8_t verb
             send_response(t, opcode, API2_STATUS_OK, 0, 0);
             return;
         }
-        if (s_bulk.active || svc_displacement_is_running() || !g_system_state.ads_ok) {
+        if (s_bulk.active || !g_system_state.ads_ok) {
             send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
             return;
         }
