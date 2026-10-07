@@ -1828,7 +1828,6 @@ Stage & Unit & Rate & Notes \\
 ADC sample (all four channels) & 1 sample & \SI{20.83}{\kilo\hertz} & Section~10 \\
 Cycle & 8 samples & \SI{2.604}{\kilo\hertz} & summed per position (32-bit) \\
 Batch & 64 cycles & \SI{40.7}{\hertz} & \SI{24.6}{\milli\second}; weights, ratio, delta \\
-Moving average & 8 batches & \SI{40.7}{\hertz} & \SI{197}{\milli\second} window \\
 Display value & 25 batches (Hann) & \SI{4.07}{\hertz} & LIVE screen, Sec.~13.5 \\
 \bottomrule
 \end{tabular}
@@ -1931,29 +1930,24 @@ tolerance.  The earlier ``7.5 and 8.8 instead of 20'' overstated the deficit,
 because it was combined with a wrong scale of 480 (Section~12.5).  Calibrate $k$
 against a known tilt; the default is only the starting point.
 
-\subsection{Batch quality flag}
+\subsection{Retired: per-batch quality flag}
 
-The residual $\operatorname{Im}\underline{x}$ steps by about $4\times$ its
-usual size at exactly the moments where the reading has one of the discrete
-jumps found in the noise investigation.  Each batch is therefore judged by
-the step of the residual relative to the previous batch.  A running
-baseline (exponentially weighted over 32 batches, about 0.8\,s, updated
-only from good batches so that a noisy patch cannot raise its own limit)
-holds the typical step size; a batch is flagged bad if its step exceeds
-$3\times$ the baseline.  The flag is per sensor; it is exposed over the API but does not alter the
-live value, and since fw 0.10.71 the precision measurement no longer uses it
-(it uses the window-level indicator of the previous subsection).
+Until fw 0.10.71 each batch was judged by the step of the residual
+$\operatorname{Im}\underline{x}$ relative to the previous batch against an
+exponentially weighted baseline (32 batches), and flagged bad if the step
+exceeded $3\times$ the baseline.  This flag was \emph{removed in fw 0.10.72}; the
+API's quality bytes (Topic 0x03) now report the window-level verdict of
+Section~13.5 (``the newest display window was not doubtful'').
 
-\textbf{Caveat from the 24\,h raw-ADC analysis.}  The steps are not outliers
-but the sensor's \SI{20}{\hertz} pendulum resonance (next subsection): the
-flagged batches are those with a large pendulum amplitude.  Discarding them
-made a test estimate $3$ to $10\times$ \emph{worse}, because the pendulum is
-sampled at the batch Nyquist frequency and alternates sign from batch to
-batch; the plain average cancels it, and removing the large batches unbalances
-the cancellation.  The flag is therefore useful as a \emph{vibration
-indicator}, but dropping flagged batches from an average is not recommended;
-the window-level version of the same idea (previous subsection) is what the
-display and the precision measurement use.
+The reason is the finding from the 24\,h raw-ADC analysis: the large steps are
+not outliers but the sensor's \SI{20}{\hertz} pendulum resonance (next
+subsection), and the flagged batches are those with a large pendulum amplitude.
+Discarding them made a test estimate $3$ to $10\times$ \emph{worse}, because
+the pendulum is sampled at the batch Nyquist frequency and alternates sign from
+batch to batch; the plain average cancels it, and removing the large batches
+unbalances the cancellation.  Flagging is useful as a \emph{vibration
+indicator} at window level; dropping flagged batches from an average is not
+recommended.
 
 \subsection{Pendulum resonance and the smoothing filter}
 
@@ -1975,7 +1969,7 @@ has poor sidelobes elsewhere.  The raw-ADC analysis and the 19\,h contiguous
 phasor stream (\nolinkurl{Testing/2026-09-30_bulk_adc_30s_interval/findings.md})
 found that a smooth window over contiguous batches is the right tool: it
 needs no knowledge of the exact resonance frequency, and dropping individual
-batches does not work (see the quality flag above).  Choosing an integer number
+batches does not work (see the caveat in the previous subsection).  Choosing an integer number
 of pendulum periods does not help because the resonance is broad.
 
 \textbf{Display stream (fw 0.10.71).}  The LIVE screen shows a Hann window over
@@ -1999,25 +1993,28 @@ line, when the mean squared batch-to-batch step of $\operatorname{Im}\underline{
 over the 25 batches exceeds $K=6$ times the instrument's quiet floor.  The
 floor is the lowest such value of the last 81 batches seen so far, allowed to
 creep up so that it would double only in about 20 minutes if every window were
-noisier (a persistent disturbance cannot raise its own limit).  On the 19\,h stream this flags
+noisier (a persistent disturbance cannot raise its own limit).  If a sensor stays
+flagged for 10 minutes, though, the quiet level has really changed (a frozen
+or dead channel came back, a sensor was swapped) and the floor is re-seeded from
+the current window instead of staying stuck near zero for hours.  On the 19\,h stream this flags
 0.8\,\% of the display readings at night and 8\,\% by day; the flagged readings
 move $1.8\times$ more to the next output than the others.  Nothing is flagged
-until the floor is known (one full 2\,s window after a start), and a dropped
+until the floor is trustworthy, i.e.\ rests on two independent 2\,s windows
+(about 4\,s after a start; a first window is never judged against itself), and a dropped
 batch empties the window, so no window ever spans a gap.  Each sensor is
 flagged separately; the differential is flagged if either is.
 \textbf{Status: implemented in fw 0.10.71, build-verified and replayed on the 19\,h
-data on the host, not yet bench-tested.}  The 8-batch average of the API value
-is unchanged.
+data on the host, not yet bench-tested.}  Since fw 0.10.72 the API's
+\texttt{delta} values are this display stream (the raw batch value until the
+first window exists); the 8-batch moving average was removed.
 
-\subsection{Moving average}
+\subsection{Retired: moving average}
 
-The live value is a boxcar average of the last 8 batch results (a second
-smoothing stage after the 64-cycle coherent sum).  It improves the SNR by
-about $\sqrt{8}$ for uncorrelated noise, at a delay of about
-\SI{98}{\milli\second} ($8/(2\cdot\SI{40.7}{\hertz})$), and is applied to the
-value exposed to the display and the API.  The raw batch value is available
-as well.  Zero calibration bypasses the average.  The total integration of
-the live value is $8\times64=512$ cycles, \SI{197}{\milli\second}.
+Until fw 0.10.71 the API/display value was a boxcar average of the last 8 batch
+results (SNR gain $\sqrt{8}$, delay about \SI{98}{\milli\second}).  It was
+removed in fw 0.10.72: the Hann-25 display stream of Section~13.5 replaced it
+(better suppression of the \SI{20}{\hertz} resonance and out-of-band noise),
+and the raw per-batch value stays available on Topic 0x03.
 
 \subsection{Zero calibration (180-degree reversal)}
 
@@ -2088,7 +2085,7 @@ constant: the differential zero is written into the existing per-sensor zeros
 (a new flip overwrites the zero of that sensor and with it the difference),
 and repeated whenever either flip is repeated.  The routine should refuse to
 run if the readings are unstable (for example a large pendulum amplitude, a
-quality flag set in many batches, or a large drift of $r_1-r_2$ during the
+doubtful flag set in many windows, or a large drift of $r_1-r_2$ during the
 averaging), and use the same first-cycle discard and smoothing as the other
 averaged measurements.
 
@@ -2111,7 +2108,8 @@ window (the difference of the two means equals the mean of the per-batch
 differences).  ``Clean'' is the window-level indicator of
 Section~13.5 (mean squared step of $\operatorname{Im}\underline{x}$ at most $6\times$
 the quiet floor, both sensors), so a disturbance has to have left the window
-completely before a value is accepted -- ``accept as soon as the last 2\,s are
+completely before a value is accepted (and the quiet floor must exist, about
+\SI{4}{\second} after a start, so an early trigger can use up part of the 5\,s) -- ``accept as soon as the last 2\,s are
 clean''.  If no clean window exists \SI{5}{\second} after the trigger the
 measurement ends with an \emph{error} and no value (the LIVE screen shows
 ``Precision ERROR: disturbed'', the API reports phase done with the error flag
@@ -2134,8 +2132,7 @@ the 20\,Hz resonance.  \textbf{Status: implemented, not yet bench-tested.}
 \subsection{Outputs}
 
 The results are available over the API (measurements, the raw phasors of
-the latest batch as a topic, a bulk capture of raw ADC samples, the phasor log
-(now stores every batch), and diagnostic counters), plus, since fw 0.10.65, a
+the latest batch as a topic, a bulk capture of raw ADC samples, and diagnostic counters), plus, since fw 0.10.65, a
 \emph{continuous phasor stream} (Topic 0x05, resource 0x05) that pushes the
 phasors of \emph{every} 64-cycle batch with a sequence number, so a host can
 record a gapless \SI{40.7}{\hertz} series and detect dropped batches.
@@ -2655,9 +2652,10 @@ Excitation, filters and input networks as described; simultaneous 24-bit
 sampling locked to the excitation; single-bin demodulation over 64 periods
 (per-position integer accumulation, fw 0.10.64); the projection estimator
 $\operatorname{Re}[\underline{S}/(k(\underline{A}-\underline{B}))]$ (fw 0.10.62)
-with per-batch quality flag, moving average, zero calibration and precision
+with zero calibration and precision
 measurement; continuous phasor stream (fw 0.10.65); Hann display stream with doubtful-reading flag and
-sliding-window precision measurement (fw 0.10.71, not yet bench-tested).
+sliding-window precision measurement (fw 0.10.71, not yet bench-tested);
+cleanup in fw 0.10.72: per-batch quality flag, moving average and bulk phasor log removed.
 
 \subsection{Findings that need action}
 
