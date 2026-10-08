@@ -9,12 +9,12 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
 - **WP1** — Sharp Memory LCD bring-up, VCOM timer, u8g2.
 - **WP2** — power rails, battery monitoring, Standby, EEPROM (per-subsystem pages).
 - **WP3** — rotary encoders + buzzer + multi-screen UI (LIVE / STATUS / SETTINGS).
-- **WP4** — transport-agnostic **device API v2** over **three transports** — USB Custom
+- **WP4** — transport-agnostic **device API v3** (fw 0.11.0; `docs/api-v3-spec.md`, generated `docs/api-reference.md`) over **three transports** — USB Custom
   HID, BLE (RN4871 Transparent UART), and a wired debug UART (USART3) — with per-transport
   non-blocking TX frame rings and a live debug-log stream. USB DFU / "Reboot to DFU" is
   parked (the STM32 ROM bootloader always bounces back to a valid app); a custom GATT
-  service was descoped in favour of the Transparent UART. See `docs/api-reference.md` and
-  CLAUDE.md §10.
+  service was descoped in favour of the Transparent UART. The API is defined once in `tools/api_spec.py` and generated
+  (`python tools/gen_api.py`); Python client: `PythonTestCode/apiv3.py`.
 - **WP6** — RTC (calendar on the STATUS screen + API `System status` resource 0x02, get/set),
   auto power-off after an idle timeout (EEPROM-backed, API `Settings` resource 0x1B), and a
   "Power off" menu action.
