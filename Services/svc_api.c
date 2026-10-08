@@ -13,8 +13,15 @@ typedef struct {
     bool        connected;
     ApiSendFn   send_fn;
     ApiReadyFn  ready_fn;
+    uint8_t     active_subs;          /* number of active subscriptions: 0 makes the periodic walks free */
     ApiSub      sub[API2_SUB_SLOTS];
 } ApiTransportState;
+
+/* The subscribable resources only (a few dozen of the ~90), found once at init: the per-tick walks must not scan
+ * every table row. */
+typedef struct { const ApiResource *r; uint8_t cat; } SubResource;
+static SubResource s_sub_res[API2_SUB_SLOTS];
+static uint8_t     s_sub_res_n;
 
 static ApiTransportState    s_t[API_TRANSPORT_COUNT];
 static uint16_t             s_rx_malformed = 0;
@@ -142,6 +149,7 @@ static Api2Status subscribe(ApiTransport t, const ApiResource *r, const uint8_t 
         }
         if (!s->active) {
             s->issue_seq = 0;
+            s_t[t].active_subs++;
         }
         s->active       = true;
         s->interval_ms  = interval_ms;
@@ -153,8 +161,9 @@ static Api2Status subscribe(ApiTransport t, const ApiResource *r, const uint8_t 
         memset(s, 0, sizeof *s);
     }
     Api2Status st = r->ev->start(r, t, s, in, len);
-    if (st == API2_STATUS_OK) {
+    if (st == API2_STATUS_OK && !s->active) {
         s->active = true;
+        s_t[t].active_subs++;
     }
     return st;
 }
@@ -169,6 +178,7 @@ static Api2Status unsubscribe(ApiTransport t, const ApiResource *r)
         r->ev->stop(r, t, s);
     }
     s->active = false;
+    if (s_t[t].active_subs > 0U) s_t[t].active_subs--;
     return API2_STATUS_OK;
 }
 
@@ -187,6 +197,7 @@ static void clear_subs(ApiTransport t)
         }
     }
     memset(s_t[t].sub, 0, sizeof s_t[t].sub);
+    s_t[t].active_subs = 0;
 }
 
 /* ---------------- dispatch ---------------- */
@@ -276,6 +287,17 @@ void svc_api_init(void)
 {
     memset(s_t, 0, sizeof s_t);
     s_rx_malformed = 0;
+    s_sub_res_n = 0;
+    for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
+        const ApiCategory *c = &g_api_categories[ci];
+        for (uint8_t i = 0; i < c->count; ++i) {
+            if (c->res[i].sub != API2_SUB_NONE && s_sub_res_n < API2_SUB_SLOTS) {
+                s_sub_res[s_sub_res_n].r   = &c->res[i];
+                s_sub_res[s_sub_res_n].cat = c->id;
+                s_sub_res_n++;
+            }
+        }
+    }
 }
 
 void svc_api_register_transport(ApiTransport t, ApiSendFn send_fn)
@@ -367,21 +389,18 @@ void svc_api_update(void)
     api_res_update();
 
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
-        if (!s_t[t].connected) continue;
-        for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
-            const ApiCategory *c = &g_api_categories[ci];
-            for (uint8_t i = 0; i < c->count; ++i) {
-                const ApiResource *r = &c->res[i];
-                if (r->sub != API2_SUB_EVENT) continue;
-                ApiSub *s = &s_t[t].sub[r->slot];
-                if (!s->active) continue;
-                for (uint8_t k = 0; k < r->burst; ++k) {
-                    if (!api_transport_ready(t)) break;
-                    uint8_t  data[API2_PUSH_DATA_MAX];
-                    uint16_t n = 0;
-                    if (!r->ev->poll(r, t, s, data, &n)) break;
-                    send_sub_push(t, API2_OPCODE(API2_VERB_SUBSCRIBE, c->id, r->id), s, data, n);
-                }
+        if (!s_t[t].connected || s_t[t].active_subs == 0U) continue;
+        for (uint8_t k = 0; k < s_sub_res_n; ++k) {
+            const ApiResource *r = s_sub_res[k].r;
+            if (r->sub != API2_SUB_EVENT) continue;
+            ApiSub *s = &s_t[t].sub[r->slot];
+            if (!s->active) continue;
+            for (uint8_t n = 0; n < r->burst; ++n) {
+                if (!api_transport_ready(t)) break;
+                uint8_t  data[API2_PUSH_DATA_MAX];
+                uint16_t len = 0;
+                if (!r->ev->poll(r, t, s, data, &len)) break;
+                send_sub_push(t, API2_OPCODE(API2_VERB_SUBSCRIBE, s_sub_res[k].cat, r->id), s, data, len);
             }
         }
     }
@@ -392,25 +411,22 @@ void svc_api_subscriptions_update(void)
 {
     uint32_t now = hal_systick_get_ms();
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
-        if (!s_t[t].connected) continue;
-        for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
-            const ApiCategory *c = &g_api_categories[ci];
-            for (uint8_t i = 0; i < c->count; ++i) {
-                const ApiResource *r = &c->res[i];
-                if (r->sub != API2_SUB_INTERVAL) continue;
-                ApiSub *s = &s_t[t].sub[r->slot];
-                if (!s->active || (uint32_t)(now - s->last_push_ms) < s->interval_ms) continue;
+        if (!s_t[t].connected || s_t[t].active_subs == 0U) continue;
+        for (uint8_t k = 0; k < s_sub_res_n; ++k) {
+            const ApiResource *r = s_sub_res[k].r;
+            if (r->sub != API2_SUB_INTERVAL) continue;
+            ApiSub *s = &s_t[t].sub[r->slot];
+            if (!s->active || (uint32_t)(now - s->last_push_ms) < s->interval_ms) continue;
 
-                uint8_t out[API2_PUSH_DATA_MAX];
-                ApiCall call = {
-                    .t = t, .verb = API2_VERB_GET, .res = r->id, .in = 0, .in_len = 0,
-                    .out = out, .out_cap = (uint16_t)sizeof out, .out_len = 0, .after_reply = 0,
-                };
-                if (r->handler(r, &call) == API2_STATUS_OK) {
-                    send_sub_push(t, API2_OPCODE(API2_VERB_SUBSCRIBE, c->id, r->id), s, out, call.out_len);
-                }
-                s->last_push_ms = now;
+            uint8_t out[API2_PUSH_DATA_MAX];
+            ApiCall call = {
+                .t = t, .verb = API2_VERB_GET, .res = r->id, .in = 0, .in_len = 0,
+                .out = out, .out_cap = (uint16_t)sizeof out, .out_len = 0, .after_reply = 0,
+            };
+            if (r->handler(r, &call) == API2_STATUS_OK) {
+                send_sub_push(t, API2_OPCODE(API2_VERB_SUBSCRIBE, s_sub_res[k].cat, r->id), s, out, call.out_len);
             }
+            s->last_push_ms = now;
         }
     }
 }
