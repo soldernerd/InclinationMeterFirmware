@@ -47,6 +47,12 @@ DrvStatus drv_ads131m04_start(void);
 void      drv_ads131m04_stop(void);
 bool      drv_ads131m04_is_running(void);
 
+/* Investigation hook (2026-10-08, fw 0.10.76): set channel `ch` (0..3) input multiplexer, datasheet
+ * CHn_CFG.MUXn: 0 = normal (the input pins), 1 = inputs shorted, 2 = positive DC test signal, 3 = negative
+ * DC test signal. Only while the acquisition is stopped (DRV_ERR_NOT_READY otherwise); the value is read
+ * back. Not persistent: every boot re-initialises the chip with the normal input. */
+DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux);
+
 /* Fired once per sample. As of the ADC_Optimization work this runs in the
  * SysTick drain, not the TIM7 ISR: the SPI RX DMA writes each frame
  * straight into a ring slot, the trigger ISR just advances head, and

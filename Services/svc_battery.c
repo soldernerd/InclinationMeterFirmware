@@ -26,6 +26,11 @@ static bool             s_charge_complete = false;
 
 /* Charge-enable latch — see the policy comment in update_charge_enable(). */
 static bool             s_charge_enabled  = false;
+/* "Full" timer for DeviceSettings.charge_full_timeout_min: running while charging is enabled and the SoC
+ * reading is 100 %; s_prev_complete is only for logging the STANDBY edge. */
+static bool             s_full_timer_on   = false;
+static uint32_t         s_full_since_ms   = 0;
+static bool             s_prev_complete   = false;
 
 /* Manual "charge regardless of SOC" override (svc_battery_force_charge()).
  * Self-clears on charge-complete or USB removal — see update_charge_enable(). */
@@ -263,6 +268,34 @@ static void update_charge_enable(void)
     } else if (s_valid_sample_count >= BATTERY_CHARGE_MIN_SAMPLES && s_vbat_mv > 0 &&
                s_vbat_mv < g_device_settings.battery_charge_start_mv) {
         s_charge_enabled = true;
+    }
+
+    /* End of charge: the TP4056 STANDBY signal (s_charge_complete, handled above -- it disables charging)
+     * or charge_full_timeout_min minutes at a 100 % SoC reading, whichever comes first. The TP4056 cannot
+     * terminate by itself while the instrument draws its own current from the battery, so without the timer
+     * it floats at ~4.2 V for as long as USB is connected. Stopping clears an armed force-charge; charging
+     * restarts through the normal Vbat < battery_charge_start_mv policy above. */
+    if (s_charge_complete && !s_prev_complete) {
+        svc_log(API2_LOG_INFO, "battery: TP4056 STANDBY - charge complete, charging stopped");
+    }
+    s_prev_complete = s_charge_complete;
+    {
+        const uint16_t tmo_min = g_device_settings.charge_full_timeout_min;
+        const bool at_full = s_charge_enabled && s_usb_connected && s_soc_pct >= 100U
+                             && s_valid_sample_count >= BATTERY_CHARGE_MIN_SAMPLES;
+        if (tmo_min != 0U && at_full) {
+            if (!s_full_timer_on) {
+                s_full_timer_on = true;
+                s_full_since_ms = hal_systick_get_ms();
+            } else if (hal_systick_elapsed_ms(s_full_since_ms) >= (uint32_t)tmo_min * 60000UL) {
+                s_charge_enabled = false;
+                s_force_charge   = false;
+                s_full_timer_on  = false;
+                svc_logf(API2_LOG_INFO, "battery: %u min at 100%% - charging stopped", (unsigned)tmo_min);
+            }
+        } else {
+            s_full_timer_on = false;
+        }
     }
     hal_gpio_set(CHARGE_EN_PORT, CHARGE_EN_PIN, !s_charge_enabled);
 }

@@ -49,6 +49,14 @@
  * down into Standby. 0 disables it. EEPROM-backed (battery page), get/set
  * over the API (Settings resource 0x1B) and on the SETTINGS screen. */
 #define DEFAULT_AUTO_POWEROFF_S        300     /* 5 minutes */
+/* Stop charging after this many minutes at a 100 % SoC reading, or as soon as the TP4056
+ * reports STANDBY, whichever comes first (0 = disabled). Added 2026-10-08: with the instrument
+ * running from the battery the TP4056 never terminates by itself (its end-of-charge detection
+ * sees the board's own load current), so it sat in constant-voltage at ~4.2 V for 20 hours.
+ * The SoC reading is voltage based and reads 100 % about 1.5 h into a charge (the charge
+ * current inflates it), so 60 min at 100 % ends a charge roughly 2.5 h after it began. After a
+ * stop, charging restarts when Vbat falls below DEFAULT_BATTERY_CHARGE_START_MV. */
+#define DEFAULT_CHARGE_FULL_TIMEOUT_MIN 60
 
 /* --- ADC/sensor scaling calibration (2026-08-17) ---
  * General project rule: no numeric calibration constant lives only in
@@ -118,7 +126,9 @@
                                                      fields — a stored 0x0001 page is
                                                      discarded and reseeded from DEFAULT_*. */
 #define EEPROM_BATTERY_SETTINGS_ADDR      0x0100  /* thresholds + ADC divider scale */
-#define EEPROM_BATTERY_SETTINGS_VERSION   0x0005  /* 0x0002: added battery_charge_start_mv
+#define EEPROM_BATTERY_SETTINGS_VERSION   0x0006  /* 0x0006 (2026-10-08): added charge_full_timeout_min
+                                                     (+ alignment pad), reseeds this page.
+                                                     0x0002: added battery_charge_start_mv
                                                      and retuned thresholds (WP2 debug).
                                                      0x0003 (WP6): the page's alignment pad
                                                      became auto_poweroff_s.

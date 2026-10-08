@@ -338,6 +338,12 @@ typedef struct {
  * acquisition. Entries carry the cycle seq, so a lost batch shows as a seq
  * jump; batches the FIFO had no room for are counted separately.
  * Task context only. */
+/* Investigation hook (fw 0.10.76): set the input multiplexer of the ADC channels in `ch_mask` (bit n = ADC
+ * channel n; ch0 = S2, ch1 = B, ch2 = A, ch3 = S1) to `mux` (0 normal, 1 shorted, 2/3 DC test signals), see
+ * drv_ads131m04_set_channel_mux(). A running measurement is stopped around the register write and restarted
+ * (the demod state restarts, so the readings are invalid for ~2 s afterwards). Not persistent across a reboot. */
+DrvStatus svc_displacement_adc_mux(uint8_t ch_mask, uint8_t mux);
+
 DrvStatus svc_displacement_phasor_stream_begin(void);   /* DRV_ERR_NOT_READY if a stream / bulk capture is already active */
 void      svc_displacement_phasor_stream_end(void);
 bool      svc_displacement_phasor_stream_active(void);

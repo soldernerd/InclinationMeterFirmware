@@ -511,6 +511,25 @@ static void ring_reset(void)
     }
 }
 
+DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux)
+{
+    if (ch > 3U || mux > 3U) {
+        return DRV_ERR_INVALID;
+    }
+    if (!s_inited || s_running) {
+        return DRV_ERR_NOT_READY;
+    }
+    const uint8_t addr = (uint8_t)(0x09U + 5U * ch);   /* CH0_CFG 0x09, CH1_CFG 0x0E, CH2_CFG 0x13, CH3_CFG 0x18 */
+    if (write_register(addr, (uint16_t)mux) != DRV_OK) {
+        return DRV_ERR_COMM;
+    }
+    uint16_t back = 0xFFFFU;
+    if (read_register(addr, &back) != DRV_OK || (uint16_t)(back & 0x0003U) != mux) {
+        return DRV_ERR_COMM;
+    }
+    return DRV_OK;
+}
+
 DrvStatus drv_ads131m04_start(void)
 {
     if (s_running) {

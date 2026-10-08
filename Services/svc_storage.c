@@ -69,7 +69,7 @@ static const SettingsSection s_sections[] = {
       SECTION_SPAN(task_sensors_ms, task_temperature_ms) },
     { EEPROM_BATTERY_SETTINGS_ADDR, EEPROM_BATTERY_SETTINGS_VERSION,
       offsetof(DeviceSettings, battery_critical_mv),
-      SECTION_SPAN(battery_critical_mv, vbat_offset_mv) },
+      SECTION_SPAN(battery_critical_mv, battery_page_pad) },
     { EEPROM_TMP236_SETTINGS_ADDR, EEPROM_TMP236_SETTINGS_VERSION,
       offsetof(DeviceSettings, tmp236_seg1_voffs_mv),
       SECTION_SPAN(tmp236_seg1_voffs_mv, tmp236_seg2_tinfl_cdeg) },
@@ -93,7 +93,7 @@ static const SettingsSection s_sections[] = {
 _Static_assert(offsetof(DeviceSettings, task_sensors_ms) + SECTION_SPAN(task_sensors_ms, task_temperature_ms)
                 == offsetof(DeviceSettings, battery_critical_mv),
                 "scheduler section must end exactly where battery section begins");
-_Static_assert(offsetof(DeviceSettings, battery_critical_mv) + SECTION_SPAN(battery_critical_mv, vbat_offset_mv)
+_Static_assert(offsetof(DeviceSettings, battery_critical_mv) + SECTION_SPAN(battery_critical_mv, battery_page_pad)
                 == offsetof(DeviceSettings, tmp236_seg1_voffs_mv),
                 "battery section must end exactly where tmp236 section begins");
 _Static_assert(offsetof(DeviceSettings, tmp236_seg1_voffs_mv) + SECTION_SPAN(tmp236_seg1_voffs_mv, tmp236_seg2_tinfl_cdeg)
@@ -111,7 +111,7 @@ _Static_assert(offsetof(DeviceSettings, disp_s1_k_micro) + SECTION_SPAN(disp_s1_
 
 _Static_assert(HDR_SIZE + SECTION_SPAN(task_sensors_ms, task_temperature_ms) <= 0x0100U,
                "scheduler page must fit within its 256-byte EEPROM page budget");
-_Static_assert(HDR_SIZE + SECTION_SPAN(battery_critical_mv, vbat_offset_mv) <= 0x0100U,
+_Static_assert(HDR_SIZE + SECTION_SPAN(battery_critical_mv, battery_page_pad) <= 0x0100U,
                "battery page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(tmp236_seg1_voffs_mv, tmp236_seg2_tinfl_cdeg) <= 0x0100U,
                "tmp236 page must fit within its 256-byte EEPROM page budget");
@@ -172,6 +172,7 @@ static void fill_default_settings(DeviceSettings *s)
     s->vbat_scale_den           = DEFAULT_VBAT_SCALE_DEN;
     s->auto_poweroff_s          = DEFAULT_AUTO_POWEROFF_S;
     s->vbat_offset_mv           = DEFAULT_VBAT_OFFSET_MV;
+    s->charge_full_timeout_min  = DEFAULT_CHARGE_FULL_TIMEOUT_MIN;
 
     /* TMP236 page */
     s->tmp236_seg1_voffs_mv     = DEFAULT_TMP236_SEG1_VOFFS_MV;

@@ -992,6 +992,28 @@ uint16_t svc_displacement_capture_drops(void)
     return (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
 }
 
+DrvStatus svc_displacement_adc_mux(uint8_t ch_mask, uint8_t mux)
+{
+    if (s_cap_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    const bool was_running = drv_ads131m04_is_running();
+    if (was_running) {
+        svc_displacement_stop();
+    }
+    DrvStatus rc = DRV_OK;
+    for (uint8_t ch = 0; ch < 4U; ++ch) {
+        if ((ch_mask & (1U << ch)) != 0U) {
+            DrvStatus r = drv_ads131m04_set_channel_mux(ch, mux);
+            if (r != DRV_OK && rc == DRV_OK) rc = r;
+        }
+    }
+    if (was_running) {
+        (void)svc_displacement_start();   /* failure here = ADC not initialised, impossible once it was running */
+    }
+    return rc;
+}
+
 DrvStatus svc_displacement_phasor_stream_begin(void)
 {
     if (s_pstream_active || s_cap_active) {

@@ -264,6 +264,7 @@ SET_TASK_BLE_MS        = 0x03
 SET_VBAT_SCALE_NUM     = 0x0F
 SET_VBAT_SCALE_DEN     = 0x10
 SET_AUTO_POWEROFF_S    = 0x1B
+SET_CHARGE_FULL_TIMEOUT_MIN = 0x1D   # u16 minutes at 100 % SoC before charging is stopped (0 = off), fw 0.10.75
 SET_VBAT_OFFSET_MV     = 0x1C
 
 # ---- status codes ----

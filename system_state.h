@@ -46,6 +46,12 @@ typedef struct {
                                       * — this term fixes that. Range +/-500 mV
                                       * (API Settings 0x1C). Bumped
                                       * EEPROM_BATTERY_SETTINGS_VERSION to 0x0004. */
+    uint16_t charge_full_timeout_min;/* stop charging after this many minutes at a 100 %
+                                      * SoC reading (the TP4056 STANDBY signal stops it
+                                      * earlier if it comes first); 0 = disabled. API
+                                      * Settings 0x1D. Bumped EEPROM_BATTERY_SETTINGS_VERSION
+                                      * to 0x0006. */
+    uint16_t battery_page_pad;       /* keeps DeviceSettings a multiple of 4 */
 
     /* --- TMP236 (on-board temp sensor) page --- */
     uint16_t tmp236_seg1_voffs_mv;

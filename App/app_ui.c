@@ -30,6 +30,7 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_DISPLAY_RATE]     = { "Display rate",     "ms",   10,    50,    500 },
     [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
     [UI_SETTING_AUTO_POWEROFF]    = { "Auto power-off",   "s",    30,     0,   3600 },
+    [UI_SETTING_CHARGE_FULL_TIMEOUT] = { "Charge stop @100%", "min", 15,    0,   1440 },
     /* step 0 marks these action rows — see UiSettingMeta's comment. */
     [UI_SETTING_FORCE_CHARGE]     = { "Force charge",     "",      0,     0,      0 },
     [UI_SETTING_ZERO_CAL]         = { "Zero cal both",    "",      0,     0,      0 },
@@ -53,6 +54,7 @@ int32_t app_ui_setting_read(UiSettingIndex i)
         case UI_SETTING_DISPLAY_RATE:     return (int32_t)g_device_settings.task_display_ms;
         case UI_SETTING_BATTERY_CRITICAL: return (int32_t)g_device_settings.battery_critical_mv;
         case UI_SETTING_AUTO_POWEROFF:    return (int32_t)g_device_settings.auto_poweroff_s;
+        case UI_SETTING_CHARGE_FULL_TIMEOUT: return (int32_t)g_device_settings.charge_full_timeout_min;
         default:                          return 0;
     }
 }
@@ -66,6 +68,8 @@ static void setting_write(UiSettingIndex i, int32_t v)
             g_device_settings.battery_critical_mv = (uint16_t)v; break;
         case UI_SETTING_AUTO_POWEROFF:
             g_device_settings.auto_poweroff_s = (uint16_t)v;     break;
+        case UI_SETTING_CHARGE_FULL_TIMEOUT:
+            g_device_settings.charge_full_timeout_min = (uint16_t)v; break;
         default:                                                 break;
     }
 }

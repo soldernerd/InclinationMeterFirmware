@@ -252,6 +252,16 @@ typedef enum {
  * with a 0-payload call. See Services/svc_battery.h's
  * svc_battery_set_charge_inhibit(). */
 #define API2_RES_CMD_CHARGE_INHIBIT    0x09U
+/* 0x0A Excitation (fw 0.10.76, drift investigation) -- 3-byte payload [on:1][phase:u16 LE]. Sets the AD9833
+ * PHASE0 register (0..4095 = 0..360 deg; 2048 flips the excitation by 180 deg) and then switches the
+ * excitation on (on = 1) or holds the DDS in RESET, i.e. no excitation (on = 0). Not persistent: every boot
+ * starts with the excitation on at phase 0. While it is off the readings are meaningless. */
+#define API2_RES_CMD_EXCITATION        0x0AU
+/* 0x0B ADC input mux (fw 0.10.76, drift investigation) -- 2-byte payload [ch_mask:1][mux:1]. Sets the ADS131M04
+ * input multiplexer of the channels in ch_mask (bit n = ADC channel n; ch0 = S2, ch1 = B, ch2 = A, ch3 = S1) to
+ * mux (0 normal, 1 inputs shorted, 2/3 DC test signal). A running measurement is restarted around the change.
+ * Not persistent: every boot starts with all channels normal. */
+#define API2_RES_CMD_ADC_MUX           0x0BU
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)
@@ -515,6 +525,10 @@ typedef enum {
  * int32 (4-byte payload), range -500..500 mV. Battery page, EEPROM
  * version 0x0004. */
 #define API2_RES_SET_VBAT_OFFSET_MV          0x1CU
+/* 0x1D: charge_full_timeout_min -- stop charging after this many minutes at a
+ * 100 % SoC reading (or at the TP4056 STANDBY signal, whichever comes first),
+ * 0 = disabled. u16, range 0..1440. Battery page, EEPROM version 0x0006. */
+#define API2_RES_SET_CHARGE_FULL_TIMEOUT_MIN 0x1DU
 
 /* ---------------- Debug messages (0x6: SUBSCRIBE, UNSUBSCRIBE only) ----------------
  * A live log stream. SUBSCRIBE payload is one byte: the minimum severity

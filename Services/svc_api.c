@@ -2,6 +2,7 @@
 #include "svc_battery.h"
 #include "svc_storage.h"
 #include "svc_displacement.h"
+#include "drv_ad9833.h"
 #include "svc_powertest.h"
 #include "hal_pintest.h"
 #include "hal_dfu.h"
@@ -410,11 +411,11 @@ static void cmd_displacement(ApiTransport t, uint16_t opcode,
         send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
         return;
     }
-    /* The ADC can only serve one consumer: a raw bulk capture and the phasor
-     * stream own it while they run. A "stop" would leave the capture never
-     * finishing (every later bulk request BUSY), a "start" would look like it
-     * worked while the demod math stays bypassed. */
-    if (s_bulk.active || svc_displacement_phasor_stream_active()) {
+    /* The ADC can only serve one consumer: a raw bulk capture owns it while it
+     * runs. A "stop" would leave the capture never finishing (every later bulk
+     * request BUSY). The phasor stream is only a tap on the demod, so it does
+     * not block this (a stop just ends the batches until the next start). */
+    if (s_bulk.active) {
         send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
         return;
     }
@@ -463,6 +464,47 @@ static void cmd_charge_inhibit(ApiTransport t, uint16_t opcode,
     }
     svc_battery_set_charge_inhibit(action != 0U);
     svc_logf(API2_LOG_INFO, "cmd: charge inhibit %s", action ? "set" : "cleared");
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+static void cmd_excitation(ApiTransport t, uint16_t opcode,
+                           const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    const uint8_t  on    = pl[0];
+    const uint16_t phase = (uint16_t)(pl[1] | ((uint16_t)pl[2] << 8));
+    if (on > 1U || phase > 4095U) {
+        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+        return;
+    }
+    if (drv_ad9833_set_phase(phase) != DRV_OK || drv_ad9833_set_output(on != 0U) != DRV_OK) {
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    svc_logf(API2_LOG_INFO, "cmd: excitation %s, phase %u (%u.%02u deg)", on ? "on" : "OFF", (unsigned)phase,
+             (unsigned)((uint32_t)phase * 360U / 4096U), (unsigned)(((uint32_t)phase * 36000U / 4096U) % 100U));
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
+static void cmd_adc_mux(ApiTransport t, uint16_t opcode,
+                        const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    const uint8_t mask = pl[0];
+    const uint8_t mux  = pl[1];
+    if ((mask & 0xF0U) != 0U || mask == 0U || mux > 3U) {
+        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+        return;
+    }
+    if (s_bulk.active || !g_system_state.ads_ok) {
+        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
+        return;
+    }
+    if (svc_displacement_adc_mux(mask, mux) != DRV_OK) {
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    svc_logf(API2_LOG_INFO, "cmd: adc mux mask 0x%X -> %u", (unsigned)mask, (unsigned)mux);
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
@@ -608,6 +650,8 @@ static const CommandDesc s_commands[] = {
     { API2_RES_CMD_PRECISION_MEASURE, 1U, cmd_precision_measure },
     { API2_RES_CMD_END_CHARGING,      0U, cmd_end_charging     },
     { API2_RES_CMD_CHARGE_INHIBIT,    1U, cmd_charge_inhibit   },
+    { API2_RES_CMD_EXCITATION,        3U, cmd_excitation       },
+    { API2_RES_CMD_ADC_MUX,           2U, cmd_adc_mux          },
 };
 #define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
 
@@ -1428,6 +1472,7 @@ static const SettingsFieldDesc s_settings_fields[] = {
     SF(API2_RES_SET_ENCODER_COUNTS_PER_DET,  SF_UNSIGNED,  encoder_counts_per_detent,    1, 100),
     SF(API2_RES_SET_AUTO_POWEROFF_S,         SF_UNSIGNED,  auto_poweroff_s,              0, 65535),
     SF(API2_RES_SET_VBAT_OFFSET_MV,          SF_SIGNED,    vbat_offset_mv,            -500, 500),
+    SF(API2_RES_SET_CHARGE_FULL_TIMEOUT_MIN, SF_UNSIGNED,  charge_full_timeout_min,      0, 1440),
 };
 #define SETTINGS_FIELD_COUNT (sizeof(s_settings_fields) / sizeof(s_settings_fields[0]))
 
