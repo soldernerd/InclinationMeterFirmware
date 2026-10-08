@@ -44,10 +44,13 @@ class Res:
     sub       None | 'interval' | 'event'   how SUBSCRIBE delivers
     sub_req   fields of the SUBSCRIBE request (default: u32 interval_ms for 'interval' and 'event')
     ev        name of the event-ops table for sub == 'event' (api_ev_<ev>)
+    service   True: SET / EXECUTE answer SERVICE_MODE_REQUIRED unless service mode is active (see api-v3-spec.md,
+              section 5a); GET and the other verbs are never gated
     """
 
     def __init__(self, name, rid, verbs, doc, rsp=None, req=None, req_len=None, push=None,
-                 sub=None, sub_req=None, ev=None):
+                 sub=None, sub_req=None, ev=None, service=False):
+        self.service = service
         self.name, self.id, self.verbs, self.doc = name, rid, tuple(verbs), doc
         self.rsp, self.req, self.req_len, self.push = rsp, req, req_len, push
         self.sub, self.sub_req, self.ev = sub, sub_req, ev
@@ -58,9 +61,9 @@ class Res:
 class FieldRes(Res):
     """A GET/SET resource backed by one DeviceSettings member (generic handler, bounds checked)."""
 
-    def __init__(self, name, rid, ctype, field, lo, hi, doc, unit="", check=None, after=None):
+    def __init__(self, name, rid, ctype, field, lo, hi, doc, unit="", check=None, after=None, service=False):
         super().__init__(name, rid, ("GET", "SET"), doc, rsp=[F(ctype, "value", doc, unit)],
-                         req=[F(ctype, "value", doc, unit)])
+                         req=[F(ctype, "value", doc, unit)], service=service)
         self.kind = "field"
         self.ctype, self.field, self.lo, self.hi = ctype, field, lo, hi
         self.check, self.after, self.unit = check, after, unit
@@ -89,7 +92,7 @@ SYSTEM = Cat(0x0, "SYSTEM", "System", (GET, SET),
            F(S(20), "build", "compile date and time, e.g. 'Oct  8 2026 19:52:59'")]),
   Res("STATE", 0x01, (GET,), "Live state: battery, connections, charging, rails and which activities are running. "
       "Also available as the periodic topic STATUS.",
-      rsp=[F(U8, "battery_state", "0 normal, 1 low, 2 critical"),
+      rsp=[F(U8, "battery_state", "0 normal, 1 low, 2 critical, 3 charging, 4 full"),
            F(U8, "battery_soc_pct", "state of charge", "%"),
            F(U16, "battery_mv", "", "mV"),
            F(U8, "usb_connected", "USB power present (VBUS)"),
@@ -101,7 +104,8 @@ SYSTEM = Cat(0x0, "SYSTEM", "System", (GET, SET),
            F(U8, "rail_5v_on", "5 V rail (display, analog front end, buzzer)"),
            F(U8, "displacement_running", "the tilt demodulation is running"),
            F(U8, "phasor_stream_active", "a phasor stream subscription owns the ADC"),
-           F(U8, "bulk_active", "a bulk transfer is active")]),
+           F(U8, "bulk_active", "a bulk transfer is active"),
+           F(U8, "service_mode", "service mode is active (unlocks the gated commands and calibration writes)")]),
   Res("HEALTH", 0x02, (GET,), "Self-test results, error latches, communication counters, uptime and reset cause.",
       rsp=[F(U8, "adc_ok", "internal ADC calibrated at boot"),
            F(U8, "dac_ok", "AD9833 initialised"),
@@ -118,7 +122,11 @@ SYSTEM = Cat(0x0, "SYSTEM", "System", (GET, SET),
            F(U16, "usb_tx_dropped", "frames lost to a full USB transmit ring or too large for it"),
            F(U16, "ble_tx_dropped"),
            F(U16, "uart_tx_dropped"),
-           F(U16, "rx_malformed", "received frames that could not be parsed")]),
+           F(U16, "rx_malformed", "received frames that could not be parsed"),
+           F(U8, "last_fault_kind", "the fault that caused the previous reset: 0 none, 1 HardFault, 2 init failure "
+                                    "(Error_Handler); a watchdog reset shows as reset_cause bit3/bit4 with kind 0"),
+           F(U32, "last_fault_pc", "program counter at the fault"),
+           F(U32, "last_fault_lr", "link register at the fault")]),
   Res("RTC", 0x03, (GET, SET), "Date and time. The clock has a 1/256 s sub-second counter, so drift can be measured "
       "to well under 1 ppm over a day (see Calibrations RTC_TRIM).",
       rsp=[F(U16, "year"), F(U8, "month"), F(U8, "day"), F(U8, "weekday", "1 = Monday .. 7 = Sunday"),
@@ -136,7 +144,7 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
   Res("POWER_OFF", 0x40, (EXECUTE,), "Enter Standby now (wake: encoder press or USB plug-in). Answers first, then sleeps.",
       req=[]),
   Res("REBOOT", 0x41, (EXECUTE,), "Software reset. Answers first, then resets.", req=[]),
-  Res("REBOOT_DFU", 0x42, (EXECUTE,),
+  Res("REBOOT_DFU", 0x42, (EXECUTE,), service=True, doc=
       "Reset into the ROM USB bootloader (VID 0x0483 / PID 0xDF11). Sets the nBOOT0 option byte to 0: the device STAYS "
       "in the bootloader on every boot until reflashed with nBOOT0 restored "
       "(`STM32_Programmer_CLI -c port=USB1 -w fw.hex -ob nSWBOOT0=1 nBOOT0=1 -v -rst`, or dfu_flash.ps1).", req=[]),
@@ -148,7 +156,7 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
       "cleared; not cleared by a USB replug.", req=[F(U8, "inhibit", "1 = inhibit, 0 = allow")]),
   Res("DISPLACEMENT", 0x50, (EXECUTE,), "Start or stop the tilt demodulation (runs from boot). BUSY_EXCLUSIVE while "
       "a bulk capture or the phasor stream owns the ADC.", req=[F(U8, "run", "1 = run, 0 = stop")]),
-  Res("ZERO_CAL", 0x51, (EXECUTE,), "Flip (zero) calibration, the 180-degree reversal test. Step 1 averages the "
+  Res("ZERO_CAL", 0x51, (EXECUTE,), service=True, doc="Flip (zero) calibration, the 180-degree reversal test. Step 1 averages the "
       "reading in the current orientation (optionally only the selected sensors), step 2 after turning the "
       "instrument 180 degrees averages again and stores the new zero of those sensors (Calibrations S1_ZERO / "
       "S2_ZERO). Progress: Procedures ZERO_CAL.",
@@ -157,57 +165,70 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
   Res("PRECISION", 0x52, (EXECUTE,), "Triggered precision measurement: one reliable value from the first clean 2 s "
       "window within 5 s, else an error. Needs the demodulation running; BUSY_RESOURCE during a zero calibration. "
       "Result: Procedures PRECISION.", req=[F(U8, "action", "0 start, 1 cancel")]),
-  Res("FACTORY_DEFAULTS", 0x60, (EXECUTE,), "Reset ALL settings and calibrations to the compiled defaults and save "
+  Res("FACTORY_DEFAULTS", 0x60, (EXECUTE,), service=True, doc="Reset ALL settings and calibrations to the compiled defaults and save "
       "them. Wipes the tilt calibrations: use with care.",
       req=[F(U8, "confirm", "must be 0xA5")]),
+  Res("SERVICE_END", 0x62, (EXECUTE,), "Leave service mode now (it also ends by itself, see the protocol document). "
+      "Entering it is only possible on the instrument: SETTINGS screen, Service mode.", req=[]),
   Res("CLEAR_COUNTERS", 0x61, (EXECUTE,), "Zero the communication, drop and fault counters and the sticky error "
       "latches (settings_save_failed).", req=[]),
   Res("TEST_BEEP", 0x70, (EXECUTE,), "Sound the buzzer for 100 ms.", req=[]),
-  Res("POWER_TEST", 0x71, (EXECUTE,), "Power investigation: each bit of the mask keeps one subsystem on, cleared "
+  Res("POWER_TEST", 0x71, (EXECUTE,), service=True, doc="Power investigation: each bit of the mask keeps one subsystem on, cleared "
       "bits cut it immediately. Boot default is all bits set.",
       req=[F(U32, "mask", "bit0 5V rail, 1 3V3 rail, 2 AD9833, 3 ADS131M04, 4 BLE, 5 display, 6 LEDs, "
                          "7 CPU busy-loop (0 = WFI between ticks)")],
       rsp=[F(U32, "applied_mask")]),
-  Res("PIN_TEST", 0x72, (EXECUTE,), "Drive the six MCU-to-level-converter lines as static outputs. Arming is "
+  Res("PIN_TEST", 0x72, (EXECUTE,), service=True, doc="Drive the six MCU-to-level-converter lines as static outputs. Arming is "
       "irreversible without the reboot bit.",
       req=[F(U8, "pins", "bits 5..0: SCK, MOSI, CS, DISP_ON, VCOM, BUZZER; bit6 allow DISP_ON high (panel MUST be "
                          "unplugged); bit7 reboot to normal")]),
-  Res("RAIL", 0x73, (EXECUTE,), "Switch one supply rail (shortcut for POWER_TEST bits 0 and 1).",
+  Res("FAULT_TEST", 0x76, (EXECUTE,), service=True, doc="Provoke a failure on purpose, to prove the fault capture and the "
+      "watchdog on a bench (answers first, then misbehaves). 1: a HardFault (recorded, then the instrument resets; "
+      "System HEALTH shows it after the reboot). 2: the main loop hangs with interrupts running (the supervised watchdog "
+      "resets after about 3 s; reset_cause shows a WWDG reset). 3: a hang with interrupts disabled (the hardware watchdog "
+      "resets within about half a second).",
+      req=[F(U8, "kind", "1 HardFault, 2 main-loop hang, 3 hang with interrupts off")]),
+  Res("RAIL", 0x73, (EXECUTE,), service=True, doc="Switch one supply rail (shortcut for POWER_TEST bits 0 and 1).",
       req=[F(U8, "rail", "0 = 3V3 rail, 1 = 5V rail"), F(U8, "on", "1 on, 0 off")],
       rsp=[F(U32, "applied_mask", "the resulting POWER_TEST mask")]),
 ])
 
 # ---------------------------------------------------------------------------------------------------------------------
 _DS = "disp_%s_%s"
+def _cal(*a, **k):
+    """A calibration field: writing it needs service mode."""
+    return FieldRes(*a, service=True, **k)
+
+
 CALIBRATIONS = Cat(0x2, "CALIBRATIONS", "Calibrations", (GET, SET),
   "Constants that correct a sensor or a measurement. Stored in EEPROM; every SET persists immediately. IDs by group: "
   "0x40 tilt sensors, 0x50 battery, 0x60 temperature, 0x70 clock.", [
-  FieldRes("S1_K", 0x40, I32, "disp_s1_k_micro", 100, 1000000,
+  _cal("S1_K", 0x40, I32, "disp_s1_k_micro", 100, 1000000,
            "Sensor 1 sensitivity k at PGA 1: tilt [mm/m] = (ratio - zero) / k", "1e-6 per mm/m"),
-  FieldRes("S1_ZERO", 0x41, I32, "disp_s1_zero_ppm", -500000, 500000,
+  _cal("S1_ZERO", 0x41, I32, "disp_s1_zero_ppm", -500000, 500000,
            "Sensor 1 zero (level point) as a ratio, independent of k", "ppm of the ratio"),
-  FieldRes("S1_PHASE", 0x42, I16, "disp_s1_phase_cdeg", -4500, 4500,
+  _cal("S1_PHASE", 0x42, I16, "disp_s1_phase_cdeg", -4500, 4500,
            "Sensor 1 phase of the tilt signal relative to the excitation reference", "0.01 deg"),
-  FieldRes("S1_INVERT", 0x43, U8, "disp_s1_invert", 0, 1, "Sensor 1 sign of the reported reading (1 = inverted)"),
-  FieldRes("S2_K", 0x44, I32, "disp_s2_k_micro", 100, 1000000, "Sensor 2 k at PGA 1", "1e-6 per mm/m"),
-  FieldRes("S2_ZERO", 0x45, I32, "disp_s2_zero_ppm", -500000, 500000, "Sensor 2 zero", "ppm of the ratio"),
-  FieldRes("S2_PHASE", 0x46, I16, "disp_s2_phase_cdeg", -4500, 4500, "Sensor 2 phase", "0.01 deg"),
-  FieldRes("S2_INVERT", 0x47, U8, "disp_s2_invert", 0, 1, "Sensor 2 sign of the reported reading"),
-  FieldRes("VBAT_SCALE_NUM", 0x50, U16, "vbat_scale_num", 1, 10000, "Battery divider scale numerator "
+  _cal("S1_INVERT", 0x43, U8, "disp_s1_invert", 0, 1, "Sensor 1 sign of the reported reading (1 = inverted)"),
+  _cal("S2_K", 0x44, I32, "disp_s2_k_micro", 100, 1000000, "Sensor 2 k at PGA 1", "1e-6 per mm/m"),
+  _cal("S2_ZERO", 0x45, I32, "disp_s2_zero_ppm", -500000, 500000, "Sensor 2 zero", "ppm of the ratio"),
+  _cal("S2_PHASE", 0x46, I16, "disp_s2_phase_cdeg", -4500, 4500, "Sensor 2 phase", "0.01 deg"),
+  _cal("S2_INVERT", 0x47, U8, "disp_s2_invert", 0, 1, "Sensor 2 sign of the reported reading"),
+  _cal("VBAT_SCALE_NUM", 0x50, U16, "vbat_scale_num", 1, 10000, "Battery divider scale numerator "
            "(Vbat = Vadc * num / den + offset)"),
-  FieldRes("VBAT_SCALE_DEN", 0x51, U16, "vbat_scale_den", 1, 10000, "Battery divider scale denominator"),
-  FieldRes("VBAT_OFFSET", 0x52, I32, "vbat_offset_mv", -500, 500, "Battery voltage offset", "mV"),
-  FieldRes("TMP236_SEG1_VOFFS", 0x60, U16, "tmp236_seg1_voffs_mv", 0, 3300, "TMP236 segment 1 voltage offset", "mV"),
-  FieldRes("TMP236_SEG1_NUM", 0x61, U16, "tmp236_seg1_num", 1, 10000, "TMP236 segment 1 slope numerator"),
-  FieldRes("TMP236_SEG1_DEN", 0x62, U16, "tmp236_seg1_den", 1, 10000, "TMP236 segment 1 slope denominator"),
-  FieldRes("TMP236_SEG_BOUNDARY", 0x63, U16, "tmp236_seg_boundary_mv", 0, 3300, "TMP236 segment boundary", "mV"),
-  FieldRes("TMP236_SEG2_VOFFS", 0x64, U16, "tmp236_seg2_voffs_mv", 0, 3300, "TMP236 segment 2 voltage offset", "mV"),
-  FieldRes("TMP236_SEG2_NUM", 0x65, U16, "tmp236_seg2_num", 1, 10000, "TMP236 segment 2 slope numerator"),
-  FieldRes("TMP236_SEG2_DEN", 0x66, U16, "tmp236_seg2_den", 1, 10000, "TMP236 segment 2 slope denominator"),
-  FieldRes("TMP236_SEG2_TINFL", 0x67, U16, "tmp236_seg2_tinfl_cdeg", 0, 20000, "TMP236 segment 2 inflection "
+  _cal("VBAT_SCALE_DEN", 0x51, U16, "vbat_scale_den", 1, 10000, "Battery divider scale denominator"),
+  _cal("VBAT_OFFSET", 0x52, I32, "vbat_offset_mv", -500, 500, "Battery voltage offset", "mV"),
+  _cal("TMP236_SEG1_VOFFS", 0x60, U16, "tmp236_seg1_voffs_mv", 0, 3300, "TMP236 segment 1 voltage offset", "mV"),
+  _cal("TMP236_SEG1_NUM", 0x61, U16, "tmp236_seg1_num", 1, 10000, "TMP236 segment 1 slope numerator"),
+  _cal("TMP236_SEG1_DEN", 0x62, U16, "tmp236_seg1_den", 1, 10000, "TMP236 segment 1 slope denominator"),
+  _cal("TMP236_SEG_BOUNDARY", 0x63, U16, "tmp236_seg_boundary_mv", 0, 3300, "TMP236 segment boundary", "mV"),
+  _cal("TMP236_SEG2_VOFFS", 0x64, U16, "tmp236_seg2_voffs_mv", 0, 3300, "TMP236 segment 2 voltage offset", "mV"),
+  _cal("TMP236_SEG2_NUM", 0x65, U16, "tmp236_seg2_num", 1, 10000, "TMP236 segment 2 slope numerator"),
+  _cal("TMP236_SEG2_DEN", 0x66, U16, "tmp236_seg2_den", 1, 10000, "TMP236 segment 2 slope denominator"),
+  _cal("TMP236_SEG2_TINFL", 0x67, U16, "tmp236_seg2_tinfl_cdeg", 0, 20000, "TMP236 segment 2 inflection "
            "temperature", "0.01 degC"),
-  FieldRes("LM35_SCALE", 0x68, U16, "lm35_scale_mv_per_c", 1, 1000, "External LM35 scale", "mV per degC"),
-  FieldRes("RTC_TRIM", 0x70, I16, "rtc_trim_ppm_x10", -4800, 4800,
+  _cal("LM35_SCALE", 0x68, U16, "lm35_scale_mv_per_c", 1, 1000, "External LM35 scale", "mV per degC"),
+  _cal("RTC_TRIM", 0x70, I16, "rtc_trim_ppm_x10", -4800, 4800,
            "Clock trim: positive makes the clock run FASTER. Applied by the RTC's digital calibration "
            "(0.954 ppm per step, range about +-488 ppm, rounded to the nearest step). Measure the error as "
            "(RTC time - reference time) / elapsed time over several hours (System RTC has 1/256 s resolution) and "

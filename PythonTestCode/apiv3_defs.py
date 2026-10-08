@@ -43,10 +43,12 @@ RES_COMMANDS_DISPLACEMENT = 0x50
 RES_COMMANDS_ZERO_CAL = 0x51
 RES_COMMANDS_PRECISION = 0x52
 RES_COMMANDS_FACTORY_DEFAULTS = 0x60
+RES_COMMANDS_SERVICE_END = 0x62
 RES_COMMANDS_CLEAR_COUNTERS = 0x61
 RES_COMMANDS_TEST_BEEP = 0x70
 RES_COMMANDS_POWER_TEST = 0x71
 RES_COMMANDS_PIN_TEST = 0x72
+RES_COMMANDS_FAULT_TEST = 0x76
 RES_COMMANDS_RAIL = 0x73
 RES_CALIBRATIONS_S1_K = 0x40
 RES_CALIBRATIONS_S1_ZERO = 0x41
@@ -122,10 +124,12 @@ OP_COMMANDS_DISPLACEMENT_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_DI
 OP_COMMANDS_ZERO_CAL_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_ZERO_CAL)
 OP_COMMANDS_PRECISION_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_PRECISION)
 OP_COMMANDS_FACTORY_DEFAULTS_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_FACTORY_DEFAULTS)
+OP_COMMANDS_SERVICE_END_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_SERVICE_END)
 OP_COMMANDS_CLEAR_COUNTERS_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_CLEAR_COUNTERS)
 OP_COMMANDS_TEST_BEEP_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_TEST_BEEP)
 OP_COMMANDS_POWER_TEST_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_POWER_TEST)
 OP_COMMANDS_PIN_TEST_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_PIN_TEST)
+OP_COMMANDS_FAULT_TEST_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_FAULT_TEST)
 OP_COMMANDS_RAIL_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_RAIL)
 OP_CALIBRATIONS_S1_K_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S1_K)
 OP_CALIBRATIONS_S1_K_SET = opcode(SET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S1_K)
@@ -276,9 +280,9 @@ def decode_system_identity_response(data):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
     return d
 
-FMT_SYSTEM_STATE_RESPONSE = '<BBHBBBBBBBBBB'
+FMT_SYSTEM_STATE_RESPONSE = '<BBHBBBBBBBBBBB'
 SIZE_SYSTEM_STATE_RESPONSE = struct.calcsize(FMT_SYSTEM_STATE_RESPONSE)
-FIELDS_SYSTEM_STATE_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'displacement_running', 'phasor_stream_active', 'bulk_active', )
+FIELDS_SYSTEM_STATE_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'displacement_running', 'phasor_stream_active', 'bulk_active', 'service_mode', )
 def decode_system_state_response(data):
     if len(data) < SIZE_SYSTEM_STATE_RESPONSE:
         return None
@@ -289,9 +293,9 @@ def decode_system_state_response(data):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
     return d
 
-FMT_SYSTEM_HEALTH_RESPONSE = '<BBBBBBBBBBIHHHH'
+FMT_SYSTEM_HEALTH_RESPONSE = '<BBBBBBBBBBIHHHHBII'
 SIZE_SYSTEM_HEALTH_RESPONSE = struct.calcsize(FMT_SYSTEM_HEALTH_RESPONSE)
-FIELDS_SYSTEM_HEALTH_RESPONSE = ('adc_ok', 'dac_ok', 'ads_ok', 'display_ok', 'bme280_ok', 'eeprom_selftest', 'settings_save_failed', 'woke_from_standby', 'reset_cause', 'rtc_set', 'uptime_s', 'usb_tx_dropped', 'ble_tx_dropped', 'uart_tx_dropped', 'rx_malformed', )
+FIELDS_SYSTEM_HEALTH_RESPONSE = ('adc_ok', 'dac_ok', 'ads_ok', 'display_ok', 'bme280_ok', 'eeprom_selftest', 'settings_save_failed', 'woke_from_standby', 'reset_cause', 'rtc_set', 'uptime_s', 'usb_tx_dropped', 'ble_tx_dropped', 'uart_tx_dropped', 'rx_malformed', 'last_fault_kind', 'last_fault_pc', 'last_fault_lr', )
 def decode_system_health_response(data):
     if len(data) < SIZE_SYSTEM_HEALTH_RESPONSE:
         return None
@@ -455,6 +459,22 @@ def decode_commands_pin_test_request(data):
 
 def encode_commands_pin_test_request(pins):
     return struct.pack(FMT_COMMANDS_PIN_TEST_REQUEST, pins)
+
+FMT_COMMANDS_FAULT_TEST_REQUEST = '<B'
+SIZE_COMMANDS_FAULT_TEST_REQUEST = struct.calcsize(FMT_COMMANDS_FAULT_TEST_REQUEST)
+FIELDS_COMMANDS_FAULT_TEST_REQUEST = ('kind', )
+def decode_commands_fault_test_request(data):
+    if len(data) < SIZE_COMMANDS_FAULT_TEST_REQUEST:
+        return None
+    v = struct.unpack_from(FMT_COMMANDS_FAULT_TEST_REQUEST, data)
+    d = dict(zip(FIELDS_COMMANDS_FAULT_TEST_REQUEST, v))
+    for k, x in d.items():
+        if isinstance(x, bytes):
+            d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
+    return d
+
+def encode_commands_fault_test_request(kind):
+    return struct.pack(FMT_COMMANDS_FAULT_TEST_REQUEST, kind)
 
 FMT_COMMANDS_RAIL_RESPONSE = '<I'
 SIZE_COMMANDS_RAIL_RESPONSE = struct.calcsize(FMT_COMMANDS_RAIL_RESPONSE)
@@ -1083,9 +1103,9 @@ def decode_topics_env_response(data):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
     return d
 
-FMT_TOPICS_STATUS_RESPONSE = '<BBHBBBBBBBBBB'
+FMT_TOPICS_STATUS_RESPONSE = '<BBHBBBBBBBBBBB'
 SIZE_TOPICS_STATUS_RESPONSE = struct.calcsize(FMT_TOPICS_STATUS_RESPONSE)
-FIELDS_TOPICS_STATUS_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'displacement_running', 'phasor_stream_active', 'bulk_active', )
+FIELDS_TOPICS_STATUS_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'displacement_running', 'phasor_stream_active', 'bulk_active', 'service_mode', )
 def decode_topics_status_response(data):
     if len(data) < SIZE_TOPICS_STATUS_RESPONSE:
         return None

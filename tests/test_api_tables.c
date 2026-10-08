@@ -21,6 +21,9 @@ uint32_t hal_systick_get_ms(void) { return g_ms; }
 
 void api_res_update(void) {}
 void api_res_transport_disconnected(ApiTransport t) { (void)t; }
+void api_res_request_seen(void) {}
+static bool g_unlocked;
+bool api_service_unlocked(void) { return g_unlocked; }
 
 static bool g_storage_busy, g_save_fails;
 static int  g_saves, g_validates, g_trim_calls;
@@ -58,6 +61,7 @@ static void fresh(void)
     g_device_settings.battery_low_mv = 3600;
     g_device_settings.battery_critical_mv = 3400;
     g_storage_busy = g_save_fails = false;
+    g_unlocked = true;                                   /* most tests are about something else */
     g_saves = g_validates = g_trim_calls = g_changed = 0;
     g_stub_calls = 0;
     g_responses = 0;
@@ -340,6 +344,74 @@ TEST(selected_resources_have_the_documented_verbs_and_lengths)
     CHECK_EQ(API2_OP_BULK_RAW_ADC_START_BULK, 0x5800);
 }
 
+/* The resources a stranger's phone must not be able to change without someone at the instrument. This list is the
+ * contract; it must match the `service=True` flags in tools/api_spec.py. */
+static bool expected_gated(uint8_t cat, uint8_t res)
+{
+    if (cat == API2_CAT_CALIBRATIONS) return true;                       /* every calibration write */
+    if (cat != API2_CAT_COMMANDS) return false;
+    return res == API2_RES_COMMANDS_REBOOT_DFU || res == API2_RES_COMMANDS_FACTORY_DEFAULTS
+        || res == API2_RES_COMMANDS_ZERO_CAL   || res == API2_RES_COMMANDS_POWER_TEST
+        || res == API2_RES_COMMANDS_PIN_TEST   || res == API2_RES_COMMANDS_RAIL
+        || res == API2_RES_COMMANDS_FAULT_TEST;
+}
+
+TEST(exactly_the_documented_resources_need_service_mode)
+{
+    fresh();
+    int gated = 0;
+    for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
+        const ApiCategory *c = &g_api_categories[ci];
+        for (uint8_t i = 0; i < c->count; ++i) {
+            const ApiResource *r = &c->res[i];
+            bool flagged = (r->flags & API2_RES_F_SERVICE) != 0;
+            CHECK_EQ(flagged, expected_gated(c->id, r->id));
+            if (flagged) gated++;
+            /* a gated resource really changes state (nothing read-only is flagged) */
+            if (flagged) CHECK(r->verbs & (API2_VERB_BIT(API2_VERB_SET) | API2_VERB_BIT(API2_VERB_EXECUTE)));
+        }
+    }
+    CHECK(gated >= 20);
+}
+
+TEST(locked_the_gated_resources_refuse_and_everything_else_works)
+{
+    fresh();
+    g_unlocked = false;
+    uint8_t z[8] = {0};
+    int refused = 0;
+    for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
+        const ApiCategory *c = &g_api_categories[ci];
+        for (uint8_t i = 0; i < c->count; ++i) {
+            const ApiResource *r = &c->res[i];
+            for (uint8_t v = 0; v <= (uint8_t)API2_VERB_CANCEL_BULK; ++v) {
+                if (!(r->verbs & API2_VERB_BIT(v)) || (v != API2_VERB_SET && v != API2_VERB_EXECUTE)) continue;
+                uint16_t len = (r->handler == api_field_handler) ? ((const ApiFieldDesc *)r->ctx)->size : r->in_min;
+                unsigned calls = g_stub_calls;
+                int saves = g_saves;
+                Api2Status st = xfer(API2_OPCODE(v, c->id, r->id), z, len);
+                if (expected_gated(c->id, r->id)) {
+                    CHECK_EQ(st, API2_STATUS_SERVICE_MODE_REQUIRED);
+                    CHECK_EQ(g_stub_calls, calls);
+                    CHECK_EQ(g_saves, saves);                                 /* nothing was written */
+                    refused++;
+                } else {
+                    CHECK(st != API2_STATUS_SERVICE_MODE_REQUIRED);
+                }
+            }
+        }
+    }
+    CHECK(refused >= 20);
+    /* reading calibrations stays possible while locked */
+    const ApiCategory *cal = cat_by_id(API2_CAT_CALIBRATIONS);
+    for (uint8_t i = 0; i < cal->count; ++i) {
+        CHECK_EQ(xfer(API2_OPCODE(API2_VERB_GET, cal->id, cal->res[i].id), 0, 0), API2_STATUS_OK);
+    }
+    g_unlocked = true;
+    const ApiResource *r = &cal->res[0];
+    CHECK_EQ(set_field(r, cal->id, ((const ApiFieldDesc *)r->ctx)->lo), API2_STATUS_OK);
+}
+
 int main(void)
 {
     RUN(resource_ids_and_subscription_slots_are_unique);
@@ -352,5 +424,7 @@ int main(void)
     RUN(the_battery_thresholds_keep_critical_below_low);
     RUN(a_new_rtc_trim_is_applied_at_once_but_only_when_it_was_stored);
     RUN(selected_resources_have_the_documented_verbs_and_lengths);
+    RUN(exactly_the_documented_resources_need_service_mode);
+    RUN(locked_the_gated_resources_refuse_and_everything_else_works);
     return test_summary();
 }

@@ -6,6 +6,7 @@
 #include "hal_systick.h"
 #include "svc_storage.h"
 #include "svc_log.h"
+#include "svc_service.h"
 #include "system_state.h"
 #include "config.h"
 #include "pin_config.h"
@@ -187,6 +188,7 @@ void svc_battery_enter_low_power(void)
 
     hal_power_configure_wakeup_pins();
     hal_power_configure_rail_retention();
+    svc_service_leave();                 /* sleep ends service mode */
     hal_power_enter_standby();
     /* Unreachable — Standby mode resets the MCU on wake rather than
      * returning here (see hal_power.c). */

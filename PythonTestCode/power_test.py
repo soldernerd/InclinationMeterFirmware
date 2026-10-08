@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+NEEDS SERVICE MODE (API v3): on the instrument, SETTINGS > Service mode, right knob twice. It ends by itself after
+10 idle minutes. Without it the device answers SERVICE_MODE_REQUIRED.
 Current-consumption bisection helper over the wired-UART API.
 
 Sets the power-test bitmask (Commands / 0x03, svc_powertest.h): each bit

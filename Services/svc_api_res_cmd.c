@@ -5,10 +5,12 @@
 #include "svc_displacement.h"
 #include "svc_log.h"
 #include "svc_power.h"
+#include "svc_service.h"
 #include "svc_powertest.h"
 #include "svc_storage.h"
 #include "drv_buzzer.h"
 #include "hal_dfu.h"
+#include "hal_fault.h"
 #include "hal_pintest.h"
 #include "hal_power.h"
 #include "hal_rtc.h"
@@ -168,6 +170,33 @@ Api2Status api_h_commands_factory_defaults(const ApiResource *r, ApiCall *c)
     (void)hal_rtc_set_trim_ppm_x10(g_device_settings.rtc_trim_ppm_x10);
     svc_api_settings_changed();
     svc_log(API2_LOG_WARN, "cmd: factory defaults restored (all settings and calibrations)");
+    return API2_STATUS_OK;
+}
+
+static uint8_t s_fault_kind;
+
+static void after_fault_test(void)
+{
+    let_frame_drain();
+    hal_fault_provoke(s_fault_kind);
+}
+
+Api2Status api_h_commands_fault_test(const ApiResource *r, ApiCall *c)
+{
+    (void)r;
+    if (c->in[0] < 1U || c->in[0] > 3U) {
+        return API2_STATUS_INVALID_PARAMETER;
+    }
+    s_fault_kind = c->in[0];
+    svc_logf(API2_LOG_ERROR, "cmd: FAULT TEST kind %u -- the instrument will fail now", (unsigned)c->in[0]);
+    c->after_reply = after_fault_test;
+    return API2_STATUS_OK;
+}
+
+Api2Status api_h_commands_service_end(const ApiResource *r, ApiCall *c)
+{
+    (void)r; (void)c;
+    svc_service_leave();
     return API2_STATUS_OK;
 }
 

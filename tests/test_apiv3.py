@@ -129,8 +129,9 @@ class Generated(unittest.TestCase):
         self.assertEqual((fmt, lo, hi), ("<H", 0, 65535))
 
     def test_helpers_decode_known_payloads(self):
-        state = struct.pack("<BBHBBBBBBBBBB", 3, 87, 4012, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0)
+        state = struct.pack("<BBHBBBBBBBBBBB", 3, 87, 4012, 1, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1)
         self.assertIn("CHARGING", a.format_state(state))
+        self.assertIn("service=1", a.format_state(state))
         rtc = struct.pack("<HBBBBBBBB", 2026, 10, 8, 4, 19, 52, 30, 1, 128)
         self.assertIn("19:52:30.500", a.format_rtc(rtc))
         chunk = bytes([7]) + (bytes([0x01, 0x00, 0x00]) + bytes([0xFF, 0xFF, 0xFF]) + bytes(6))

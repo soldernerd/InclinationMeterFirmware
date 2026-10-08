@@ -11,6 +11,7 @@
 #include "hal_systick.h"
 #include "hal_power.h"
 #include "svc_api.h"
+#include "hal_wdt.h"
 #include "svc_battery.h"
 #include "svc_displacement.h"
 #include "svc_storage.h"
@@ -250,6 +251,7 @@ void app_scheduler_run(void)
          * real, if minor, behavior change from re-sampling per task
          * instead of once per pass. Same wrap-safe unsigned-subtract
          * math either way, just against a locally cached `now`. */
+        hal_wdt_progress();                     /* the watchdog's proof that this loop is alive */
         uint32_t now = hal_systick_get_ms();
         for (size_t i = 0; i < TASK_COUNT; ++i) {
             if ((uint32_t)(now - s_tasks[i].last_run_ms) >= s_tasks[i].period_ms) {

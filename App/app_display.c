@@ -6,6 +6,7 @@
 #include "system_state.h"
 #include "svc_battery.h"
 #include "svc_api.h"
+#include "svc_service.h"
 #include "svc_displacement.h"
 #include "hal_rtc.h"
 #include "hal_systick.h"
@@ -626,6 +627,16 @@ static void draw_settings_screen(void)
             } else if ((UiSettingIndex)i == UI_SETTING_FORCE_CHARGE
                        && svc_battery_is_force_charging()) {
                 suffix = "  [active]";
+            }
+            char svc[24];
+            if ((UiSettingIndex)i == UI_SETTING_SERVICE_MODE && !is_selected_and_editing) {
+                if (svc_service_active()) {
+                    unsigned left = svc_service_seconds_left();
+                    snprintf(svc, sizeof svc, "  [ON %u:%02u]", left / 60U, left % 60U);
+                } else {
+                    snprintf(svc, sizeof svc, "  [off]");
+                }
+                suffix = svc;
             }
             snprintf(line, sizeof line, "%s %-18s%s", cursor, m->label, suffix);
         }

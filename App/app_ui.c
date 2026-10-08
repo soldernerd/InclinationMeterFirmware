@@ -1,4 +1,5 @@
 #include "app_ui.h"
+#include "svc_service.h"
 #include "drv_buzzer.h"
 #include "svc_storage.h"
 #include "app_scheduler.h"
@@ -34,6 +35,7 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_ZERO_CAL]         = { "Zero cal both",    "",      0,     0,      0 },
     [UI_SETTING_ZERO_CAL_S1]      = { "Zero cal S1",      "",      0,     0,      0 },
     [UI_SETTING_ZERO_CAL_S2]      = { "Zero cal S2",      "",      0,     0,      0 },
+    [UI_SETTING_SERVICE_MODE]     = { "Service mode",     "",      0,     0,      0 },
     [UI_SETTING_REBOOT_DFU]       = { "Reboot to DFU",    "",      0,     0,      0 },
     [UI_SETTING_POWER_OFF]        = { "Power off",        "",      0,     0,      0 },
 };
@@ -314,6 +316,11 @@ void app_ui_update(void)
                         g_ui_state.redraw_needed    = true;
                         break;
                     }
+                    case UI_SETTING_SERVICE_MODE:
+                        if (svc_service_active()) { svc_service_leave(); } else { svc_service_enter(); }
+                        g_ui_state.settings_editing = false;
+                        g_ui_state.redraw_needed    = true;
+                        break;
                     case UI_SETTING_REBOOT_DFU: hal_dfu_enter_bootloader();  break;
                     case UI_SETTING_POWER_OFF:  svc_power_shutdown_now();   break;
                     default:                                               break;

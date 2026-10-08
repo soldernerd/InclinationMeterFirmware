@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+NEEDS SERVICE MODE (API v3): on the instrument, SETTINGS > Service mode, right knob twice. It ends by itself after
+10 idle minutes. Without it the device answers SERVICE_MODE_REQUIRED.
 Exercise "Reboot to DFU" (fw 0.9.12+, EXECUTE Commands/0x05).
 
 The command sets the nBOOT0 option byte to 0 and launches an option-byte

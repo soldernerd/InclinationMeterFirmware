@@ -24,6 +24,7 @@
 /* USER CODE BEGIN Includes */
 #include "hal_tim.h"
 #include "drv_ads131m04.h"
+#include "hal_wdt.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,6 +49,8 @@
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
+/* naked: no prologue, so the stacked exception frame is still at MSP (HAL_App/hal_fault.c) */
+void HardFault_Handler(void) __attribute__((naked));
 
 /* USER CODE END PFP */
 
@@ -103,7 +106,11 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  __asm volatile (
+    "mrs r0, msp            \n"
+    "ldr r1, =hal_fault_hardfault_c \n"
+    "bx  r1                 \n"
+  );
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
@@ -153,6 +160,7 @@ void SysTick_Handler(void)
    * fDATA). No-op unless acquisition is running.
    * See docs/adc_acquisition_redesign.md. */
   drv_ads131m04_drain_tick();
+  hal_wdt_tick_isr();              /* refresh the watchdog while the main loop is alive */
   /* USER CODE END SysTick_IRQn 1 */
 }
 

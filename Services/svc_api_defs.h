@@ -36,10 +36,12 @@
 #define API2_RES_COMMANDS_ZERO_CAL                   0x51U
 #define API2_RES_COMMANDS_PRECISION                  0x52U
 #define API2_RES_COMMANDS_FACTORY_DEFAULTS           0x60U
+#define API2_RES_COMMANDS_SERVICE_END                0x62U
 #define API2_RES_COMMANDS_CLEAR_COUNTERS             0x61U
 #define API2_RES_COMMANDS_TEST_BEEP                  0x70U
 #define API2_RES_COMMANDS_POWER_TEST                 0x71U
 #define API2_RES_COMMANDS_PIN_TEST                   0x72U
+#define API2_RES_COMMANDS_FAULT_TEST                 0x76U
 #define API2_RES_COMMANDS_RAIL                       0x73U
 #define API2_RES_CALIBRATIONS_S1_K                   0x40U
 #define API2_RES_CALIBRATIONS_S1_ZERO                0x41U
@@ -116,10 +118,12 @@
 #define API2_OP_COMMANDS_ZERO_CAL_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_ZERO_CAL)
 #define API2_OP_COMMANDS_PRECISION_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_PRECISION)
 #define API2_OP_COMMANDS_FACTORY_DEFAULTS_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_FACTORY_DEFAULTS)
+#define API2_OP_COMMANDS_SERVICE_END_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_SERVICE_END)
 #define API2_OP_COMMANDS_CLEAR_COUNTERS_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_CLEAR_COUNTERS)
 #define API2_OP_COMMANDS_TEST_BEEP_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_TEST_BEEP)
 #define API2_OP_COMMANDS_POWER_TEST_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_POWER_TEST)
 #define API2_OP_COMMANDS_PIN_TEST_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_PIN_TEST)
+#define API2_OP_COMMANDS_FAULT_TEST_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_FAULT_TEST)
 #define API2_OP_COMMANDS_RAIL_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_RAIL)
 #define API2_OP_CALIBRATIONS_S1_K_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S1_K)
 #define API2_OP_CALIBRATIONS_S1_K_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S1_K)
@@ -282,8 +286,9 @@ typedef struct {
     uint8_t  displacement_running;
     uint8_t  phasor_stream_active;
     uint8_t  bulk_active;
+    uint8_t  service_mode;
 } __attribute__((packed)) Api2SystemStateResponse;
-_Static_assert(sizeof(Api2SystemStateResponse) == 14U, "Api2SystemStateResponse layout");
+_Static_assert(sizeof(Api2SystemStateResponse) == 15U, "Api2SystemStateResponse layout");
 typedef struct {
     uint8_t  adc_ok;
     uint8_t  dac_ok;
@@ -300,8 +305,11 @@ typedef struct {
     uint16_t ble_tx_dropped;
     uint16_t uart_tx_dropped;
     uint16_t rx_malformed;
+    uint8_t  last_fault_kind;
+    uint32_t last_fault_pc;
+    uint32_t last_fault_lr;
 } __attribute__((packed)) Api2SystemHealthResponse;
-_Static_assert(sizeof(Api2SystemHealthResponse) == 22U, "Api2SystemHealthResponse layout");
+_Static_assert(sizeof(Api2SystemHealthResponse) == 31U, "Api2SystemHealthResponse layout");
 typedef struct {
     uint16_t year;
     uint8_t  month;
@@ -356,6 +364,10 @@ typedef struct {
     uint8_t  pins;
 } __attribute__((packed)) Api2CommandsPinTestRequest;
 _Static_assert(sizeof(Api2CommandsPinTestRequest) == 1U, "Api2CommandsPinTestRequest layout");
+typedef struct {
+    uint8_t  kind;
+} __attribute__((packed)) Api2CommandsFaultTestRequest;
+_Static_assert(sizeof(Api2CommandsFaultTestRequest) == 1U, "Api2CommandsFaultTestRequest layout");
 typedef struct {
     uint32_t applied_mask;
 } __attribute__((packed)) Api2CommandsRailResponse;
@@ -569,8 +581,9 @@ typedef struct {
     uint8_t  displacement_running;
     uint8_t  phasor_stream_active;
     uint8_t  bulk_active;
+    uint8_t  service_mode;
 } __attribute__((packed)) Api2TopicsStatusResponse;
-_Static_assert(sizeof(Api2TopicsStatusResponse) == 14U, "Api2TopicsStatusResponse layout");
+_Static_assert(sizeof(Api2TopicsStatusResponse) == 15U, "Api2TopicsStatusResponse layout");
 typedef struct {
     uint16_t seq;
     uint8_t  flags;
@@ -710,10 +723,12 @@ Api2Status api_h_commands_displacement(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_zero_cal(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_precision(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_factory_defaults(const ApiResource *r, ApiCall *c);
+Api2Status api_h_commands_service_end(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_clear_counters(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_test_beep(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_power_test(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_pin_test(const ApiResource *r, ApiCall *c);
+Api2Status api_h_commands_fault_test(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_rail(const ApiResource *r, ApiCall *c);
 Api2Status api_h_measurements_onboard_temp(const ApiResource *r, ApiCall *c);
 Api2Status api_h_measurements_battery_mv(const ApiResource *r, ApiCall *c);

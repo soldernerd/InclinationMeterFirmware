@@ -3,6 +3,7 @@
 #include "system_state.h"
 #include "svc_displacement.h"
 #include "svc_log.h"
+#include "svc_service.h"
 #include <string.h>
 
 /* API streams: the debug log, the gapless phasor stream and the raw-ADC bulk transfer, plus the periodic hook the
@@ -205,6 +206,17 @@ void api_res_update(void)
 {
     bulk_pump();
     api_zero_cal_apply_if_ready();
+    svc_service_update();
+}
+
+void api_res_request_seen(void)
+{
+    svc_service_note_api_activity();
+}
+
+bool api_service_unlocked(void)
+{
+    return svc_service_active();
 }
 
 void api_res_transport_disconnected(ApiTransport t)

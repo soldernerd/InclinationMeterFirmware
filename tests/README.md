@@ -14,6 +14,8 @@ parts that are only otherwise exercised by flashing a board:
 | `test_api_core.c` | `Services/svc_api.c` — the API dispatcher on a synthetic table: the staged validation order (category, verb, resource, resource verb, CRC, length), status propagation, response framing, after-reply actions, interval and event subscriptions, per-transport isolation, the byte reassembler |
 | `test_api_tables.c` | the REAL generated tables (`Services/svc_api_tables.c`) with the field handler: every resource reachable with its verbs and request length, every settings/calibration field bounds-checked and persisted, cross-field rules, the RTC trim hook, state-changing IDs safe against a stale v2 client |
 | `test_apiv3.py` | the Python client library (`PythonTestCode/apiv3.py`): CRC, framing, byte-stream and USB HID reassembly, every generated payload round-tripped, generated files up to date |
+| `test_math_fault.c` / `test_math_supervisor.c` | the fault record kept across a reset (pack / unpack / corruption check) and the decision logic of the supervised watchdog (when the SysTick interrupt may refresh it) |
+| `test_svc_service.c` | service mode: entered only locally, left explicitly, ended by 10 minutes without API activity, restarted by each request |
 | `test_txframe.c`   | `Services/svc_txframe.c` — the SPSC frame FIFO: FIFO order, wrap, the 64-byte urgent reserve, oversized-frame refusal, reset |
 | `test_transfer.c`  | the extracted fixed-point transfer / decode functions: `drv_tmp236_mv_to_cdeg` (two-segment fit, boundary continuity, negative °C), `drv_lm35_mv_to_cdeg`, `drv_encoder_quad_step` (all 16 Gray-code transitions) |
 

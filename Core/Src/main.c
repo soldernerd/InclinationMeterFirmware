@@ -62,6 +62,9 @@
 #include "svc_power.h"
 #include "svc_api.h"
 #include "svc_log.h"
+#include "svc_service.h"
+#include "hal_fault.h"
+#include "hal_wdt.h"
 #include "svc_powertest.h"
 #include "app_version.h"
 #include "stm32g0xx_ll_gpio.h"
@@ -121,6 +124,7 @@ int main(void)
    * of this sequence now lives). Checked/cleared as early as possible,
    * before anything else touches PWR. */
   hal_power_capture_reset_cause();
+  hal_fault_collect();          /* the record a fault handler left before the last reset, if any */
   g_system_state.woke_from_standby = hal_power_woke_from_standby();
   /* USER CODE END Init */
 
@@ -150,6 +154,18 @@ int main(void)
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
   svc_log_init();             /* log ring up first: every later init may log into it */
+  svc_service_init();
+  {
+    const MathFaultRecord *lf = hal_fault_last();
+    if (lf->kind != 0U) {
+      svc_logf(API2_LOG_ERROR, "boot: previous run ended in a %s at pc=0x%08lX lr=0x%08lX",
+               lf->kind == MATH_FAULT_HARDFAULT ? "HardFault" : "failed initialisation",
+               (unsigned long)lf->pc, (unsigned long)lf->lr);
+    }
+    if ((hal_power_reset_cause() & 0x18U) != 0U) {
+      svc_log(API2_LOG_ERROR, "boot: the previous run was ended by a watchdog reset");
+    }
+  }
   /* Deliberate boot order (agreed 2026-09-03). Originally interleaved
    * directly between the individual MX_*_Init() calls above, each step a
    * checkpoint observable on LED_STS without a debugger attached — but
@@ -354,6 +370,9 @@ int main(void)
   } else {
     svc_log(API2_LOG_WARN, "displacement: not started (ADC init failed)");
   }
+  /* Supervised window watchdog (HAL_App/hal_wdt.h): started last, just before the scheduler, so the (slow)
+   * initialisation above runs unsupervised. */
+  hal_wdt_start();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -444,6 +463,7 @@ void Error_Handler(void)
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
+  hal_fault_record_init_failure((uint32_t)(uintptr_t)__builtin_return_address(0));   /* reported after the next reset */
   while (1)
   {
   }

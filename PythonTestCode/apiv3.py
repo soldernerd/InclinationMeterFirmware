@@ -22,7 +22,8 @@ HID_REPORT = 64
 
 STATUS = {0x00: "OK", 0x01: "UNKNOWN_CATEGORY", 0x02: "VERB_NOT_VALID", 0x03: "UNKNOWN_RESOURCE", 0x04: "BAD_CRC",
           0x05: "BAD_LENGTH", 0x06: "BUSY_RESOURCE", 0x07: "BUSY_EXCLUSIVE", 0x08: "INVALID_PARAMETER",
-          0x09: "NOT_SUBSCRIBED", 0x0A: "NOTHING_TO_CANCEL"}
+          0x09: "NOT_SUBSCRIBED", 0x0A: "NOTHING_TO_CANCEL",
+          0x0B: "SERVICE_MODE_REQUIRED"}
 SEVERITY = {0: "INFO", 1: "WARN", 2: "ERROR"}
 BATTERY_STATE = {0: "NORMAL", 1: "LOW", 2: "CRITICAL", 3: "CHARGING", 4: "FULL"}
 
@@ -157,7 +158,7 @@ def format_state(data: bytes):
             f"{d['battery_mv']}mV  usb={d['usb_connected']} ble={d['ble_connected']} charging={d['charging']} "
             f"force={d['force_charging']} inhibit={d['charge_inhibited']}  3v3={d['rail_3v3_on']} "
             f"5v={d['rail_5v_on']}  demod={d['displacement_running']} stream={d['phasor_stream_active']} "
-            f"bulk={d['bulk_active']}")
+            f"bulk={d['bulk_active']} service={d['service_mode']}")
 
 
 _WD = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}

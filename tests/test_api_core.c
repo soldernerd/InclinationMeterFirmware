@@ -11,8 +11,11 @@
 static uint32_t g_ms;
 uint32_t hal_systick_get_ms(void) { return g_ms; }
 
-static int g_update_calls, g_disconnect_calls;
+static int g_update_calls, g_disconnect_calls, g_seen_calls;
+static bool g_unlocked;
 void api_res_update(void) { g_update_calls++; }
+void api_res_request_seen(void) { g_seen_calls++; }
+bool api_service_unlocked(void) { return g_unlocked; }
 void api_res_transport_disconnected(ApiTransport t) { (void)t; g_disconnect_calls++; }
 
 /* ---------------- a synthetic table ---------------- */
@@ -116,24 +119,26 @@ static const ApiEventOps k_ev = { ev_start, ev_stop, ev_poll };
 #define V(v) API2_VERB_BIT(v)
 static const ApiResource k_rw[] = {
     /* id  verbs                                         sub            subin min max handler        ev ctx slot burst */
-    { 0x01, V(API2_VERB_GET),                            API2_SUB_NONE, 4, 0, 0, h_get_pattern, 0, 0, 0, 1 },
-    { 0x02, V(API2_VERB_GET) | V(API2_VERB_SET),         API2_SUB_NONE, 4, 4, 4, h_rw,          0, 0, 0, 1 },
-    { 0x03, V(API2_VERB_EXECUTE),                        API2_SUB_NONE, 4, 1, 3, h_exec_var,    0, 0, 0, 1 },
-    { 0x04, V(API2_VERB_EXECUTE),                        API2_SUB_NONE, 4, 0, 0, h_exec_after,  0, 0, 0, 1 },
-    { 0x05, V(API2_VERB_GET),                            API2_SUB_NONE, 4, 0, 0, h_big,         0, 0, 0, 1 },
+    { 0x01, V(API2_VERB_GET),                            API2_SUB_NONE, 4, 0, 0, h_get_pattern, 0, 0, 0, 1, 0 },
+    { 0x02, V(API2_VERB_GET) | V(API2_VERB_SET),         API2_SUB_NONE, 4, 4, 4, h_rw,          0, 0, 0, 1, 0 },
+    { 0x03, V(API2_VERB_EXECUTE),                        API2_SUB_NONE, 4, 1, 3, h_exec_var,    0, 0, 0, 1, 0 },
+    { 0x04, V(API2_VERB_EXECUTE),                        API2_SUB_NONE, 4, 0, 0, h_exec_after,  0, 0, 0, 1, 0 },
+    { 0x05, V(API2_VERB_GET),                            API2_SUB_NONE, 4, 0, 0, h_big,         0, 0, 0, 1, 0 },
+    { 0x06, V(API2_VERB_GET) | V(API2_VERB_SET),         API2_SUB_NONE, 4, 4, 4, h_rw,          0, 0, 0, 1, API2_RES_F_SERVICE },
+    { 0x07, V(API2_VERB_EXECUTE),                        API2_SUB_NONE, 4, 0, 0, h_bulk,        0, 0, 0, 1, API2_RES_F_SERVICE },
 };
 static const ApiResource k_ro[] = {
     { 0x00, V(API2_VERB_GET) | V(API2_VERB_SUBSCRIBE) | V(API2_VERB_UNSUBSCRIBE), API2_SUB_INTERVAL, 4, 0, 0,
-      h_counter, 0, 0, 0, 1 },
+      h_counter, 0, 0, 0, 1, 0 },
 };
 static const ApiResource k_evt[] = {
-    { 0x00, V(API2_VERB_SUBSCRIBE) | V(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 1, 0, 0, h_bulk, &k_ev, 0, 1, 3 },
+    { 0x00, V(API2_VERB_SUBSCRIBE) | V(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 1, 0, 0, h_bulk, &k_ev, 0, 1, 3, 0 },
 };
 static const ApiResource k_blk[] = {
-    { 0x00, V(API2_VERB_START_BULK) | V(API2_VERB_CANCEL_BULK), API2_SUB_NONE, 4, 0, 0, h_bulk, 0, 0, 0, 1 },
+    { 0x00, V(API2_VERB_START_BULK) | V(API2_VERB_CANCEL_BULK), API2_SUB_NONE, 4, 0, 0, h_bulk, 0, 0, 0, 1, 0 },
 };
 const ApiCategory g_api_categories[] = {
-    { CAT_RW,  V(API2_VERB_GET) | V(API2_VERB_SET) | V(API2_VERB_EXECUTE), k_rw,  5 },
+    { CAT_RW,  V(API2_VERB_GET) | V(API2_VERB_SET) | V(API2_VERB_EXECUTE), k_rw,  7 },
     { CAT_RO,  V(API2_VERB_GET) | V(API2_VERB_SUBSCRIBE) | V(API2_VERB_UNSUBSCRIBE), k_ro, 1 },
     { CAT_EVT, V(API2_VERB_SUBSCRIBE) | V(API2_VERB_UNSUBSCRIBE), k_evt, 1 },
     { CAT_BLK, V(API2_VERB_START_BULK) | V(API2_VERB_CANCEL_BULK), k_blk, 1 },
@@ -168,7 +173,8 @@ static void fresh(void)
     g_nsent = 0; g_send_t = 0; g_ready = true; g_ms = 1000;
     g_handler_calls = 0; g_stored = 0; g_order_n = 0; g_counter = 0;
     g_ev_pending = 0; g_ev_start_calls = g_ev_stop_calls = g_ev_polls = 0;
-    g_update_calls = g_disconnect_calls = 0;
+    g_update_calls = g_disconnect_calls = g_seen_calls = 0;
+    g_unlocked = false;
     g_last_in_len = 0;
 }
 
@@ -319,6 +325,54 @@ TEST(bulk_verbs_reach_the_handler_with_the_right_verb)
     CHECK_EQ(g_last_verb, API2_VERB_START_BULK);
     CHECK_EQ(send(OP(API2_VERB_CANCEL_BULK, CAT_BLK, 0x00), 0, 0, false), API2_STATUS_OK);
     CHECK_EQ(g_last_verb, API2_VERB_CANCEL_BULK);
+}
+
+/* ---------------- service-mode gate ---------------- */
+
+TEST(a_flagged_resource_refuses_set_and_execute_until_service_mode_is_active)
+{
+    fresh();
+    uint32_t v = 0x12345678u;
+    CHECK_EQ(send(OP(API2_VERB_SET, CAT_RW, 0x06), &v, 4, false), API2_STATUS_SERVICE_MODE_REQUIRED);
+    CHECK_EQ(last()->n, 6 + 1);                                   /* status only */
+    CHECK_EQ(send(OP(API2_VERB_EXECUTE, CAT_RW, 0x07), 0, 0, false), API2_STATUS_SERVICE_MODE_REQUIRED);
+    CHECK_EQ(g_handler_calls, 0);                                 /* the handler never ran */
+    CHECK_EQ(g_stored, 0);
+    g_unlocked = true;
+    CHECK_EQ(send(OP(API2_VERB_SET, CAT_RW, 0x06), &v, 4, false), API2_STATUS_OK);
+    CHECK_EQ(g_stored, 0x12345678u);
+    CHECK_EQ(send(OP(API2_VERB_EXECUTE, CAT_RW, 0x07), 0, 0, false), API2_STATUS_OK);
+    g_unlocked = false;
+    CHECK_EQ(send(OP(API2_VERB_SET, CAT_RW, 0x06), &v, 4, false), API2_STATUS_SERVICE_MODE_REQUIRED);   /* and locked again */
+}
+
+TEST(reading_a_flagged_resource_is_never_gated)
+{
+    fresh();
+    CHECK_EQ(send(OP(API2_VERB_GET, CAT_RW, 0x06), 0, 0, false), API2_STATUS_OK);
+    CHECK_EQ(last()->n, 6 + 1 + 4);
+}
+
+TEST(the_service_gate_is_the_last_check_so_malformed_requests_keep_their_own_status)
+{
+    fresh();
+    uint32_t v = 1;
+    CHECK_EQ(send(OP(API2_VERB_SET, CAT_RW, 0x06), &v, 4, true), API2_STATUS_BAD_CRC);              /* locked AND bad crc */
+    CHECK_EQ(send(OP(API2_VERB_SET, CAT_RW, 0x06), "ab", 2, false), API2_STATUS_BAD_LENGTH);        /* locked AND wrong length */
+    CHECK_EQ(send(OP(API2_VERB_GET, CAT_RW, 0x07), 0, 0, false), API2_STATUS_VERB_NOT_VALID);       /* locked AND wrong verb */
+}
+
+TEST(only_well_formed_requests_count_as_api_activity)
+{
+    fresh();
+    uint32_t v = 1;
+    send(OP(API2_VERB_GET, 0xC, 0x00), 0, 0, false);                      /* unknown category */
+    send(OP(API2_VERB_GET, CAT_RW, 0x77), 0, 0, false);                   /* unknown resource */
+    send(OP(API2_VERB_GET, CAT_RW, 0x01), 0, 0, true);                    /* bad crc */
+    CHECK_EQ(g_seen_calls, 0);
+    send(OP(API2_VERB_GET, CAT_RW, 0x01), 0, 0, false);
+    send(OP(API2_VERB_SET, CAT_RW, 0x06), &v, 4, false);                  /* refused by the gate, still activity */
+    CHECK_EQ(g_seen_calls, 2);
 }
 
 /* ---------------- interval subscriptions ---------------- */
@@ -560,6 +614,10 @@ int main(void)
     RUN(the_largest_possible_response_fits_exactly);
     RUN(an_after_reply_action_runs_only_after_the_response_was_sent);
     RUN(bulk_verbs_reach_the_handler_with_the_right_verb);
+    RUN(a_flagged_resource_refuses_set_and_execute_until_service_mode_is_active);
+    RUN(reading_a_flagged_resource_is_never_gated);
+    RUN(the_service_gate_is_the_last_check_so_malformed_requests_keep_their_own_status);
+    RUN(only_well_formed_requests_count_as_api_activity);
     RUN(interval_subscribe_validates_the_range);
     RUN(an_interval_subscription_pushes_when_due_with_a_wrapping_issue_counter);
     RUN(resubscribing_changes_the_interval_without_restarting_the_issue_counter);

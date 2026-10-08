@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+NEEDS SERVICE MODE (API v3): on the instrument, SETTINGS > Service mode, right knob twice. It ends by itself after
+10 idle minutes. Without it the device answers SERVICE_MODE_REQUIRED.
 Autonomous current-consumption bisection: Keysight E36104A (supply current
 readback, read-only) paired with the firmware power-test mask over UART.
 

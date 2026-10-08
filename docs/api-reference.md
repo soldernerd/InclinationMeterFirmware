@@ -56,11 +56,11 @@ Live state: battery, connections, charging, rails and which activities are runni
 
 Verbs: `GET` = 0x0001
 
-**Response** (14 bytes)
+**Response** (15 bytes)
 
 | Offset | Type | Field | Unit | Meaning |
 |---:|---|---|---|---|
-| 0 | u8 | `battery_state` |  | 0 normal, 1 low, 2 critical |
+| 0 | u8 | `battery_state` |  | 0 normal, 1 low, 2 critical, 3 charging, 4 full |
 | 1 | u8 | `battery_soc_pct` | % | state of charge |
 | 2 | u16 | `battery_mv` | mV |  |
 | 4 | u8 | `usb_connected` |  | USB power present (VBUS) |
@@ -73,6 +73,7 @@ Verbs: `GET` = 0x0001
 | 11 | u8 | `displacement_running` |  | the tilt demodulation is running |
 | 12 | u8 | `phasor_stream_active` |  | a phasor stream subscription owns the ADC |
 | 13 | u8 | `bulk_active` |  | a bulk transfer is active |
+| 14 | u8 | `service_mode` |  | service mode is active (unlocks the gated commands and calibration writes) |
 
 ### System HEALTH (0x0/0x02)
 
@@ -80,7 +81,7 @@ Self-test results, error latches, communication counters, uptime and reset cause
 
 Verbs: `GET` = 0x0002
 
-**Response** (22 bytes)
+**Response** (31 bytes)
 
 | Offset | Type | Field | Unit | Meaning |
 |---:|---|---|---|---|
@@ -99,6 +100,9 @@ Verbs: `GET` = 0x0002
 | 16 | u16 | `ble_tx_dropped` |  |  |
 | 18 | u16 | `uart_tx_dropped` |  |  |
 | 20 | u16 | `rx_malformed` |  | received frames that could not be parsed |
+| 22 | u8 | `last_fault_kind` |  | the fault that caused the previous reset: 0 none, 1 HardFault, 2 init failure (Error_Handler); a watchdog reset shows as reset_cause bit3/bit4 with kind 0 |
+| 23 | u32 | `last_fault_pc` |  | program counter at the fault |
+| 27 | u32 | `last_fault_lr` |  | link register at the fault |
 
 ### System RTC (0x0/0x03)
 
@@ -141,19 +145,21 @@ One-shot actions. Every command answers with a status byte (plus the payload not
 |---:|---|---|---|
 | 0x40 | POWER_OFF | EXECUTE | Enter Standby now (wake: encoder press or USB plug-in) |
 | 0x41 | REBOOT | EXECUTE | Software reset |
-| 0x42 | REBOOT_DFU | EXECUTE | Reset into the ROM USB bootloader (VID 0x0483 / PID 0xDF11) |
+| 0x42 | REBOOT_DFU | EXECUTE | Reset into the ROM USB bootloader (VID 0x0483 / PID 0xDF11) (service mode) |
 | 0x43 | FORCE_CHARGE | EXECUTE | Charge regardless of the state of charge while USB power is present, until full or USB removal |
 | 0x44 | END_CHARGING | EXECUTE | Cancel an armed forced charge |
 | 0x45 | CHARGE_INHIBIT | EXECUTE | Hold charging off (also cancels a forced charge) |
 | 0x50 | DISPLACEMENT | EXECUTE | Start or stop the tilt demodulation (runs from boot) |
-| 0x51 | ZERO_CAL | EXECUTE | Flip (zero) calibration, the 180-degree reversal test |
+| 0x51 | ZERO_CAL | EXECUTE | Flip (zero) calibration, the 180-degree reversal test (service mode) |
 | 0x52 | PRECISION | EXECUTE | Triggered precision measurement: one reliable value from the first clean 2 s window within 5 s, else an error |
-| 0x60 | FACTORY_DEFAULTS | EXECUTE | Reset ALL settings and calibrations to the compiled defaults and save them |
+| 0x60 | FACTORY_DEFAULTS | EXECUTE | Reset ALL settings and calibrations to the compiled defaults and save them (service mode) |
+| 0x62 | SERVICE_END | EXECUTE | Leave service mode now (it also ends by itself, see the protocol document) |
 | 0x61 | CLEAR_COUNTERS | EXECUTE | Zero the communication, drop and fault counters and the sticky error latches (settings_save_failed) |
 | 0x70 | TEST_BEEP | EXECUTE | Sound the buzzer for 100 ms |
-| 0x71 | POWER_TEST | EXECUTE | Power investigation: each bit of the mask keeps one subsystem on, cleared bits cut it immediately |
-| 0x72 | PIN_TEST | EXECUTE | Drive the six MCU-to-level-converter lines as static outputs |
-| 0x73 | RAIL | EXECUTE | Switch one supply rail (shortcut for POWER_TEST bits 0 and 1) |
+| 0x71 | POWER_TEST | EXECUTE | Power investigation: each bit of the mask keeps one subsystem on, cleared bits cut it immediately (service mode) |
+| 0x72 | PIN_TEST | EXECUTE | Drive the six MCU-to-level-converter lines as static outputs (service mode) |
+| 0x76 | FAULT_TEST | EXECUTE | Provoke a failure on purpose, to prove the fault capture and the watchdog on a bench (answers first, then misbehaves) (service mode) |
+| 0x73 | RAIL | EXECUTE | Switch one supply rail (shortcut for POWER_TEST bits 0 and 1) (service mode) |
 
 ### Commands POWER_OFF (0x1/0x40)
 
@@ -175,7 +181,7 @@ Request payload: none.
 
 Reset into the ROM USB bootloader (VID 0x0483 / PID 0xDF11). Sets the nBOOT0 option byte to 0: the device STAYS in the bootloader on every boot until reflashed with nBOOT0 restored (`STM32_Programmer_CLI -c port=USB1 -w fw.hex -ob nSWBOOT0=1 nBOOT0=1 -v -rst`, or dfu_flash.ps1).
 
-Verbs: `EXECUTE` = 0x2142
+Verbs: `EXECUTE` = 0x2142. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Request payload: none.
 
@@ -223,7 +229,7 @@ Verbs: `EXECUTE` = 0x2150
 
 Flip (zero) calibration, the 180-degree reversal test. Step 1 averages the reading in the current orientation (optionally only the selected sensors), step 2 after turning the instrument 180 degrees averages again and stores the new zero of those sensors (Calibrations S1_ZERO / S2_ZERO). Progress: Procedures ZERO_CAL.
 
-Verbs: `EXECUTE` = 0x2151
+Verbs: `EXECUTE` = 0x2151. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Request payload: 1..2 bytes.
 
@@ -250,13 +256,21 @@ Verbs: `EXECUTE` = 0x2152
 
 Reset ALL settings and calibrations to the compiled defaults and save them. Wipes the tilt calibrations: use with care.
 
-Verbs: `EXECUTE` = 0x2160
+Verbs: `EXECUTE` = 0x2160. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 **Request** (1 bytes)
 
 | Offset | Type | Field | Unit | Meaning |
 |---:|---|---|---|---|
 | 0 | u8 | `confirm` |  | must be 0xA5 |
+
+### Commands SERVICE_END (0x1/0x62)
+
+Leave service mode now (it also ends by itself, see the protocol document). Entering it is only possible on the instrument: SETTINGS screen, Service mode.
+
+Verbs: `EXECUTE` = 0x2162
+
+Request payload: none.
 
 ### Commands CLEAR_COUNTERS (0x1/0x61)
 
@@ -278,7 +292,7 @@ Request payload: none.
 
 Power investigation: each bit of the mask keeps one subsystem on, cleared bits cut it immediately. Boot default is all bits set.
 
-Verbs: `EXECUTE` = 0x2171
+Verbs: `EXECUTE` = 0x2171. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 **Request** (4 bytes)
 
@@ -296,7 +310,7 @@ Verbs: `EXECUTE` = 0x2171
 
 Drive the six MCU-to-level-converter lines as static outputs. Arming is irreversible without the reboot bit.
 
-Verbs: `EXECUTE` = 0x2172
+Verbs: `EXECUTE` = 0x2172. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 **Request** (1 bytes)
 
@@ -304,11 +318,23 @@ Verbs: `EXECUTE` = 0x2172
 |---:|---|---|---|---|
 | 0 | u8 | `pins` |  | bits 5..0: SCK, MOSI, CS, DISP_ON, VCOM, BUZZER; bit6 allow DISP_ON high (panel MUST be unplugged); bit7 reboot to normal |
 
+### Commands FAULT_TEST (0x1/0x76)
+
+Provoke a failure on purpose, to prove the fault capture and the watchdog on a bench (answers first, then misbehaves). 1: a HardFault (recorded, then the instrument resets; System HEALTH shows it after the reboot). 2: the main loop hangs with interrupts running (the supervised watchdog resets after about 3 s; reset_cause shows a WWDG reset). 3: a hang with interrupts disabled (the hardware watchdog resets within about half a second).
+
+Verbs: `EXECUTE` = 0x2176. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
+
+**Request** (1 bytes)
+
+| Offset | Type | Field | Unit | Meaning |
+|---:|---|---|---|---|
+| 0 | u8 | `kind` |  | 1 HardFault, 2 main-loop hang, 3 hang with interrupts off |
+
 ### Commands RAIL (0x1/0x73)
 
 Switch one supply rail (shortcut for POWER_TEST bits 0 and 1).
 
-Verbs: `EXECUTE` = 0x2173
+Verbs: `EXECUTE` = 0x2173. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 **Request** (2 bytes)
 
@@ -331,33 +357,33 @@ Constants that correct a sensor or a measurement. Stored in EEPROM; every SET pe
 
 | ID | Name | Verbs | Notes |
 |---:|---|---|---|
-| 0x40 | S1_K | GET, SET | Sensor 1 sensitivity k at PGA 1: tilt [mm/m] = (ratio - zero) / k [100 .. 1000000 1e-6 per mm/m] |
-| 0x41 | S1_ZERO | GET, SET | Sensor 1 zero (level point) as a ratio, independent of k [-500000 .. 500000 ppm of the ratio] |
-| 0x42 | S1_PHASE | GET, SET | Sensor 1 phase of the tilt signal relative to the excitation reference [-4500 .. 4500 0.01 deg] |
-| 0x43 | S1_INVERT | GET, SET | Sensor 1 sign of the reported reading (1 = inverted) [0 .. 1] |
-| 0x44 | S2_K | GET, SET | Sensor 2 k at PGA 1 [100 .. 1000000 1e-6 per mm/m] |
-| 0x45 | S2_ZERO | GET, SET | Sensor 2 zero [-500000 .. 500000 ppm of the ratio] |
-| 0x46 | S2_PHASE | GET, SET | Sensor 2 phase [-4500 .. 4500 0.01 deg] |
-| 0x47 | S2_INVERT | GET, SET | Sensor 2 sign of the reported reading [0 .. 1] |
-| 0x50 | VBAT_SCALE_NUM | GET, SET | Battery divider scale numerator (Vbat = Vadc * num / den + offset) [1 .. 10000] |
-| 0x51 | VBAT_SCALE_DEN | GET, SET | Battery divider scale denominator [1 .. 10000] |
-| 0x52 | VBAT_OFFSET | GET, SET | Battery voltage offset [-500 .. 500 mV] |
-| 0x60 | TMP236_SEG1_VOFFS | GET, SET | TMP236 segment 1 voltage offset [0 .. 3300 mV] |
-| 0x61 | TMP236_SEG1_NUM | GET, SET | TMP236 segment 1 slope numerator [1 .. 10000] |
-| 0x62 | TMP236_SEG1_DEN | GET, SET | TMP236 segment 1 slope denominator [1 .. 10000] |
-| 0x63 | TMP236_SEG_BOUNDARY | GET, SET | TMP236 segment boundary [0 .. 3300 mV] |
-| 0x64 | TMP236_SEG2_VOFFS | GET, SET | TMP236 segment 2 voltage offset [0 .. 3300 mV] |
-| 0x65 | TMP236_SEG2_NUM | GET, SET | TMP236 segment 2 slope numerator [1 .. 10000] |
-| 0x66 | TMP236_SEG2_DEN | GET, SET | TMP236 segment 2 slope denominator [1 .. 10000] |
-| 0x67 | TMP236_SEG2_TINFL | GET, SET | TMP236 segment 2 inflection temperature [0 .. 20000 0.01 degC] |
-| 0x68 | LM35_SCALE | GET, SET | External LM35 scale [1 .. 1000 mV per degC] |
-| 0x70 | RTC_TRIM | GET, SET | Clock trim: positive makes the clock run FASTER [-4800 .. 4800 0.1 ppm] |
+| 0x40 | S1_K | GET, SET | Sensor 1 sensitivity k at PGA 1: tilt [mm/m] = (ratio - zero) / k [100 .. 1000000 1e-6 per mm/m] (service mode) |
+| 0x41 | S1_ZERO | GET, SET | Sensor 1 zero (level point) as a ratio, independent of k [-500000 .. 500000 ppm of the ratio] (service mode) |
+| 0x42 | S1_PHASE | GET, SET | Sensor 1 phase of the tilt signal relative to the excitation reference [-4500 .. 4500 0.01 deg] (service mode) |
+| 0x43 | S1_INVERT | GET, SET | Sensor 1 sign of the reported reading (1 = inverted) [0 .. 1] (service mode) |
+| 0x44 | S2_K | GET, SET | Sensor 2 k at PGA 1 [100 .. 1000000 1e-6 per mm/m] (service mode) |
+| 0x45 | S2_ZERO | GET, SET | Sensor 2 zero [-500000 .. 500000 ppm of the ratio] (service mode) |
+| 0x46 | S2_PHASE | GET, SET | Sensor 2 phase [-4500 .. 4500 0.01 deg] (service mode) |
+| 0x47 | S2_INVERT | GET, SET | Sensor 2 sign of the reported reading [0 .. 1] (service mode) |
+| 0x50 | VBAT_SCALE_NUM | GET, SET | Battery divider scale numerator (Vbat = Vadc * num / den + offset) [1 .. 10000] (service mode) |
+| 0x51 | VBAT_SCALE_DEN | GET, SET | Battery divider scale denominator [1 .. 10000] (service mode) |
+| 0x52 | VBAT_OFFSET | GET, SET | Battery voltage offset [-500 .. 500 mV] (service mode) |
+| 0x60 | TMP236_SEG1_VOFFS | GET, SET | TMP236 segment 1 voltage offset [0 .. 3300 mV] (service mode) |
+| 0x61 | TMP236_SEG1_NUM | GET, SET | TMP236 segment 1 slope numerator [1 .. 10000] (service mode) |
+| 0x62 | TMP236_SEG1_DEN | GET, SET | TMP236 segment 1 slope denominator [1 .. 10000] (service mode) |
+| 0x63 | TMP236_SEG_BOUNDARY | GET, SET | TMP236 segment boundary [0 .. 3300 mV] (service mode) |
+| 0x64 | TMP236_SEG2_VOFFS | GET, SET | TMP236 segment 2 voltage offset [0 .. 3300 mV] (service mode) |
+| 0x65 | TMP236_SEG2_NUM | GET, SET | TMP236 segment 2 slope numerator [1 .. 10000] (service mode) |
+| 0x66 | TMP236_SEG2_DEN | GET, SET | TMP236 segment 2 slope denominator [1 .. 10000] (service mode) |
+| 0x67 | TMP236_SEG2_TINFL | GET, SET | TMP236 segment 2 inflection temperature [0 .. 20000 0.01 degC] (service mode) |
+| 0x68 | LM35_SCALE | GET, SET | External LM35 scale [1 .. 1000 mV per degC] (service mode) |
+| 0x70 | RTC_TRIM | GET, SET | Clock trim: positive makes the clock run FASTER [-4800 .. 4800 0.1 ppm] (service mode) |
 
 ### Calibrations S1_K (0x2/0x40)
 
 Sensor 1 sensitivity k at PGA 1: tilt [mm/m] = (ratio - zero) / k
 
-Verbs: `GET` = 0x0240, `SET` = 0x1240
+Verbs: `GET` = 0x0240, `SET` = 0x1240. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i32` in 1e-6 per mm/m, range 100 .. 1000000. SET answers status only.
 
@@ -365,7 +391,7 @@ Value: `i32` in 1e-6 per mm/m, range 100 .. 1000000. SET answers status only.
 
 Sensor 1 zero (level point) as a ratio, independent of k
 
-Verbs: `GET` = 0x0241, `SET` = 0x1241
+Verbs: `GET` = 0x0241, `SET` = 0x1241. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i32` in ppm of the ratio, range -500000 .. 500000. SET answers status only.
 
@@ -373,7 +399,7 @@ Value: `i32` in ppm of the ratio, range -500000 .. 500000. SET answers status on
 
 Sensor 1 phase of the tilt signal relative to the excitation reference
 
-Verbs: `GET` = 0x0242, `SET` = 0x1242
+Verbs: `GET` = 0x0242, `SET` = 0x1242. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i16` in 0.01 deg, range -4500 .. 4500. SET answers status only.
 
@@ -381,7 +407,7 @@ Value: `i16` in 0.01 deg, range -4500 .. 4500. SET answers status only.
 
 Sensor 1 sign of the reported reading (1 = inverted)
 
-Verbs: `GET` = 0x0243, `SET` = 0x1243
+Verbs: `GET` = 0x0243, `SET` = 0x1243. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u8`, range 0 .. 1. SET answers status only.
 
@@ -389,7 +415,7 @@ Value: `u8`, range 0 .. 1. SET answers status only.
 
 Sensor 2 k at PGA 1
 
-Verbs: `GET` = 0x0244, `SET` = 0x1244
+Verbs: `GET` = 0x0244, `SET` = 0x1244. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i32` in 1e-6 per mm/m, range 100 .. 1000000. SET answers status only.
 
@@ -397,7 +423,7 @@ Value: `i32` in 1e-6 per mm/m, range 100 .. 1000000. SET answers status only.
 
 Sensor 2 zero
 
-Verbs: `GET` = 0x0245, `SET` = 0x1245
+Verbs: `GET` = 0x0245, `SET` = 0x1245. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i32` in ppm of the ratio, range -500000 .. 500000. SET answers status only.
 
@@ -405,7 +431,7 @@ Value: `i32` in ppm of the ratio, range -500000 .. 500000. SET answers status on
 
 Sensor 2 phase
 
-Verbs: `GET` = 0x0246, `SET` = 0x1246
+Verbs: `GET` = 0x0246, `SET` = 0x1246. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i16` in 0.01 deg, range -4500 .. 4500. SET answers status only.
 
@@ -413,7 +439,7 @@ Value: `i16` in 0.01 deg, range -4500 .. 4500. SET answers status only.
 
 Sensor 2 sign of the reported reading
 
-Verbs: `GET` = 0x0247, `SET` = 0x1247
+Verbs: `GET` = 0x0247, `SET` = 0x1247. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u8`, range 0 .. 1. SET answers status only.
 
@@ -421,7 +447,7 @@ Value: `u8`, range 0 .. 1. SET answers status only.
 
 Battery divider scale numerator (Vbat = Vadc * num / den + offset)
 
-Verbs: `GET` = 0x0250, `SET` = 0x1250
+Verbs: `GET` = 0x0250, `SET` = 0x1250. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16`, range 1 .. 10000. SET answers status only.
 
@@ -429,7 +455,7 @@ Value: `u16`, range 1 .. 10000. SET answers status only.
 
 Battery divider scale denominator
 
-Verbs: `GET` = 0x0251, `SET` = 0x1251
+Verbs: `GET` = 0x0251, `SET` = 0x1251. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16`, range 1 .. 10000. SET answers status only.
 
@@ -437,7 +463,7 @@ Value: `u16`, range 1 .. 10000. SET answers status only.
 
 Battery voltage offset
 
-Verbs: `GET` = 0x0252, `SET` = 0x1252
+Verbs: `GET` = 0x0252, `SET` = 0x1252. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i32` in mV, range -500 .. 500. SET answers status only.
 
@@ -445,7 +471,7 @@ Value: `i32` in mV, range -500 .. 500. SET answers status only.
 
 TMP236 segment 1 voltage offset
 
-Verbs: `GET` = 0x0260, `SET` = 0x1260
+Verbs: `GET` = 0x0260, `SET` = 0x1260. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16` in mV, range 0 .. 3300. SET answers status only.
 
@@ -453,7 +479,7 @@ Value: `u16` in mV, range 0 .. 3300. SET answers status only.
 
 TMP236 segment 1 slope numerator
 
-Verbs: `GET` = 0x0261, `SET` = 0x1261
+Verbs: `GET` = 0x0261, `SET` = 0x1261. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16`, range 1 .. 10000. SET answers status only.
 
@@ -461,7 +487,7 @@ Value: `u16`, range 1 .. 10000. SET answers status only.
 
 TMP236 segment 1 slope denominator
 
-Verbs: `GET` = 0x0262, `SET` = 0x1262
+Verbs: `GET` = 0x0262, `SET` = 0x1262. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16`, range 1 .. 10000. SET answers status only.
 
@@ -469,7 +495,7 @@ Value: `u16`, range 1 .. 10000. SET answers status only.
 
 TMP236 segment boundary
 
-Verbs: `GET` = 0x0263, `SET` = 0x1263
+Verbs: `GET` = 0x0263, `SET` = 0x1263. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16` in mV, range 0 .. 3300. SET answers status only.
 
@@ -477,7 +503,7 @@ Value: `u16` in mV, range 0 .. 3300. SET answers status only.
 
 TMP236 segment 2 voltage offset
 
-Verbs: `GET` = 0x0264, `SET` = 0x1264
+Verbs: `GET` = 0x0264, `SET` = 0x1264. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16` in mV, range 0 .. 3300. SET answers status only.
 
@@ -485,7 +511,7 @@ Value: `u16` in mV, range 0 .. 3300. SET answers status only.
 
 TMP236 segment 2 slope numerator
 
-Verbs: `GET` = 0x0265, `SET` = 0x1265
+Verbs: `GET` = 0x0265, `SET` = 0x1265. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16`, range 1 .. 10000. SET answers status only.
 
@@ -493,7 +519,7 @@ Value: `u16`, range 1 .. 10000. SET answers status only.
 
 TMP236 segment 2 slope denominator
 
-Verbs: `GET` = 0x0266, `SET` = 0x1266
+Verbs: `GET` = 0x0266, `SET` = 0x1266. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16`, range 1 .. 10000. SET answers status only.
 
@@ -501,7 +527,7 @@ Value: `u16`, range 1 .. 10000. SET answers status only.
 
 TMP236 segment 2 inflection temperature
 
-Verbs: `GET` = 0x0267, `SET` = 0x1267
+Verbs: `GET` = 0x0267, `SET` = 0x1267. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16` in 0.01 degC, range 0 .. 20000. SET answers status only.
 
@@ -509,7 +535,7 @@ Value: `u16` in 0.01 degC, range 0 .. 20000. SET answers status only.
 
 External LM35 scale
 
-Verbs: `GET` = 0x0268, `SET` = 0x1268
+Verbs: `GET` = 0x0268, `SET` = 0x1268. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u16` in mV per degC, range 1 .. 1000. SET answers status only.
 
@@ -517,7 +543,7 @@ Value: `u16` in mV per degC, range 1 .. 1000. SET answers status only.
 
 Clock trim: positive makes the clock run FASTER. Applied by the RTC's digital calibration (0.954 ppm per step, range about +-488 ppm, rounded to the nearest step). Measure the error as (RTC time - reference time) / elapsed time over several hours (System RTC has 1/256 s resolution) and SET the opposite sign. The crystal drifts with temperature (about -0.034 ppm/degC^2 around its turnover point), so calibrate near the working temperature.
 
-Verbs: `GET` = 0x0270, `SET` = 0x1270
+Verbs: `GET` = 0x0270, `SET` = 0x1270. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `i16` in 0.1 ppm, range -4800 .. 4800. SET answers status only.
 
@@ -850,11 +876,11 @@ Same payload as System STATE.
 
 Verbs: `GET` = 0x0501, `SUBSCRIBE` = 0x3501, `UNSUBSCRIBE` = 0x4501. SUBSCRIBE request: `u32 interval_ms` (50 .. 3600000); pushes `[issue_seq][page][response payload]`.
 
-**Response** (14 bytes)
+**Response** (15 bytes)
 
 | Offset | Type | Field | Unit | Meaning |
 |---:|---|---|---|---|
-| 0 | u8 | `battery_state` |  | 0 normal, 1 low, 2 critical |
+| 0 | u8 | `battery_state` |  | 0 normal, 1 low, 2 critical, 3 charging, 4 full |
 | 1 | u8 | `battery_soc_pct` | % | state of charge |
 | 2 | u16 | `battery_mv` | mV |  |
 | 4 | u8 | `usb_connected` |  | USB power present (VBUS) |
@@ -867,6 +893,7 @@ Verbs: `GET` = 0x0501, `SUBSCRIBE` = 0x3501, `UNSUBSCRIBE` = 0x4501. SUBSCRIBE r
 | 11 | u8 | `displacement_running` |  | the tilt demodulation is running |
 | 12 | u8 | `phasor_stream_active` |  | a phasor stream subscription owns the ADC |
 | 13 | u8 | `bulk_active` |  | a bulk transfer is active |
+| 14 | u8 | `service_mode` |  | service mode is active (unlocks the gated commands and calibration writes) |
 
 ### Topics LIVE (0x5/0x02)
 

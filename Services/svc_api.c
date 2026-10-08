@@ -203,7 +203,7 @@ static void clear_subs(ApiTransport t)
 /* ---------------- dispatch ---------------- */
 
 /* Order of checks (docs/api-v3-spec.md section 4): category known -> verb valid for the category -> resource known
- * -> verb valid for the resource -> CRC -> payload length -> handler. Each failure answers with its own status;
+ * -> verb valid for the resource -> CRC -> payload length -> service-mode gate -> handler. Each failure answers with its own status;
  * nothing after a failed stage runs. */
 static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint16_t paylen)
 {
@@ -230,6 +230,7 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
         return;
     }
     if (!check_crc(t, opcode, frame, paylen)) return;
+    api_res_request_seen();                  /* a well-formed request counts as API activity */
 
     const uint8_t *in = &frame[API2_PACKET_HDR_BYTES];
 
@@ -263,6 +264,13 @@ static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint
                 return;
             }
             break;
+    }
+
+    /* service-mode gate: only the state-changing verbs of flagged resources, after every other check */
+    if ((r->flags & API2_RES_F_SERVICE) != 0U && (verb == API2_VERB_SET || verb == API2_VERB_EXECUTE)
+        && !api_service_unlocked()) {
+        send_response(t, opcode, API2_STATUS_SERVICE_MODE_REQUIRED, 0, 0);
+        return;
     }
 
     uint8_t out[API2_RESPONSE_DATA_MAX];

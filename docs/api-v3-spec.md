@@ -87,7 +87,8 @@ The dispatcher checks, in this order, and answers with the first failure; nothin
 6. the payload length is what the resource expects -> `BAD_LENGTH` (GET, UNSUBSCRIBE, START/CANCEL_BULK: none; SET and
    EXECUTE: the request size in the reference, a range for the variable ones; SUBSCRIBE: 4 bytes (`u32 interval_ms`), or
    what the reference states for event resources)
-7. the resource's handler runs -> any of `OK`, `BUSY_RESOURCE`, `BUSY_EXCLUSIVE`, `INVALID_PARAMETER`,
+7. the resource needs service mode and it is not active -> `SERVICE_MODE_REQUIRED` (section 5a)
+8. the resource's handler runs -> any of `OK`, `BUSY_RESOURCE`, `BUSY_EXCLUSIVE`, `INVALID_PARAMETER`,
    `NOTHING_TO_CANCEL`, ...
 
 ### Status codes
@@ -105,6 +106,7 @@ The dispatcher checks, in this order, and answers with the first failure; nothin
 | 0x08 | `INVALID_PARAMETER` | the payload parses but a value is out of range, or violates a cross-field rule |
 | 0x09 | `NOT_SUBSCRIBED` | UNSUBSCRIBE without an active subscription on this transport |
 | 0x0A | `NOTHING_TO_CANCEL` | CANCEL_BULK with no transfer active |
+| 0x0B | `SERVICE_MODE_REQUIRED` | the resource changes calibrations or maintains the instrument and needs service mode (section 5a) |
 
 An error response carries the status byte only. No request goes unanswered, except a frame too short or inconsistent
 to be parsed at all (counted in `rx_malformed`).
@@ -122,6 +124,28 @@ the pushes follow as separate packets under the SUBSCRIBE opcode: `[status OK][i
 * Pushes are **not urgent**: they never use the transport's reserved transmit space, so a response can always get out.
   A full transmit ring drops the push (counted in System HEALTH, `*_tx_dropped`).
 * A connect or disconnect of the transport clears all its subscriptions. The phasor stream releases the ADC.
+
+## 5a. Service mode
+
+Some resources can silently ruin a calibration or put the instrument into a state only a reflash recovers from. They are
+flagged `service` in the spec, and their **SET / EXECUTE** (never GET, SUBSCRIBE or bulk) answer `SERVICE_MODE_REQUIRED`
+unless service mode is active:
+
+* every **Calibrations** write (sensor k / zero / phase / invert, the battery divider, the temperature sensors, the RTC trim)
+* Commands **ZERO_CAL**, **FACTORY_DEFAULTS**, **REBOOT_DFU**, **POWER_TEST**, **RAIL**, **PIN_TEST**, **FAULT_TEST**
+
+Everything an operator does day to day (readings, subscriptions, settings such as the auto power-off, the precision
+measurement, charging control, power off, reboot, the clock) works without it.
+
+* **Entering** is possible **only on the instrument**: SETTINGS screen, row *Service mode*, press the right knob twice. There
+  is no API command that enters it, so a client that is merely in radio range cannot unlock it. System STATE reports the
+  flag (`service_mode`).
+* **Leaving**: the same menu row, or Commands **SERVICE_END** (allowed at any time), or automatically after **10 minutes
+  without any API request** (every well-formed request, on any transport, restarts the timer), or when the instrument goes
+  to sleep. Nothing is persistent: a reset starts locked.
+
+A host tool that writes calibrations therefore asks the operator to switch service mode on first, and should handle
+`SERVICE_MODE_REQUIRED` by saying exactly that.
 
 ## 6. Bulk transfers
 

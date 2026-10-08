@@ -43,6 +43,18 @@
 #define DEFAULT_BATTERY_LOW_MV          3600
 #define DEFAULT_BATTERY_CHARGE_START_MV 3700
 
+/* --- Service mode (2026-10-08, Services/svc_service.h) ---
+ * Ends by itself after this long without any API request (and on sleep). */
+#define SERVICE_MODE_IDLE_TIMEOUT_MS   600000U      /* 10 minutes */
+
+/* --- Watchdog (2026-10-08, HAL_App/hal_wdt.h) ---
+ * The window watchdog is refreshed from SysTick while the main loop keeps making progress; a main loop that makes no
+ * progress for this long stops the refreshes and the instrument resets. Longer than any legitimate pause of the
+ * cooperative loop (the longest known are tens of milliseconds); short enough that a hang is not noticed by the user.
+ * WATCHDOG_ENABLED 0 builds without it. */
+#define WATCHDOG_ENABLED               1
+#define WDT_STALL_LIMIT_MS             3000U
+
 /* --- Auto power-off (WP6) ---
  * Idle seconds (no encoder activity) before the instrument powers itself
  * down into Standby. 0 disables it. EEPROM-backed (battery page), get/set

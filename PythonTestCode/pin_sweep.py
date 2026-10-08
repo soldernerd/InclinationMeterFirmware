@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+NEEDS SERVICE MODE (API v3): on the instrument, SETTINGS > Service mode, right knob twice. It ends by itself after
+10 idle minutes. Without it the device answers SERVICE_MODE_REQUIRED.
 Static drive of the 6 MCU->level-converter signals (display + buzzer),
 current measured per pattern on the Keysight E36104A. Hunts a short in
 the 5V level converter (`EXECUTE Commands/0x04`, HAL_App/hal_pintest.h).

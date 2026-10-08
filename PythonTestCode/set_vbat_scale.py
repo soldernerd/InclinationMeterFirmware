@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+NEEDS SERVICE MODE (API v3): on the instrument, SETTINGS > Service mode, right knob twice. It ends by itself after
+10 idle minutes. Without it the device answers SERVICE_MODE_REQUIRED.
 Read/set the battery-divider calibration (Settings 0x0F/0x10/0x1C) over
 the wired-UART API transport. SET persists to EEPROM immediately (the
 firmware's dispatch_settings() saves on every SET) -- flashing new

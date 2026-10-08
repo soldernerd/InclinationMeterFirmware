@@ -12,7 +12,8 @@ CFLAGS ?= -std=c17 -Wall -Wextra -Werror -O1 -g \
           -I. -I.. -I../Config -I../Math -I../Services -I../Drivers_App -I../HAL_App
 
 SUITES := test_math_crc test_math_phasor test_math_window test_math_displacement test_math_quality \
-          test_golden_displacement test_api_core test_api_tables test_txframe test_transfer
+          test_golden_displacement test_api_core test_api_tables test_math_fault test_math_supervisor \
+          test_svc_service test_txframe test_transfer
 
 LDLIBS ?= -lm
 

@@ -17,10 +17,12 @@ Api2Status api_h_commands_displacement(const ApiResource *r, ApiCall *c) { (void
 Api2Status api_h_commands_zero_cal(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_precision(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_factory_defaults(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
+Api2Status api_h_commands_service_end(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_clear_counters(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_test_beep(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_power_test(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_pin_test(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
+Api2Status api_h_commands_fault_test(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_rail(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_measurements_onboard_temp(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_measurements_battery_mv(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }

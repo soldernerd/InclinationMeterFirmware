@@ -53,6 +53,7 @@ typedef enum {
     API2_STATUS_INVALID_PARAMETER = 0x08U,
     API2_STATUS_NOT_SUBSCRIBED    = 0x09U,
     API2_STATUS_NOTHING_TO_CANCEL = 0x0AU,
+    API2_STATUS_SERVICE_MODE_REQUIRED = 0x0BU,   /* the resource needs service mode (api-v3-spec.md section 5a) */
 } Api2Status;
 
 /* ---------------- packet framing: [OPCODE 2][LEN 2][PAYLOAD LEN][CRC16 2] ---------------- */
@@ -126,7 +127,9 @@ struct ApiResource {
     const void        *ctx;          /* ApiFieldDesc of a field resource */
     uint8_t            slot;         /* index into the per-transport subscription table */
     uint8_t            burst;        /* event pushes per tick */
+    uint8_t            flags;        /* API2_RES_F_* */
 };
+#define API2_RES_F_SERVICE  0x01U   /* SET / EXECUTE need service mode */
 
 typedef struct {
     uint8_t            id;
@@ -160,6 +163,8 @@ void     svc_api_clear_counters(void);
 
 /* ---------------- implemented by the resource side (svc_api_res_*.c) ---------------- */
 void api_res_update(void);                      /* once per svc_api_update(): bulk pump, procedure follow-ups */
+void api_res_request_seen(void);                /* a valid request reached the dispatcher: API activity (service-mode timeout) */
+bool api_service_unlocked(void);                /* service mode is active */
 void api_res_transport_disconnected(ApiTransport t);
 
 #endif /* SVC_API_CORE_H */

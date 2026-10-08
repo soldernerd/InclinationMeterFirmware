@@ -236,8 +236,9 @@ def gen_tables_c():
                 h = handler_name(r)
                 ctx = "0"
             burst = 4 if (r.ev in ("phasor_stream", "log")) else 1
-            w("    { %s, %s, %s, %d, %d, %d, %s, %s, %s, %d, %d },  /* %s */\n"
-              % (res_c(r), mask_expr(r.verbs), sub, sub_in_len(r), lo, hi, h, ev, ctx, s, burst, r.name))
+            flags = "API2_RES_F_SERVICE" if r.service else "0"
+            w("    { %s, %s, %s, %d, %d, %d, %s, %s, %s, %d, %d, %s },  /* %s */\n"
+              % (res_c(r), mask_expr(r.verbs), sub, sub_in_len(r), lo, hi, h, ev, ctx, s, burst, flags, r.name))
         w("};\n\n")
     w("const ApiCategory g_api_categories[] = {\n")
     for c in S.CATEGORIES:
@@ -364,12 +365,15 @@ def gen_md():
             note = r.doc.split(". ")[0].rstrip(".")
             if r.kind == "field":
                 note = "%s [%d .. %d%s]" % (note, r.lo, r.hi, (" " + r.unit) if r.unit else "")
-            w("| 0x%02X | %s | %s | %s |\n" % (r.id, r.name, ", ".join(r.verbs), note))
+            w("| 0x%02X | %s | %s | %s%s |\n" % (r.id, r.name, ", ".join(r.verbs), note,
+                                                " (service mode)" if r.service else ""))
         w("\n")
         for r in c.resources:
             w("### %s %s (0x%X/0x%02X)\n\n%s\n\n" % (c.title, r.name, c.id, r.id, r.doc))
             w("Verbs: %s" % ", ".join("`%s` = 0x%04X" % (v, ((S.VERB_VALUE[v] << 12) | (c.id << 8) | r.id))
                                       for v in r.verbs))
+            if r.service:
+                w(". **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)")
             if r.sub == "interval":
                 w(". SUBSCRIBE request: `u32 interval_ms` (50 .. 3600000); pushes `[issue_seq][page][response payload]`.")
             elif r.sub == "event":

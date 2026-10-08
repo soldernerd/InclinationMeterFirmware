@@ -5,6 +5,8 @@
 #include "svc_battery.h"
 #include "svc_displacement.h"
 #include "svc_log.h"
+#include "svc_service.h"
+#include "hal_fault.h"
 #include "hal_mcu.h"
 #include "hal_power.h"
 #include "hal_rtc.h"
@@ -67,6 +69,7 @@ static void fill_state(Api2SystemStateResponse *p)
     p->displacement_running = svc_displacement_is_running() ? 1U : 0U;
     p->phasor_stream_active = svc_displacement_phasor_stream_active() ? 1U : 0U;
     p->bulk_active          = api_bulk_active() ? 1U : 0U;
+    p->service_mode         = svc_service_active() ? 1U : 0U;
 }
 
 Api2Status api_h_system_state(const ApiResource *r, ApiCall *c)
@@ -104,6 +107,10 @@ Api2Status api_h_system_health(const ApiResource *r, ApiCall *c)
     p.ble_tx_dropped       = g_system_state.ble_tx_dropped_count;
     p.uart_tx_dropped      = g_system_state.uart_tx_dropped_count;
     p.rx_malformed         = svc_api_rx_malformed();
+    const MathFaultRecord *f = hal_fault_last();
+    p.last_fault_kind      = f->kind;
+    p.last_fault_pc        = f->pc;
+    p.last_fault_lr        = f->lr;
     API2_REPLY(c, &p);
     return API2_STATUS_OK;
 }
