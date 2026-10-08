@@ -79,3 +79,7 @@ tests/test_golden_displacement
 
 # recorded test data the host tests replay (tests/data/README.md) -- must be tracked
 !tests/data/*.bin
+
+# bench-test data above the 5 MB policy limit (Testing/README.md, "Data policy"); see Testing/large_files.py
+Testing/*/data/large/
+Testing/2026-09-30_bulk_adc_30s_interval/analysis/quality_tune.npz

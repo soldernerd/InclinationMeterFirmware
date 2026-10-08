@@ -1,0 +1,35 @@
+# Line endings: the repository stores LF; a Windows checkout with core.autocrlf=true shows CRLF. This file makes
+# that independent of each developer's git config, and keeps binary files byte-exact.
+* text=auto
+
+# sources and docs: normalise
+*.c   text
+*.h   text
+*.py  text
+*.md  text
+*.tex text
+*.txt text
+*.csv text
+*.json text
+*.cmake text
+*.ioc text
+
+# scripts that run on Unix must keep LF in every checkout
+*.sh  text eol=lf
+Makefile text eol=lf
+
+# Windows scripts
+*.ps1 text eol=crlf
+
+# binary: never converted, never diffed as text
+*.bin binary
+*.npz binary
+*.pdf binary
+*.png binary
+*.gif binary
+*.jpg binary
+*.hex binary
+*.elf binary
+
+# CubeMX-generated; contains stray lone CRs -- leave byte-exact, CubeMX owns it
+cmake/stm32cubemx/CMakeLists.txt -text

@@ -19,6 +19,24 @@ conversation scrolls past them, and re-running an old test from scratch is far
 more expensive than reading a two-year-old CSV. When in doubt about whether a
 past finding still holds, check here before re-testing.
 
+## Data policy
+
+* **Up to 5 MB per file: commit the raw data** (`data/*.csv`), unprocessed, next to the script that recorded it.
+  (Two older tests are above that and stay tracked as they were: `2026-09-27_2hr_charging_drift_test`, 13 MB, and
+  `2026-09-29_pga1_drift_comparison`, 29 MB.)
+* **Above 5 MB: do not commit.** Git history is forever and every clone downloads it; GitHub refuses single files
+  over 100 MB. Put such a file under `data/large/` (ignored by `.gitignore` as `Testing/*/data/large/`), or leave it where
+  it is if it is already excluded. Then run `python Testing/large_files.py --write Testing/<test>` -- it writes
+  `LARGE_FILES.md` in the test folder with each file's size, SHA-256 and a one-line description, so a copy handed to
+  someone else can be checked against the original. Commit that manifest, `setup.md`, `findings.md`, the scripts and the
+  graphs.
+* **If the data is needed by an automated test,** commit a small excerpt instead and say where it came from. Example:
+  `tests/data/phasor_excerpt.bin` (884 KB) is a slice of the 19 h recording of `2026-10-04_contiguous_phasor_capture`.
+* Prefer a compact lossless format for big recordings (float32 arrays in a compressed `.npz`: 80 MB instead of 534 MB of
+  CSV for the 19 h stream) and keep the converter script in the test folder.
+* `python Testing/large_files.py` (no arguments) lists every large local-only file and exits non-zero if one has no manifest.
+* Archiving the originals (a Release asset, a shared drive) is the owner's decision; the manifest says which file to look for.
+
 ## Index
 
 | Folder | What | Firmware | Headline finding |
