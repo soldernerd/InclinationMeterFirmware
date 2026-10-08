@@ -18,6 +18,7 @@ parts that are only otherwise exercised by flashing a board:
 | `test_svc_service.c` | service mode: entered only locally, left explicitly, ended by 10 minutes without API activity, restarted by each request |
 | `test_svc_battery.c` | battery policy: voltage scaling, state of charge, low / critical thresholds, charge start / latch / force / inhibit, VBUS debounce, shutdown timing (real `svc_battery.c` against GPIO / ADC doubles) |
 | `test_svc_storage.c` | EEPROM pages against a fake 24LC256: seeding, reboot round trip, CRC / version corruption, busy / retry / give-up, stuck-op timeout, range guards |
+| `test_svc_displacement.c` | the real `svc_displacement.c` fed synthetic carrier samples through the ADC-drain entry point: the flip (zero) calibration (two orientations -> new absolute zero, cancel, stop, exclusivity), and the precision measurement (steady result, invert flags, disturbed window, timeout with and without batches, a dropped batch restarts the window) |
 | `test_math_bme280.c` | BME280 compensation against the Bosch datasheet example and a double-precision reference |
 | `test_txframe.c`   | `Services/svc_txframe.c` — the SPSC frame FIFO: FIFO order, wrap, the 64-byte urgent reserve, oversized-frame refusal, reset |
 | `test_transfer.c`  | the extracted fixed-point transfer / decode functions: `drv_tmp236_mv_to_cdeg` (two-segment fit, boundary continuity, negative °C), `drv_lm35_mv_to_cdeg`, `drv_encoder_quad_step` (all 16 Gray-code transitions) |
