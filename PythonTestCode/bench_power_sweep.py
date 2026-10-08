@@ -20,7 +20,7 @@ import pyvisa
 import serial
 from serial.tools import list_ports
 
-import apiv2 as a
+import apiv3 as a
 
 PSU_RES = "USB0::0x2A8D::0x0802::MY55506105::0::INSTR"
 BAUD = 115200
@@ -53,12 +53,12 @@ class Dev:
         return None, None
 
     def set_mask(self, mask):
-        st, d = self._req(a.OP_CMD_POWER_TEST, struct.pack("<I", mask & 0xFFFFFFFF))
+        st, d = self._req(a.OP_COMMANDS_POWER_TEST_EXECUTE, struct.pack("<I", mask & 0xFFFFFFFF))
         return struct.unpack("<I", d[:4])[0] if (st == 0 and d and len(d) >= 4) else None
 
     def identity(self):
-        st, d = self._req(a.OP_SYS_IDENTITY)
-        return a.decode_identity(d) if st == 0 else "?"
+        st, d = self._req(a.OP_SYSTEM_IDENTITY_GET)
+        return a.format_identity(d) if st == 0 else "?"
 
 
 class Psu:

@@ -25,7 +25,7 @@ import pyvisa
 import serial
 from serial.tools import list_ports
 
-import apiv2 as a
+import apiv3 as a
 
 PSU_RES = "USB0::0x2A8D::0x0802::MY55506105::0::INSTR"
 PROG = r"C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe"
@@ -72,9 +72,9 @@ class Rig:
 
     def alive(self):
         self.s.reset_input_buffer()
-        self.s.write(a.build(a.OP_SYS_IDENTITY))
+        self.s.write(a.build(a.OP_SYSTEM_IDENTITY_GET))
         time.sleep(0.15)
-        return any(o == a.OP_SYS_IDENTITY and st == 0
+        return any(o == a.OP_SYSTEM_IDENTITY_GET and st == 0
                    for o, st, d in self.re.feed(self.s.read(200)))
 
     def iv(self):
@@ -117,7 +117,7 @@ def main():
         for p in pats:
             if not rig.alive():
                 nrst(); rig.reopen()
-            rig.send(a.OP_CMD_PIN_TEST, bytes([(p & 0x3F) | allow]))
+            rig.send(a.OP_COMMANDS_PIN_TEST_EXECUTE, bytes([(p & 0x3F) | allow]))
             t0 = time.time(); I = []; V = []
             while time.time() - t0 < args.hold:
                 i, v = rig.iv(); I.append(i); V.append(v)
@@ -128,7 +128,7 @@ def main():
             if not al:
                 nrst(); rig.reopen()
     finally:
-        rig.send(a.OP_CMD_PIN_TEST, bytes([0x80]))
+        rig.send(a.OP_COMMANDS_PIN_TEST_EXECUTE, bytes([0x80]))
         time.sleep(0.5)
         rig.psu.write(f"SOUR:CURR {ilim0}")
         time.sleep(0.2)

@@ -6,7 +6,7 @@ The device samples all 4 ADS131M04 channels at the full 20833.33 Hz into a
 RAM buffer (Config/config.h ADC_BULK_SAMPLE_COUNT, 6144 samples = ~295 ms),
 then streams the buffer out in chunks over the wire at whatever speed the
 link allows -- transport speed no longer limits sample rate
-(docs/api-v2-spec.md §4.5).
+(docs/api-v3-spec.md §4.5).
 
 Exclusive with the real-time displacement demod (WP10, Services/
 svc_displacement.c) -- both want the ADS131M04's one sample-callback slot.
@@ -33,7 +33,7 @@ try:
 except ImportError:
     sys.exit("Need pyserial:  pip install pyserial")
 
-import apiv2 as a
+import apiv3 as a
 
 BAUD = 115200
 _KNOWN_VID_PID = {
@@ -62,7 +62,7 @@ def modular_gap(prev, cur):
 
 def capture(ser, timeout=20.0):
     reasm = a.Reassembler()
-    op = a.OP_BULK_RAW_ADC_START
+    op = a.OP_BULK_RAW_ADC_START_BULK
 
     ser.reset_input_buffer()
     ser.write(a.build(op))
@@ -75,7 +75,7 @@ def capture(ser, timeout=20.0):
 
     while len(rows) < a.ADC_BULK_SAMPLE_COUNT:
         if time.time() > deadline:
-            ser.write(a.build(a.OP_BULK_RAW_ADC_CANCEL))
+            ser.write(a.build(a.OP_BULK_RAW_ADC_CANCEL_BULK))
             raise TimeoutError(
                 f"gave up after {timeout:.0f}s with {len(rows)}/"
                 f"{a.ADC_BULK_SAMPLE_COUNT} samples")

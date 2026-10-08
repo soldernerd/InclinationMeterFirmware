@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-BLE data-flow test for the InclinationMeter (RN4871 Transparent UART), API v2.
+BLE data-flow test for the InclinationMeter (RN4871 Transparent UART), API v3.
 
-  python ble_test.py           # identity / device-state / temp / settings round-trip
+  python ble_test.py           # identity / state / health / temperature / settings / clock / environment round trip
   python ble_test.py --log     # subscribe to the device debug-log stream, print it live
+  python ble_test.py --live    # subscribe to the live tilt reading
 
 Install:   pip install bleak
 If connect fails: remove the device from Windows Settings > Bluetooth first
@@ -11,16 +12,17 @@ If connect fails: remove the device from Windows Settings > Bluetooth first
 """
 
 import asyncio
-import datetime
-import struct
+import queue
 import sys
+import threading
 
 try:
     from bleak import BleakScanner, BleakClient
 except ImportError:
     sys.exit("Need bleak:  pip install bleak")
 
-import apiv2 as a
+import apiv3 as a
+import device_checks as dc
 
 NAME_PREFIX = "Leveltronic"
 SVC_UUID = "49535343-fe7d-4ae5-8fa9-9fafd205e455"
@@ -29,113 +31,74 @@ RX_UUID  = "49535343-8841-43f4-a8d4-ecbe34729bb3"   # host -> module, Write
 
 
 class BleLink:
-    def __init__(self, client):
-        self.client = client
+    """Blocking send()/recv() on top of bleak: the asyncio client lives in a background thread."""
+    def __init__(self):
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.thread.start()
         self.reasm = a.Reassembler()
-        self.q = asyncio.Queue()
+        self.q = queue.Queue()
+        self.client = None
+
+    def _run(self, coro, timeout=30.0):
+        return asyncio.run_coroutine_threadsafe(coro, self.loop).result(timeout)
 
     def _on_notify(self, _sender, data: bytearray):
         for pkt in self.reasm.feed(bytes(data)):
-            self.q.put_nowait(pkt)
+            self.q.put(pkt)
 
-    async def start(self):
-        await self.client.start_notify(TX_UUID, self._on_notify)
+    def connect(self):
+        async def scan_and_connect():
+            dev = None
+            for d in await BleakScanner.discover(timeout=6.0):
+                if d.name and d.name.startswith(NAME_PREFIX):
+                    dev = d
+                    break
+            if not dev:
+                raise RuntimeError(f"No {NAME_PREFIX}* device found.")
+            print(f"  found {dev.name}  [{dev.address}]")
+            self.client = BleakClient(dev.address)
+            await self.client.connect()
+            await self.client.start_notify(TX_UUID, self._on_notify)
+        self._run(scan_and_connect())
+        print(f"  connected: {self.client.is_connected}")
 
-    async def send(self, pkt: bytes):
-        await self.client.write_gatt_char(RX_UUID, pkt, response=False)
+    def send(self, pkt: bytes):
+        self._run(self.client.write_gatt_char(RX_UUID, pkt, response=False))
 
-    async def recv(self, timeout=3.0):
+    def recv(self, timeout=3.0):
         try:
-            return await asyncio.wait_for(self.q.get(), timeout)
-        except asyncio.TimeoutError:
+            return self.q.get(timeout=timeout)
+        except queue.Empty:
             return (None, None, None)
 
-
-async def request(link, op, payload=b""):
-    await link.send(a.build(op, payload))
-    _op, status, data = await link.recv()
-    return status, data
-
-
-async def run_basic(link):
-    st, data = await request(link, a.OP_SYS_IDENTITY)
-    print(f"  IDENTITY      [{a.STATUS.get(st, st)}] {a.decode_identity(data) if st == 0 else (data or b'').hex()}")
-
-    st, data = await request(link, a.OP_SYS_DEVICE_STATE)
-    print(f"  DEVICE_STATE  [{a.STATUS.get(st, st)}] {a.decode_device_state(data) if st == 0 else (data or b'').hex()}")
-
-    st, data = await request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP))
-    if st == 0 and len(data) >= 2:
-        print(f"  TEMP          [OK] {struct.unpack('<h', data[:2])[0] / 100:+.2f} C")
-    else:
-        print(f"  TEMP          [{a.STATUS.get(st, st)}] {(data or b'').hex()}")
-
-    getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
-    setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
-    st, data = await request(link, getop)
-    if st == 0 and len(data) >= 2:
-        cur = struct.unpack("<H", data[:2])[0]
-        new = 250 if cur != 250 else 200
-        st2, _ = await request(link, setop, struct.pack("<H", new))
-        st3, data3 = await request(link, getop)
-        back = struct.unpack("<H", data3[:2])[0] if (st3 == 0 and len(data3) >= 2) else None
-        print(f"  SETTINGS      auto_poweroff_s {cur} -> set {new} "
-              f"[{a.STATUS.get(st2, st2)}] -> read back {back}")
-    else:
-        print(f"  SETTINGS      GET auto_poweroff_s [{a.STATUS.get(st, st)}]")
-
-    # RTC: read, set to this host's wall clock, read back.
-    st, data = await request(link, a.opcode(a.GET, a.CAT_SYSTEM, a.SYS_RTC))
-    before = a.decode_rtc(data) if st == 0 else (a.STATUS.get(st, st))
-    n = datetime.datetime.now()
-    st2, _ = await request(link, a.opcode(a.SET, a.CAT_SYSTEM, a.SYS_RTC),
-                           a.build_rtc_set(n.year, n.month, n.day, n.hour, n.minute, n.second))
-    st3, data3 = await request(link, a.opcode(a.GET, a.CAT_SYSTEM, a.SYS_RTC))
-    after = a.decode_rtc(data3) if st3 == 0 else (a.STATUS.get(st3, st3))
-    print(f"  RTC           [{before}] -> set [{a.STATUS.get(st2, st2)}] -> [{after}]")
+    def close(self):
+        if self.client is not None:
+            try:
+                self._run(self.client.disconnect())
+            except Exception:
+                pass
+        self.loop.call_soon_threadsafe(self.loop.stop)
 
 
-async def run_log(link, min_sev=0):
-    print(f"Subscribing to debug log (min severity {a.SEVERITY[min_sev]}). Ctrl+C to stop.\n")
-    await link.send(a.build(a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM), bytes([min_sev])))
-    sub_op = a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)
-    try:
-        while True:
-            op, st, data = await link.recv(timeout=5.0)
-            if op != sub_op or st != 0 or data is None or len(data) < 3:
-                continue
-            issue, page, sev = data[0], data[1], data[2]
-            print(f"  [{a.SEVERITY.get(sev, sev):5}] #{issue:<3} {data[3:].decode('ascii', 'replace')}")
-    except KeyboardInterrupt:
-        await link.send(a.build(a.opcode(a.UNSUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)))
-        await asyncio.sleep(0.1)
-        print("\nunsubscribed.")
-
-
-async def main():
+def main():
     print(f"Scanning for {NAME_PREFIX}* ...")
-    dev = None
-    for d in await BleakScanner.discover(timeout=6.0):
-        if d.name and d.name.startswith(NAME_PREFIX):
-            dev = d
-            break
-    if not dev:
-        sys.exit(f"No {NAME_PREFIX}* device found.")
-    print(f"  found {dev.name}  [{dev.address}]")
-
-    async with BleakClient(dev.address) as client:
-        print(f"  connected: {client.is_connected}")
-        link = BleLink(client)
-        await link.start()
+    link = BleLink()
+    try:
+        link.connect()
+    except RuntimeError as e:
+        link.close()
+        sys.exit(str(e))
+    try:
         if "--log" in sys.argv:
-            await run_log(link)
+            dc.run_log(link)
+        elif "--live" in sys.argv:
+            dc.run_live(link)
         else:
-            await run_basic(link)
-        await client.stop_notify(TX_UUID)
+            dc.run_basic(link)
+    finally:
+        link.close()
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
+    main()

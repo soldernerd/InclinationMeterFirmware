@@ -27,7 +27,7 @@ try:
 except ImportError:
     sys.exit("Need pyserial:  pip install pyserial")
 
-import apiv2 as a
+import apiv3 as a
 
 BAUD = 115200
 PROG = r"C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe"
@@ -45,13 +45,13 @@ def find_port():
 
 def identity(ser):
     ser.reset_input_buffer()
-    ser.write(a.build(a.OP_SYS_IDENTITY))
+    ser.write(a.build(a.OP_SYSTEM_IDENTITY_GET))
     re = a.Reassembler()
     end = time.time() + 0.2
     while time.time() < end:
         for op, st, d in re.feed(ser.read(64)):
-            if op == a.OP_SYS_IDENTITY and st == 0:
-                return a.decode_identity(d)
+            if op == a.OP_SYSTEM_IDENTITY_GET and st == 0:
+                return a.format_identity(d)
     return None
 
 
@@ -78,10 +78,10 @@ def main():
 
     if not args.no_trigger:
         ser.reset_input_buffer()
-        ser.write(a.build(a.OP_CMD_REBOOT_DFU))
+        ser.write(a.build(a.OP_COMMANDS_REBOOT_DFU_EXECUTE))
         time.sleep(0.25)
         ack = [a.STATUS.get(st, st) for op, st, d in
-               a.Reassembler().feed(ser.read(64)) if op == a.OP_CMD_REBOOT_DFU]
+               a.Reassembler().feed(ser.read(64)) if op == a.OP_COMMANDS_REBOOT_DFU_EXECUTE]
         print(f"REBOOT_DFU ack: {ack or '(reset beat the response out)'}")
 
     t0 = time.time()

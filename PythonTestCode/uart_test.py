@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Wired-UART data-flow test for the InclinationMeter, API v2.
+Wired-UART data-flow test for the InclinationMeter, API v3.
 
 The third API transport: USART3 on the J4 / STDC14 debug header, 115200 8N1.
 Reachable with nothing but a USB-serial cable — no USB enumeration, no BLE
@@ -10,15 +10,14 @@ central. Same protocol and same checks as hid_test.py / ble_test.py.
   python uart_test.py --port COM7     # or name it
   python uart_test.py --log           # subscribe to the debug-log stream, print live
   python uart_test.py --env           # poll the BME280 (temp/pressure/humidity) once/sec
-  python uart_test.py --topics        # subscribe to the env + device-status topic groups, live
+  python uart_test.py --topics        # subscribe to the env + device-status topics, live
+  python uart_test.py --live          # subscribe to the live tilt reading (about 4 values/s)
   python uart_test.py --charge        # force-start charging regardless of SOC (needs USB)
   python uart_test.py --port COM7 --log
 
 Install:   pip install pyserial
 """
 
-import datetime
-import struct
 import sys
 import time
 
@@ -28,7 +27,8 @@ try:
 except ImportError:
     sys.exit("Need pyserial:  pip install pyserial")
 
-import apiv2 as a
+import apiv3 as a
+import device_checks as dc
 
 BAUD = 115200
 
@@ -77,171 +77,6 @@ class UartLink:
         self.ser.close()
 
 
-def request(link, op, payload=b""):
-    link.send(a.build(op, payload))
-    _op, status, data = link.recv()
-    return status, data
-
-
-def run_basic(link):
-    st, data = request(link, a.OP_SYS_IDENTITY)
-    print(f"  IDENTITY      [{a.STATUS.get(st, st)}] "
-          f"{a.decode_identity(data) if st == 0 else (data or b'').hex()}")
-
-    st, data = request(link, a.OP_SYS_DEVICE_STATE)
-    print(f"  DEVICE_STATE  [{a.STATUS.get(st, st)}] "
-          f"{a.decode_device_state(data) if st == 0 else (data or b'').hex()}")
-
-    st, data = request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP))
-    if st == 0 and len(data) >= 2:
-        print(f"  TEMP          [OK] {struct.unpack('<h', data[:2])[0] / 100:+.2f} C (onboard)")
-    else:
-        print(f"  TEMP          [{a.STATUS.get(st, st)}] {(data or b'').hex()}")
-
-    ste, de = request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_EXT_TEMP))
-    sto, do = request(link, a.opcode(a.GET, a.CAT_MEAS, a.MEAS_EXT_TEMP_OK))
-    if ste == 0 and sto == 0 and len(de) >= 2 and do:
-        v = struct.unpack('<h', de[:2])[0] / 100
-        print(f"  EXT TEMP      [OK] {v:+.2f} C (LM35)  "
-              f"{'valid' if do[0] else 'out of range / no sensor'}")
-    else:
-        print(f"  EXT TEMP      [{a.STATUS.get(ste, ste)}]")
-
-    getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
-    setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
-    st, data = request(link, getop)
-    if st == 0 and len(data) >= 2:
-        cur = struct.unpack("<H", data[:2])[0]
-        new = 250 if cur != 250 else 200
-        st2, _ = request(link, setop, struct.pack("<H", new))
-        st3, data3 = request(link, getop)
-        back = struct.unpack("<H", data3[:2])[0] if (st3 == 0 and len(data3) >= 2) else None
-        print(f"  SETTINGS      auto_poweroff_s {cur} -> set {new} "
-              f"[{a.STATUS.get(st2, st2)}] -> read back {back}")
-    else:
-        print(f"  SETTINGS      GET auto_poweroff_s [{a.STATUS.get(st, st)}]")
-
-    # RTC: read, set to this host's wall clock, read back.
-    st, data = request(link, a.opcode(a.GET, a.CAT_SYSTEM, a.SYS_RTC))
-    before = a.decode_rtc(data) if st == 0 else (a.STATUS.get(st, st))
-    n = datetime.datetime.now()
-    st2, _ = request(link, a.opcode(a.SET, a.CAT_SYSTEM, a.SYS_RTC),
-                     a.build_rtc_set(n.year, n.month, n.day, n.hour, n.minute, n.second))
-    st3, data3 = request(link, a.opcode(a.GET, a.CAT_SYSTEM, a.SYS_RTC))
-    after = a.decode_rtc(data3) if st3 == 0 else (a.STATUS.get(st3, st3))
-    print(f"  RTC           [{before}] -> set [{a.STATUS.get(st2, st2)}] -> [{after}]")
-
-    # Signal analysis (ADS131M04 stream): off at boot; start then stop.
-    st_on, _  = request(link, a.OP_CMD_SIGNAL_ANALYSIS, b"\x01")
-    st_off, _ = request(link, a.OP_CMD_SIGNAL_ANALYSIS, b"\x00")
-    print(f"  SIGNAL_ANALYS start [{a.STATUS.get(st_on, st_on)}] "
-          f"-> stop [{a.STATUS.get(st_off, st_off)}]")
-
-    # BME280 (WP9) — GET temp / pressure / humidity / ok
-    env = read_bme280(link)
-    if env is None:
-        print("  BME280        GET failed")
-    else:
-        t, p, h, ok = env
-        fresh = "fresh" if ok else "STALE (sensor not connected)"
-        print(f"  BME280        {t:+.2f} C  {p:.1f} hPa  {h:.1f} %RH   [{fresh}]")
-
-    # Topic groups (0x5) — one GET each
-    st, d = request(link, a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_ENV))
-    e = a.decode_topic_env(d) if st == 0 else None
-    if e:
-        print(f"  TOPIC env     bme280 {e['bme280_temp_C']:+.2f}C "
-              f"{e['bme280_press_hPa']:.1f}hPa {e['bme280_humid_pct']:.1f}% "
-              f"ok={e['bme280_ok']}  onboard {e['onboard_temp_C']:+.2f}C  "
-              f"ext {e['ext_temp_C']}")
-    else:
-        print(f"  TOPIC env     [{a.STATUS.get(st, st)}]")
-    st, d = request(link, a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_STATUS))
-    s = a.decode_topic_status(d) if st == 0 else None
-    if s:
-        print(f"  TOPIC status  {s['battery_mV']}mV {s['soc_pct']}% {s['state']}  "
-              f"usb={s['usb']} ble={s['ble']} chg={s['charging']} "
-              f"force={s['force_charging']}  rails 3v3={s['rail_3v3']} 5v={s['rail_5v']}  "
-              f"{s['rtc']}")
-    else:
-        print(f"  TOPIC status  [{a.STATUS.get(st, st)}]")
-
-
-def read_bme280(link):
-    """GET the four BME280 Measurements resources. Returns
-    (temp_C, pressure_hPa, humidity_pct, ok_bool) or None on any failure."""
-    def meas(res):
-        st, d = request(link, a.opcode(a.GET, a.CAT_MEAS, res))
-        return d if st == 0 else None
-    dt, dp, dh, dok = (meas(a.MEAS_BME280_TEMP), meas(a.MEAS_BME280_PRESS),
-                       meas(a.MEAS_BME280_HUMID), meas(a.MEAS_BME280_OK))
-    if None in (dt, dp, dh, dok):
-        return None
-    return (struct.unpack("<h", dt[:2])[0] / 100,
-            struct.unpack("<I", dp[:4])[0] / 100,
-            struct.unpack("<H", dh[:2])[0] / 100,
-            bool(dok[0]))
-
-
-def run_topics(link, interval_ms=1000):
-    """Subscribe to both topic groups and print the pushes live."""
-    groups = [("env", a.TOPIC_ENV, a.decode_topic_env),
-              ("status", a.TOPIC_STATUS, a.decode_topic_status)]
-    by_op = {a.opcode(a.SUBSCRIBE, a.CAT_TOPICS, res): (name, dec)
-             for name, res, dec in groups}
-    for _, res, _ in groups:
-        link.send(a.build(a.opcode(a.SUBSCRIBE, a.CAT_TOPICS, res),
-                          a.build_interval(interval_ms)))
-        link.recv(timeout=2.0)   # ack
-    print(f"Subscribed to env + status @ {interval_ms} ms. Ctrl+C to stop.\n")
-    try:
-        while True:
-            op, st, data = link.recv(timeout=5.0)
-            if op not in by_op or st != 0 or data is None or len(data) < 2:
-                continue
-            name, dec = by_op[op]
-            print(f"  [{name:6}] #{data[0]:<3} {dec(data[2:])}")
-    except KeyboardInterrupt:
-        for _, res, _ in groups:
-            link.send(a.build(a.opcode(a.UNSUBSCRIBE, a.CAT_TOPICS, res)))
-        time.sleep(0.1)
-        print("\nunsubscribed.")
-
-
-def run_env(link, period=1.0):
-    print("Polling BME280 once/sec. Ctrl+C to stop.\n")
-    try:
-        while True:
-            env = read_bme280(link)
-            ts = datetime.datetime.now().strftime("%H:%M:%S")
-            if env is None:
-                print(f"  {ts}  GET failed")
-            else:
-                t, p, h, ok = env
-                print(f"  {ts}  {t:+6.2f} C   {p:8.2f} hPa   {h:5.1f} %RH"
-                      f"   {'' if ok else '[STALE]'}")
-            time.sleep(period)
-    except KeyboardInterrupt:
-        print("\nstopped.")
-
-
-def run_log(link, min_sev=0):
-    print(f"Subscribing to debug log (min severity {a.SEVERITY[min_sev]}). Ctrl+C to stop.\n")
-    link.send(a.build(a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM), bytes([min_sev])))
-    sub_op = a.opcode(a.SUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)
-    try:
-        while True:
-            op, st, data = link.recv(timeout=5.0)
-            if op != sub_op or st != 0 or data is None or len(data) < 3:
-                continue
-            issue, _page, sev = data[0], data[1], data[2]
-            print(f"  [{a.SEVERITY.get(sev, sev):5}] #{issue:<3} {data[3:].decode('ascii', 'replace')}")
-    except KeyboardInterrupt:
-        link.send(a.build(a.opcode(a.UNSUBSCRIBE, a.CAT_DEBUG, a.DBG_LOG_STREAM)))
-        time.sleep(0.1)
-        print("\nunsubscribed.")
-
-
 def main():
     args = sys.argv[1:]
     port = None
@@ -255,17 +90,18 @@ def main():
         sys.exit(f"open failed ({e}). Wrong port, or another program has it open.")
     try:
         if "--log" in args:
-            run_log(link)
+            dc.run_log(link)
         elif "--env" in args:
-            run_env(link)
+            dc.run_env(link)
         elif "--topics" in args:
-            run_topics(link)
+            dc.run_topics(link)
+        elif "--live" in args:
+            dc.run_live(link)
         elif "--charge" in args:
-            st, _ = request(link, a.OP_CMD_FORCE_CHARGE)
-            print(f"  FORCE CHARGE  [{a.STATUS.get(st, st)}]  "
-                  f"(charges while USB present; clears on full / unplug)")
+            s, _ = dc.request(link, a.OP_COMMANDS_FORCE_CHARGE_EXECUTE)
+            print(f"  FORCE CHARGE  [{dc.st(s)}]  (charges while USB present; clears on full / unplug)")
         else:
-            run_basic(link)
+            dc.run_basic(link)
     finally:
         link.close()
 

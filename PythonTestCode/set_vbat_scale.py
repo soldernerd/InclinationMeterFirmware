@@ -21,7 +21,7 @@ import time
 import serial
 from serial.tools import list_ports
 
-import apiv2 as a
+import apiv3 as a
 
 BAUD = 115200
 _KNOWN_VID_PID = {
@@ -61,22 +61,22 @@ class Link:
 
 
 def get_u16(link, res):
-    st, d = link.request(a.opcode(a.GET, a.CAT_SETTINGS, res))
+    st, d = link.request(a.opcode(a.GET, a.CAT_CALIBRATIONS, res))
     return struct.unpack("<H", d[:2])[0] if (st == 0 and d and len(d) >= 2) else None
 
 
 def get_i32(link, res):
-    st, d = link.request(a.opcode(a.GET, a.CAT_SETTINGS, res))
+    st, d = link.request(a.opcode(a.GET, a.CAT_CALIBRATIONS, res))
     return struct.unpack("<i", d[:4])[0] if (st == 0 and d and len(d) >= 4) else None
 
 
 def set_u16(link, res, val):
-    st, _ = link.request(a.opcode(a.SET, a.CAT_SETTINGS, res), struct.pack("<H", val))
+    st, _ = link.request(a.opcode(a.SET, a.CAT_CALIBRATIONS, res), struct.pack("<H", val))
     return a.STATUS.get(st, st)
 
 
 def set_i32(link, res, val):
-    st, _ = link.request(a.opcode(a.SET, a.CAT_SETTINGS, res), struct.pack("<i", val))
+    st, _ = link.request(a.opcode(a.SET, a.CAT_CALIBRATIONS, res), struct.pack("<i", val))
     return a.STATUS.get(st, st)
 
 
@@ -93,29 +93,29 @@ def main():
     print(f"Opening {port} @ {BAUD} ...")
     link = Link(port)
 
-    num = get_u16(link, a.SET_VBAT_SCALE_NUM)
-    den = get_u16(link, a.SET_VBAT_SCALE_DEN)
-    off = get_i32(link, a.SET_VBAT_OFFSET_MV)
+    num = get_u16(link, a.RES_CALIBRATIONS_VBAT_SCALE_NUM)
+    den = get_u16(link, a.RES_CALIBRATIONS_VBAT_SCALE_DEN)
+    off = get_i32(link, a.RES_CALIBRATIONS_VBAT_OFFSET)
     print(f"  current: num={num} den={den} offset={off}mv"
           + (f"  (ratio {num/den:.4f})" if num and den else ""))
 
     if args.num is not None:
-        print(f"  set num={args.num}: {set_u16(link, a.SET_VBAT_SCALE_NUM, args.num)}")
+        print(f"  set num={args.num}: {set_u16(link, a.RES_CALIBRATIONS_VBAT_SCALE_NUM, args.num)}")
     if args.den is not None:
-        print(f"  set den={args.den}: {set_u16(link, a.SET_VBAT_SCALE_DEN, args.den)}")
+        print(f"  set den={args.den}: {set_u16(link, a.RES_CALIBRATIONS_VBAT_SCALE_DEN, args.den)}")
     if args.offset is not None:
-        print(f"  set offset={args.offset}: {set_i32(link, a.SET_VBAT_OFFSET_MV, args.offset)}")
+        print(f"  set offset={args.offset}: {set_i32(link, a.RES_CALIBRATIONS_VBAT_OFFSET, args.offset)}")
 
     if args.num is not None or args.den is not None or args.offset is not None:
-        num = get_u16(link, a.SET_VBAT_SCALE_NUM)
-        den = get_u16(link, a.SET_VBAT_SCALE_DEN)
-        off = get_i32(link, a.SET_VBAT_OFFSET_MV)
+        num = get_u16(link, a.RES_CALIBRATIONS_VBAT_SCALE_NUM)
+        den = get_u16(link, a.RES_CALIBRATIONS_VBAT_SCALE_DEN)
+        off = get_i32(link, a.RES_CALIBRATIONS_VBAT_OFFSET)
         print(f"  now:     num={num} den={den} offset={off}mv"
               + (f"  (ratio {num/den:.4f})" if num and den else ""))
 
-    st, data = link.request(a.OP_SYS_DEVICE_STATE)
+    st, data = link.request(a.OP_SYSTEM_STATE_GET)
     if st == 0:
-        print("  DEVICE_STATE:", a.decode_device_state(data))
+        print("  STATE:", a.format_state(data))
 
     link.close()
 

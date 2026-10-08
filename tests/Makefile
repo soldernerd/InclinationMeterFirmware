@@ -16,9 +16,13 @@ SUITES := test_math_crc test_math_phasor test_math_window test_math_displacement
 
 LDLIBS ?= -lm
 
-.PHONY: all clean check-api $(addprefix run-,$(SUITES))
+# the Python client library and the generated definitions
+check-py:
+	python test_apiv3.py
 
-all: check-api $(addprefix run-,$(SUITES))
+.PHONY: all clean check-api check-py $(addprefix run-,$(SUITES))
+
+all: check-api check-py $(addprefix run-,$(SUITES))
 
 # the generated API files must match tools/api_spec.py
 check-api:

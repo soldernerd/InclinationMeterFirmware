@@ -32,7 +32,7 @@ try:
 except ImportError:
     sys.exit("Need pyserial:  pip install pyserial")
 
-import apiv2 as a
+import apiv3 as a
 
 BAUD = 115200
 _KNOWN = {(0x0483, 0x374B), (0x0483, 0x374E), (0x0483, 0x374F), (0x0483, 0x3752),
@@ -66,12 +66,12 @@ class Link:
         return None, None
 
     def set_mask(self, mask):
-        st, d = self.req(a.OP_CMD_POWER_TEST, struct.pack("<I", mask & 0xFFFFFFFF))
+        st, d = self.req(a.OP_COMMANDS_POWER_TEST_EXECUTE, struct.pack("<I", mask & 0xFFFFFFFF))
         applied = struct.unpack("<I", d[:4])[0] if (st == 0 and d and len(d) >= 4) else None
         return st, applied
 
     def get_mask(self):
-        st, d = self.req(a.OP_RAW_PWRTEST)
+        st, d = self.req(a.OP_DIAGNOSTICS_POWER_GET)
         if st != 0 or not d or len(d) < 5:
             return None, None
         return struct.unpack("<I", d[:4])[0], d[4]

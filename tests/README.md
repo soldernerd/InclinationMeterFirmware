@@ -11,6 +11,9 @@ parts that are only otherwise exercised by flashing a board:
 | `test_math_displacement.c` | `Math/math_displacement.c` — the per-batch demodulation: known tilt/phase/zero/PGA in, tilt out; degenerate excitation; the flip-calibration formula |
 | `test_math_quality.c` | `Math/math_quality.c` — the display stream (cadence, doubtful flag, gaps, wrap) and the sliding-window precision measurement (waits for the floor, rejects disturbed windows, timeout, break) |
 | `test_golden_displacement.c` | replays a recorded 10.6-minute excerpt of the real 19 h phasor stream (`data/`, committed — a clone can run it) through the same pipeline and must reproduce the values the firmware produced before the maths was extracted |
+| `test_api_core.c` | `Services/svc_api.c` — the API dispatcher on a synthetic table: the staged validation order (category, verb, resource, resource verb, CRC, length), status propagation, response framing, after-reply actions, interval and event subscriptions, per-transport isolation, the byte reassembler |
+| `test_api_tables.c` | the REAL generated tables (`Services/svc_api_tables.c`) with the field handler: every resource reachable with its verbs and request length, every settings/calibration field bounds-checked and persisted, cross-field rules, the RTC trim hook, state-changing IDs safe against a stale v2 client |
+| `test_apiv3.py` | the Python client library (`PythonTestCode/apiv3.py`): CRC, framing, byte-stream and USB HID reassembly, every generated payload round-tripped, generated files up to date |
 | `test_txframe.c`   | `Services/svc_txframe.c` — the SPSC frame FIFO: FIFO order, wrap, the 64-byte urgent reserve, oversized-frame refusal, reset |
 | `test_transfer.c`  | the extracted fixed-point transfer / decode functions: `drv_tmp236_mv_to_cdeg` (two-segment fit, boundary continuity, negative °C), `drv_lm35_mv_to_cdeg`, `drv_encoder_quad_step` (all 16 Gray-code transitions) |
 

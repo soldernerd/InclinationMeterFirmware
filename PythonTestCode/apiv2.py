@@ -1,4 +1,7 @@
 """
+FROZEN: this is the client for API v2 (firmware up to 0.10.x), kept only so the archived scripts under Testing/
+still run against old firmware. Firmware 0.11.0 and later speaks API v3: use apiv3.py (docs/api-v3-spec.md).
+
 Device API v2 framing + opcode helpers, shared by hid_test.py (USB) and
 ble_test.py (BLE). See docs/api-v2-spec.md / docs/api-reference.md.
 

@@ -23,7 +23,7 @@ try:
 except ImportError:
     sys.exit("Need pyserial:  pip install pyserial")
 
-import apiv2 as a
+import apiv3 as a
 
 BAUD = 115200
 _KNOWN = {(0x0483, 0x374B), (0x0483, 0x374E), (0x0483, 0x374F), (0x0483, 0x3752),
@@ -43,7 +43,7 @@ def find_port():
 
 def run_capture(ser, timeout=25.0):
     r = a.Reassembler()
-    op = a.OP_BULK_RAW_ADC_START
+    op = a.OP_BULK_RAW_ADC_START_BULK
     ser.reset_input_buffer()
     ser.write(a.build(op))
     got = 0
@@ -68,14 +68,14 @@ def run_capture(ser, timeout=25.0):
 def get_diag(ser, timeout=3.0):
     r = a.Reassembler()
     ser.reset_input_buffer()
-    ser.write(a.build(a.OP_RAW_ADC_DIAG))
+    ser.write(a.build(a.OP_DIAGNOSTICS_ADC_GET))
     deadline = time.time() + timeout
     while time.time() < deadline:
         d = ser.read(512)
         if not d:
             continue
         for pop, st, dd in r.feed(d):
-            if pop == a.OP_RAW_ADC_DIAG:
+            if pop == a.OP_DIAGNOSTICS_ADC_GET:
                 if st != 0x00:
                     raise RuntimeError(f"diag GET -> {a.STATUS.get(st, st)}")
                 return a.decode_adc_diag(dd)

@@ -48,7 +48,7 @@ from datetime import datetime
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 sys.path.insert(0, os.path.join(REPO, "PythonTestCode"))
-import apiv2 as a   # noqa: E402
+import apiv3 as a   # noqa: E402
 import serial       # noqa: E402
 
 F0 = 20833.3333 / 8.0     # cycles per second
@@ -57,11 +57,11 @@ COLUMNS = ["index", "t_s", "seq", "cycles", "gap_cycles", "frame_gap", "first_ba
            "iB", "qB", "iA", "qA", "iS1", "qS1", "iS2", "qS2",
            "onboard_temp_cdeg", "soc_pct", "charging", "usb", "label"]
 
-OP_SUB = a.opcode(a.SUBSCRIBE, a.CAT_TOPICS, a.TOPIC_PHASOR_STREAM)
-OP_UNSUB = a.opcode(a.UNSUBSCRIBE, a.CAT_TOPICS, a.TOPIC_PHASOR_STREAM)
-OP_TEMP = a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP)
-OP_STATUS = a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_STATUS)
-OP_INHIBIT = a.opcode(a.EXECUTE, a.CAT_COMMANDS, 0x09)   # API2_RES_CMD_CHARGE_INHIBIT, payload 0/1
+OP_SUB = a.OP_TOPICS_PHASOR_STREAM_SUBSCRIBE
+OP_UNSUB = a.OP_TOPICS_PHASOR_STREAM_UNSUBSCRIBE
+OP_TEMP = a.OP_MEASUREMENTS_ONBOARD_TEMP_GET
+OP_STATUS = a.OP_TOPICS_STATUS_GET
+OP_INHIBIT = a.OP_COMMANDS_CHARGE_INHIBIT_EXECUTE   # payload 0/1
 
 
 def find_port():
@@ -108,13 +108,13 @@ def main():
     ser = serial.Serial(port, 115200, timeout=0.3)
     ser.reset_input_buffer()
     reasm = a.Reassembler()
-    st, d = request(ser, reasm, a.OP_SYS_IDENTITY)
+    st, d = request(ser, reasm, a.OP_SYSTEM_IDENTITY_GET)
     if st != 0:
         sys.exit("IDENTITY failed -- check --port / that the board is awake")
-    print("IDENTITY:", a.decode_identity(d), flush=True)
+    print("IDENTITY:", a.format_identity(d), flush=True)
 
-    getop = a.opcode(a.GET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
-    setop = a.opcode(a.SET, a.CAT_SETTINGS, a.SET_AUTO_POWEROFF_S)
+    getop = a.OP_SETTINGS_AUTO_POWEROFF_GET
+    setop = a.OP_SETTINGS_AUTO_POWEROFF_SET
     saved_apo = None
     st, d = request(ser, reasm, getop)
     if st == 0 and d and len(d) >= 2:
@@ -178,9 +178,9 @@ def main():
                     temp = struct.unpack("<h", data[:2])[0]
                     continue
                 if op == OP_STATUS and status == 0 and data:
-                    s = a.decode_topic_status(data)
+                    s = a.decode_topics_status_response(data)
                     if s:
-                        soc, chg, usb = s["soc_pct"], int(s["charging"]), int(s["usb"])
+                        soc, chg, usb = s["battery_soc_pct"], int(s["charging"]), int(s["usb_connected"])
                         tnow = time.time()
                         if chg and charge_since is None:
                             charge_since = tnow

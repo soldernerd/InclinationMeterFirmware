@@ -20,12 +20,12 @@ import time
 import numpy as np
 import serial
 
-import apiv2 as a
+import apiv3 as a
 from bulk_adc_csv import capture, find_port
 
 BAUD = 115200
 SAMPLE_RATE_HZ = 64_000_000 / 3072  # = 20833.333... Hz, config.h ADS131M04_FDATA_TIMER_TICKS
-LSB_MV = 2.4 / (1 << 24) * 1000     # ADC_RAW_LSB_V (apiv2.py) in mV (2^24: fixed 2026-10-06, was 2^23)
+LSB_MV = 2.4 / (1 << 24) * 1000     # ADC_RAW_LSB_V (apiv3.py) in mV (2^24: fixed 2026-10-06, was 2^23)
 LIVE_CHANNELS = (0, 1, 2, 3)        # check all 4 -- which channels are "live" changes as
                                      # sensors get connected/disconnected during bring-up;
                                      # analyze_channel() returns None for a flat one anyway
