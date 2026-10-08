@@ -76,3 +76,6 @@ tests/test_math_window
 tests/test_math_displacement
 tests/test_math_quality
 tests/test_golden_displacement
+
+# recorded test data the host tests replay (tests/data/README.md) -- must be tracked
+!tests/data/*.bin
