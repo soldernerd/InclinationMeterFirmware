@@ -906,6 +906,20 @@ void svc_displacement_check_integrity(void)
     svc_displacement_stop();
 }
 
+void svc_displacement_clear_counters(void)
+{
+    s_input_drop_count         = 0;
+    s_degenerate_count         = 0;
+    s_clip_count               = 0;
+    s_amplitude_fault_count    = 0;
+    s_clip_logged              = false;
+    s_amplitude_fault_logged   = false;
+    s_max_update_gap_ms        = 0;
+    s_max_gap_at_uptime_ms     = 0;
+    s_gap_over_threshold_count = 0;
+    s_pstream_drops            = 0;
+}
+
 uint16_t svc_displacement_get_input_drop_count(void)
 {
     return s_input_drop_count;

@@ -29,6 +29,12 @@ void hal_power_configure_rail_retention(void);
  * early in boot. */
 bool hal_power_woke_from_standby(void);
 
+/* Captures and clears the RCC reset flags; call once, as early as possible. Bit map (also the API Health
+ * reset_cause byte): bit0 pin, bit1 power-on / brown-out, bit2 software, bit3 IWDG, bit4 WWDG, bit5 low-power,
+ * bit6 option-byte load. Several bits can be set (a power-on also sets the pin bit). */
+void    hal_power_capture_reset_cause(void);
+uint8_t hal_power_reset_cause(void);
+
 /* Enters STM32 Standby mode (~0.28 uA). Does not return: Standby mode
  * always resets the MCU on wake, so execution resumes at the reset
  * vector, same as a power-on reset, not back here. Caller is responsible

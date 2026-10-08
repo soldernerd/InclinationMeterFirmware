@@ -55,6 +55,8 @@ void hal_rtc_get(rtc_datetime_t *out)
     out->hour    = tm.Hours;
     out->minute  = tm.Minutes;
     out->second  = tm.Seconds;
+    /* SSR counts DOWN from SecondFraction (255) to 0 within a second */
+    out->subsecond = (uint8_t)(tm.SecondFraction - tm.SubSeconds);
 }
 
 DrvStatus hal_rtc_set(const rtc_datetime_t *in)
@@ -80,6 +82,22 @@ DrvStatus hal_rtc_set(const rtc_datetime_t *in)
         return DRV_ERR_COMM;
     }
     if (HAL_RTC_SetDate(&hrtc, &dt, RTC_FORMAT_BIN) != HAL_OK) {
+        return DRV_ERR_COMM;
+    }
+    return DRV_OK;
+}
+
+DrvStatus hal_rtc_set_trim_ppm_x10(int16_t ppm_x10)
+{
+    /* steps = ppm / (1e6 / 2^20) = ppm_x10 / 9.5367 */
+    int32_t steps = (int32_t)((((int64_t)ppm_x10 * 1048576LL) + (ppm_x10 >= 0 ? 5000000LL : -5000000LL))
+                              / 10000000LL);
+    if (steps > 512)  steps = 512;
+    if (steps < -511) steps = -511;
+    uint32_t plus  = (steps > 0) ? RTC_SMOOTHCALIB_PLUSPULSES_SET : RTC_SMOOTHCALIB_PLUSPULSES_RESET;
+    uint32_t minus = (steps > 0) ? (uint32_t)(512 - steps) : (uint32_t)(-steps);
+    if (steps == 512) { minus = 0; }
+    if (HAL_RTCEx_SetSmoothCalib(&hrtc, RTC_SMOOTHCALIB_PERIOD_32SEC, plus, minus) != HAL_OK) {
         return DRV_ERR_COMM;
     }
     return DRV_OK;

@@ -28,6 +28,10 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *settings);
  * Services/svc_battery.c, Drivers_App/drv_tmp236.c). */
 void svc_storage_validate_settings(DeviceSettings *settings);
 
+/* Resets EVERY setting and calibration to the compiled defaults (in RAM at once) and saves all pages.
+ * DRV_ERR_NOT_READY if a save is already running. Wipes the tilt calibrations. */
+DrvStatus svc_storage_restore_defaults(void);
+
 bool      svc_storage_is_busy(void); /* true while a write operation is in progress */
 
 #endif /* SVC_STORAGE_H */

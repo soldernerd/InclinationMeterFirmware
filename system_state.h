@@ -17,7 +17,6 @@
 typedef struct {
     /* --- Scheduler/Timing page --- */
     uint16_t task_sensors_ms;
-    uint16_t task_display_ms;
     uint16_t task_ble_ms;
     uint16_t task_usb_ms;
     uint16_t task_battery_ms;
@@ -65,6 +64,11 @@ typedef struct {
      * App/app_ui.c's consume_detents(). Unconfirmed against real
      * hardware. */
     uint16_t encoder_counts_per_detent;
+
+    /* --- RTC page (2026-10-08) --- */
+    int16_t  rtc_trim_ppm_x10;       /* clock trim in 0.1 ppm, positive = faster (API Calibrations RTC_TRIM);
+                                      * applied through the RTC digital calibration, 0.954 ppm per step */
+    int16_t  rtc_page_pad;           /* keeps the page a multiple of 4 bytes */
 
     /* --- Displacement calibration page (WP10) ---
      * Differential-capacitor sensor calibration — see
@@ -280,13 +284,6 @@ typedef struct {
     /* Same as ble_tx_dropped_count, for the wired UART transport
      * (Services/svc_uart.c, USART3 debug header). Saturates. */
     uint16_t uart_tx_dropped_count;
-
-    /* API v2: incremented by svc_api.c whenever a received frame can't be
-     * dispatched or answered — too short to hold a header+CRC, a declared
-     * LEN that doesn't match what arrived, or an oversized response a
-     * resource handler tried to build. CLAUDE.md 7.6 escalation for the
-     * cases where echoing a status back isn't possible or safe. */
-    uint16_t api_rx_malformed_count;
 } SystemState;
 
 extern SystemState    g_system_state;

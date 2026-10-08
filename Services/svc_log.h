@@ -3,11 +3,16 @@
 
 #include <stdint.h>
 #include <stdbool.h>
-#include "svc_api.h"     /* Api2LogSeverity */
 #include "config.h"      /* SVC_LOG_MSG_MAX */
 
-/* In-RAM ring of recent log lines, drained by the API v2 Debug-messages
- * stream (svc_api.c, category 0x6) so a host can watch the device log
+typedef enum {
+    API2_LOG_INFO  = 0x00U,
+    API2_LOG_WARN  = 0x01U,
+    API2_LOG_ERROR = 0x02U,
+} Api2LogSeverity;
+
+/* In-RAM ring of recent log lines, drained by the API Debug-log
+ * stream (svc_api_res_diag.c, category DEBUG) so a host can watch the device log
  * live over USB/BLE. Not a printf-to-UART -- there's no wired console.
  *
  * Layering: App/ and Services/ call svc_log()/svc_logf() freely. HAL_App/

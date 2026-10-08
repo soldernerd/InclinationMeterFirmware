@@ -153,13 +153,11 @@ static void task_ble(void)         { svc_ble_task();           }
 static void task_uart(void)        { svc_uart_update();        }
 static void task_api(void)
 {
-    /* Both every tick: svc_api_update() drains the debug-log push queue
-     * (self-limited to a few lines per call); the subscriptions poll must
-     * be every tick so a 50 ms Measurements interval isn't coarsened to a
-     * slower cadence — see svc_api.c's comment on that function. */
+    /* Both every tick: svc_api_update() runs the event pushes (log, live reading, phasor stream, procedures) and
+     * the bulk pump, each self-limited per call; the interval subscriptions poll must be every tick so a 50 ms
+     * interval isn't coarsened to a slower cadence. */
     svc_api_update();
-    svc_api_measurement_subscriptions_update();
-    svc_api_topic_subscriptions_update();
+    svc_api_subscriptions_update();
 }
 static void task_displacement(void) { svc_displacement_update();
                                       svc_displacement_check_integrity(); }

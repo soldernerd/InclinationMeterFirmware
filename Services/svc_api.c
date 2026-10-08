@@ -1,220 +1,51 @@
 #include "svc_api.h"
-#include "svc_battery.h"
-#include "svc_storage.h"
-#include "svc_displacement.h"
-#include "svc_powertest.h"
-#include "hal_pintest.h"
-#include "hal_dfu.h"
-#include "drv_ads131m04.h"
-#include "svc_log.h"
-#include "hal_rtc.h"
-#include "hal_power.h"
-#include "hal_mcu.h"
-#include "drv_buzzer.h"
+#include "svc_api_defs.h"
 #include "math_crc.h"
 #include "hal_systick.h"
-#include "system_state.h"
-#include "config.h"
-#include "app_version.h"
 #include <string.h>
-#include <stddef.h>
 
-/* Device API v2 (WP11) -- ported onto master 2026-09-05 from wp11-api-v2,
- * trimmed to what this REV B build backs (see svc_api.h's top comment).
- *
- * On-the-wire: [OPCODE 2B LE][LEN 2B LE][PAYLOAD 0..LEN][CRC16 2B LE], no
- * padding, total 6+LEN. Every response echoes the request opcode; the
- * first payload byte is always an Api2Status, followed by resource data
- * only when status is OK. Subscription pushes go out under the request's
- * opcode too (spec §3.1), payload [status][issue_seq][page][value]. */
-
-#define MAX_PAYLOAD (API2_PACKET_MAX_SIZE - API2_PACKET_HDR_BYTES - API2_PACKET_CRC_BYTES)
-
-/* ---------------- payload structs ---------------- */
+/* The API dispatcher: framing, CRC, the staged validation of docs/api-v3-spec.md section 4, subscriptions and the
+ * per-transport state. It knows no resource: those come from the generated tables (svc_api_tables.c, from
+ * tools/api_spec.py) and their handlers (svc_api_res_*.c). This file therefore builds and runs on the host
+ * (tests/test_api_core.c). */
 
 typedef struct {
-    uint8_t fw_major;
-    uint8_t fw_minor;
-    uint8_t fw_patch;
-    char    product_str[16];
-    char    serial_str[8];
-} __attribute__((packed)) Api2IdentityPayload;
-
-typedef struct {
-    uint8_t  battery_state;     /* battery_state_t (Services/svc_battery.h) */
-    uint8_t  battery_soc_pct;
-    uint16_t battery_mv;
-    uint8_t  usb_connected;
-    uint8_t  ble_connected;
-    uint8_t  reserved0;         /* was calibration_valid (REV A tilt cal); always 0
-                                  until a REV B calibration store exists */
-} __attribute__((packed)) Api2DeviceStatePayload;
-
-typedef struct {
-    int16_t  bme280_temp_cdeg;
-    uint32_t bme280_pressure_pa;
-    uint16_t bme280_humidity_cpct;
-    uint8_t  bme280_ok;
-    int16_t  onboard_temp_cdeg;
-    int16_t  external_temp_cdeg;
-    uint8_t  external_temp_ok;
-} __attribute__((packed)) Api2TopicEnvPayload;
-
-typedef struct {
-    uint16_t battery_mv;
-    uint8_t  battery_soc_pct;
-    uint8_t  battery_state;
-    uint8_t  usb_connected;
-    uint8_t  ble_connected;
-    uint8_t  charging;
-    uint8_t  force_charging;
-    uint8_t  charge_inhibited;  /* 2026-09-29 -- see svc_battery_is_charge_inhibited() */
-    uint8_t  rail_3v3_on;
-    uint8_t  rail_5v_on;
-    uint16_t rtc_year;
-    uint8_t  rtc_month;
-    uint8_t  rtc_day;
-    uint8_t  rtc_hour;
-    uint8_t  rtc_minute;
-    uint8_t  rtc_second;
-    uint8_t  rtc_set;
-} __attribute__((packed)) Api2TopicStatusPayload;
-
-/* WP10 displacement demod diagnostics (Services/svc_displacement.c) --
- * see svc_api.h's Topic groups 0x02 doc comment for field meanings. */
-typedef struct {
-    float iB, qB;
-    float iA, qA;
-    float iS1, qS1;
-    float iS2, qS2;
-} __attribute__((packed)) Api2TopicPhasorsPayload;
-
-/* Pre-moving-average per-batch displacement (2026-09-26, at the user's
- * request -- see svc_api.h's Topic groups 0x03 doc comment). Mirrors
- * Measurements 0x09-0x0C's field order/types exactly, just sourced from
- * svc_displacement_get_delta1/2_mm_raw() instead of the post-MA
- * get_delta1/2_mm(). */
-typedef struct {
-    float   delta1_mm_raw;
-    float   residual1;
-    float   delta2_mm_raw;
-    float   residual2;
-    uint8_t quality1_ok;   /* added 2026-09-26 -- see svc_api.h's doc comment */
-    uint8_t quality2_ok;
-    float   delta_diff_mm_raw;  /* added 2026-09-27 -- see svc_api.h's doc comment */
-    uint8_t quality_diff_ok;
-} __attribute__((packed)) Api2TopicRawDisplacementPayload;
-
-/* Signal diagnostics (2026-09-27, granite-plate calibration tool) -- see
- * svc_api.h's Topic groups 0x04 doc comment and
- * Services/svc_displacement.h's DisplacementSignalDiag comment. */
-typedef struct {
-    float rms_mv[4];
-    float p2p_mv[4];
-    float phase_deg[4];
-    float theoretical_tilt1_mm_per_m;
-    float theoretical_tilt2_mm_per_m;
-} __attribute__((packed)) Api2TopicSignalDiagPayload;
-
-_Static_assert(sizeof(Api2IdentityPayload)    + 1U <= MAX_PAYLOAD, "IDENTITY response too large");
-_Static_assert(sizeof(Api2DeviceStatePayload) + 1U <= MAX_PAYLOAD, "DEVICE_STATE response too large");
-/* Largest topic payload any builder may write (GET/SUBSCRIBE buffers are this
- * big). It was 32 while the signal-diagnostics topic is 56 bytes: a 24 byte
- * stack overflow on every read of that topic, fixed 2026-10-07. */
-#define TOPIC_VALUE_MAX_LEN 64U
-_Static_assert(sizeof(Api2TopicEnvPayload)            <= TOPIC_VALUE_MAX_LEN, "TOPIC env payload > buffer");
-_Static_assert(sizeof(Api2TopicStatusPayload)         <= TOPIC_VALUE_MAX_LEN, "TOPIC status payload > buffer");
-_Static_assert(sizeof(Api2TopicPhasorsPayload)        <= TOPIC_VALUE_MAX_LEN, "TOPIC phasors payload > buffer");
-_Static_assert(sizeof(Api2TopicRawDisplacementPayload) <= TOPIC_VALUE_MAX_LEN, "TOPIC raw displacement payload > buffer");
-_Static_assert(sizeof(Api2TopicSignalDiagPayload)     <= TOPIC_VALUE_MAX_LEN, "TOPIC signal diag payload > buffer");
-/* +3: stream pushes prefix [status][issue_seq][page] */
-_Static_assert(sizeof(Api2TopicEnvPayload)    + 3U <= MAX_PAYLOAD, "TOPIC env push too large");
-_Static_assert(sizeof(Api2TopicStatusPayload) + 3U <= MAX_PAYLOAD, "TOPIC status push too large");
-_Static_assert(sizeof(Api2TopicPhasorsPayload) + 3U <= MAX_PAYLOAD, "TOPIC phasors push too large");
-_Static_assert(sizeof(Api2TopicRawDisplacementPayload) + 3U <= MAX_PAYLOAD, "TOPIC raw displacement push too large");
-_Static_assert(sizeof(Api2TopicSignalDiagPayload) + 3U <= MAX_PAYLOAD, "TOPIC signal diag push too large");
-
-/* ---------------- per-transport state ---------------- */
-
-typedef struct {
-    bool     active;
-    uint32_t interval_ms;
-    uint32_t last_push_ms;
-    uint8_t  issue_seq;
-} MeasurementSubSlot;
-
-typedef struct {
-    bool            active;
-    Api2LogSeverity min_sev;
-    uint32_t        cursor;
-    uint8_t         issue_seq;
-} DebugSubState;
-
-typedef struct {
-    bool               connected;
-    ApiSendFn          send_fn;
-    ApiReadyFn         ready_fn;   /* optional TX back-pressure hook (bulk pump only) */
-    MeasurementSubSlot meas[API2_MEASUREMENT_SLOTS];
-    MeasurementSubSlot topic[API2_TOPIC_SLOTS];   /* Topic groups (0x5) — same slot shape */
-    DebugSubState      dbg;
+    bool        connected;
+    ApiSendFn   send_fn;
+    ApiReadyFn  ready_fn;
+    ApiSub      sub[API2_SUB_SLOTS];
 } ApiTransportState;
 
-static ApiTransportState s_t[API_TRANSPORT_COUNT];
-
-/* Set by svc_api_register_settings_changed(); called after a persisted
- * Settings SET so the App layer can re-apply derived state. NULL until
- * registered — a SET still succeeds, just nothing downstream re-applies. */
+static ApiTransportState    s_t[API_TRANSPORT_COUNT];
+static uint16_t             s_rx_malformed = 0;
 static ApiSettingsChangedFn s_settings_changed_fn = 0;
-
-/* ---------------- bulk transfer state (docs/api-v2-spec.md §4.5) ----------------
- * One at a time, device-wide (the raw-ADC capture is the only bulk resource;
- * the phasor log, resource 0x01, was removed 2026-10-07). CAPTURING while the
- * RAM buffer fills; SENDING streams it out in chunks paced by the
- * transport's ready_fn. */
-static struct {
-    bool         active;
-    enum { BULK_IDLE = 0, BULK_CAPTURING, BULK_SENDING } phase;
-    ApiTransport transport;
-    uint16_t     opcode;
-    uint16_t     send_pos;   /* next sample/entry index to send, during SENDING */
-    uint8_t      page;       /* wrapping chunk counter */
-} s_bulk;
 
 /* ---------------- helpers ---------------- */
 
-static void copy_fixed(char *dst, const char *src, size_t cap)
-{
-    size_t n = 0;
-    while (n < cap && src[n] != '\0') { n++; }
-    memcpy(dst, src, n);
-    if (n < cap) {
-        memset(dst + n, 0, cap - n);
-    }
-}
-
-/* 8 uppercase hex chars, no null terminator — matches serial_str's fixed
- * 8-byte wire width exactly, so no padding case to handle (unlike
- * copy_fixed's variable-length source). */
-static void format_hex32(char *dst, uint32_t v)
-{
-    static const char digits[] = "0123456789ABCDEF";
-    for (int8_t i = 7; i >= 0; --i) {
-        dst[i] = digits[v & 0xFU];
-        v >>= 4;
-    }
-}
-
 static void note_malformed(void)
 {
-    if (g_system_state.api_rx_malformed_count < UINT16_MAX) {
-        g_system_state.api_rx_malformed_count++;
+    if (s_rx_malformed < UINT16_MAX) {
+        s_rx_malformed++;
     }
 }
 
-/* Build a framed packet and hand it to the transport. `urgent` is passed
- * straight through to the transport's send_fn: true for a direct reply to
- * a request (may use the transport's reserved TX space), false for a
- * subscription/stream push (must not). */
+uint16_t svc_api_rx_malformed(void)   { return s_rx_malformed; }
+void     svc_api_clear_counters(void) { s_rx_malformed = 0; }
+
+bool api_transport_connected(ApiTransport t)
+{
+    return t < API_TRANSPORT_COUNT && s_t[t].connected;
+}
+
+bool api_transport_ready(ApiTransport t)
+{
+    if (t >= API_TRANSPORT_COUNT || !s_t[t].connected) return false;
+    return s_t[t].ready_fn == 0 || s_t[t].ready_fn();
+}
+
+/* Builds a framed packet [opcode][len][status][data][crc] and hands it to the transport. `urgent` goes straight to
+ * the transport's send_fn: true for a direct reply to a request (may use the reserved TX space), false for a
+ * subscription push or a bulk chunk (must not). */
 static void send_framed(ApiTransport t, uint16_t opcode, Api2Status status,
                         const uint8_t *data, uint16_t data_len, bool urgent)
 {
@@ -222,7 +53,7 @@ static void send_framed(ApiTransport t, uint16_t opcode, Api2Status status,
     if (!s_t[t].connected || !s_t[t].send_fn) return;
 
     uint16_t payload_len = (uint16_t)(1U + data_len);   /* status byte + data */
-    if (payload_len > MAX_PAYLOAD) {
+    if (payload_len > API2_PACKET_MAX_PAYLOAD) {
         note_malformed();
         return;
     }
@@ -236,7 +67,6 @@ static void send_framed(ApiTransport t, uint16_t opcode, Api2Status status,
     if (data && data_len) {
         memcpy(&buf[5], data, data_len);
     }
-
     uint16_t before_crc = (uint16_t)(API2_PACKET_HDR_BYTES + payload_len);
     uint16_t crc = math_crc16(buf, before_crc);
     buf[before_crc + 0U] = (uint8_t)(crc & 0xFFU);
@@ -245,16 +75,32 @@ static void send_framed(ApiTransport t, uint16_t opcode, Api2Status status,
     s_t[t].send_fn(buf, (uint16_t)(before_crc + API2_PACKET_CRC_BYTES), urgent);
 }
 
-/* Direct reply to a received request — always urgent. */
 static void send_response(ApiTransport t, uint16_t opcode, Api2Status status,
                           const uint8_t *data, uint16_t data_len)
 {
     send_framed(t, opcode, status, data, data_len, true);
 }
 
-/* CRC over the full received frame. Called after category/verb/resource
- * are confirmed valid (spec §3.4 steps 1-3 before step 4). Dispatch
- * always stops here on mismatch, before any resource handler runs. */
+void api_send_push(ApiTransport t, uint16_t opcode, const uint8_t *data, uint16_t len)
+{
+    send_framed(t, opcode, API2_STATUS_OK, data, len, false);
+}
+
+/* A subscription push: [issue_seq][page 0][data]. */
+static void send_sub_push(ApiTransport t, uint16_t opcode, ApiSub *s, const uint8_t *data, uint16_t len)
+{
+    uint8_t push[2U + API2_PUSH_DATA_MAX];
+    if (len > API2_PUSH_DATA_MAX) {
+        note_malformed();
+        return;
+    }
+    push[0] = s->issue_seq++;
+    push[1] = 0U;   /* page */
+    memcpy(&push[2], data, len);
+    api_send_push(t, opcode, push, (uint16_t)(2U + len));
+}
+
+/* CRC over the full received frame; checked after category / verb / resource are known to be valid. */
 static bool check_crc(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint16_t paylen)
 {
     uint16_t before_crc = (uint16_t)(API2_PACKET_HDR_BYTES + paylen);
@@ -267,1469 +113,169 @@ static bool check_crc(ApiTransport t, uint16_t opcode, const uint8_t *frame, uin
     return true;
 }
 
-/* ---------------- System status (0x0) ----------------
- * 0x00 Identity / 0x01 Device state: GET only.
- * 0x02 RTC datetime: GET and SET. */
-
-static void dispatch_rtc(ApiTransport t, uint16_t opcode, uint8_t verb,
-                         const uint8_t *frame, uint16_t paylen)
+static const ApiCategory *find_category(uint8_t cat)
 {
-    if (verb == API2_VERB_GET) {
-        if (paylen != 0U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
+    for (uint8_t i = 0; i < g_api_category_count; ++i) {
+        if (g_api_categories[i].id == cat) return &g_api_categories[i];
+    }
+    return 0;
+}
+
+static const ApiResource *find_resource(const ApiCategory *c, uint8_t res)
+{
+    for (uint8_t i = 0; i < c->count; ++i) {
+        if (c->res[i].id == res) return &c->res[i];
+    }
+    return 0;
+}
+
+/* ---------------- subscriptions ---------------- */
+
+static Api2Status subscribe(ApiTransport t, const ApiResource *r, const uint8_t *in, uint16_t len)
+{
+    ApiSub *s = &s_t[t].sub[r->slot];
+    if (r->sub == API2_SUB_INTERVAL) {
+        uint32_t interval_ms = (uint32_t)in[0] | ((uint32_t)in[1] << 8) | ((uint32_t)in[2] << 16)
+                             | ((uint32_t)in[3] << 24);
+        if (interval_ms < API2_INTERVAL_MIN_MS || interval_ms > API2_INTERVAL_MAX_MS) {
+            return API2_STATUS_INVALID_PARAMETER;
         }
-        rtc_datetime_t dt;
-        hal_rtc_get(&dt);
-        uint8_t p[9] = {
-            (uint8_t)(dt.year & 0xFFU), (uint8_t)(dt.year >> 8),
-            dt.month, dt.day, dt.weekday, dt.hour, dt.minute, dt.second,
-            (uint8_t)(hal_rtc_is_set() ? 1U : 0U),
-        };
-        send_response(t, opcode, API2_STATUS_OK, p, sizeof p);
-        return;
-    }
-
-    /* SET */
-    if (paylen != 7U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    const uint8_t *b = &frame[API2_PACKET_HDR_BYTES];
-    rtc_datetime_t dt = {
-        .year   = (uint16_t)(b[0] | ((uint16_t)b[1] << 8)),
-        .month  = b[2], .day = b[3], .weekday = 0,
-        .hour   = b[4], .minute = b[5], .second = b[6],
-    };
-    if (!hal_rtc_datetime_valid(&dt)) {
-        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-        return;
-    }
-    if (hal_rtc_set(&dt) != DRV_OK) {
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    svc_logf(API2_LOG_INFO, "rtc set %04u-%02u-%02u %02u:%02u:%02u",
-             dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-static void dispatch_system_status(ApiTransport t, uint16_t opcode, uint8_t verb,
-                                   uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (res == API2_RES_SYS_RTC) {
-        if (verb != API2_VERB_GET && verb != API2_VERB_SET) {
-            send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-            return;
+        if (!s->active) {
+            s->issue_seq = 0;
         }
-        if (!check_crc(t, opcode, frame, paylen)) return;
-        dispatch_rtc(t, opcode, verb, frame, paylen);
-        return;
+        s->active       = true;
+        s->interval_ms  = interval_ms;
+        s->last_push_ms = hal_systick_get_ms();
+        return API2_STATUS_OK;
     }
-
-    if (verb != API2_VERB_GET) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
+    /* event driven: the resource validates the request and arms what it needs */
+    if (!s->active) {
+        memset(s, 0, sizeof *s);
     }
-    if (res != API2_RES_SYS_IDENTITY && res != API2_RES_SYS_DEVICE_STATE) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
+    Api2Status st = r->ev->start(r, t, s, in, len);
+    if (st == API2_STATUS_OK) {
+        s->active = true;
     }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-
-    if (res == API2_RES_SYS_IDENTITY) {
-        Api2IdentityPayload p;
-        memset(&p, 0, sizeof p);
-        p.fw_major = (uint8_t)FW_VERSION_MAJOR;
-        p.fw_minor = (uint8_t)FW_VERSION_MINOR;
-        p.fw_patch = (uint8_t)FW_VERSION_PATCH;
-        copy_fixed(p.product_str, USB_PRODUCT_STR, sizeof p.product_str);
-        /* All three words of the 96-bit factory UID, folded into 32 bits
-         * (HAL_App/hal_mcu.c) as 8 hex chars — self-identifying per
-         * physical board, unlike the old hardcoded "001" every board
-         * reported. (An earlier version of this read only the UID's last
-         * word; that word is ST's shared lot-number, identical across
-         * every die from the same batch, so two boards from one lot
-         * reported the same serial here — fixed 2026-09-25.) Same value
-         * the STATUS screen shows (app_display.c) and, in full, what the
-         * CubeMX USB descriptor already derives its iSerialNumber string
-         * from (USB_Device/App/usbd_desc.c's Get_SerialNum()) — this is
-         * just a shorter cut of the same identity for the app-layer API. */
-        format_hex32(p.serial_str, hal_mcu_uid_low());
-        send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
-    } else {
-        Api2DeviceStatePayload p;
-        p.battery_state     = (uint8_t)svc_battery_get_state();
-        p.battery_soc_pct   = svc_battery_get_soc_pct();
-        p.battery_mv        = svc_battery_get_vbat_mv();
-        p.usb_connected     = g_system_state.usb_connected ? 1U : 0U;
-        p.ble_connected     = g_system_state.ble_connected ? 1U : 0U;
-        p.reserved0         = 0U;
-        send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
-    }
+    return st;
 }
 
-/* ---------------- Commands (0x1, EXECUTE only) ----------------
- * Table-driven: one row per command, dispatch_commands() does the verb /
- * unknown-resource / CRC / payload-length checks once, then calls the
- * handler with the payload slice. Adding a command is a row + a handler,
- * no if-ladder to extend and no "res != X && res != Y && ..." guard to
- * remember. (This is the shape the not-yet-built Calibrations category
- * 0x2 should copy — see dispatch()'s default case.) */
-
-#define CMD_LEN_ANY  0xFFFFU   /* handler validates its own payload length */
-
-typedef void (*CommandHandler)(ApiTransport t, uint16_t opcode,
-                               const uint8_t *pl, uint16_t paylen);
-
-typedef struct {
-    uint8_t        resource;
-    uint16_t       exact_len;   /* required payload length, or CMD_LEN_ANY */
-    CommandHandler handler;
-} CommandDesc;
-
-static void cmd_test_beep(ApiTransport t, uint16_t opcode,
-                          const uint8_t *pl, uint16_t paylen)
+static Api2Status unsubscribe(ApiTransport t, const ApiResource *r)
 {
-    (void)pl; (void)paylen;
-    drv_buzzer_beep(BUZZER_TONE_CLICK, 100U);
-    svc_log(API2_LOG_INFO, "cmd: test beep");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-static void cmd_displacement(ApiTransport t, uint16_t opcode,
-                             const uint8_t *pl, uint16_t paylen)
-{
-    (void)paylen;
-    uint8_t on = pl[0];
-    if (on > 1U) {
-        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-        return;
+    ApiSub *s = &s_t[t].sub[r->slot];
+    if (!s->active) {
+        return API2_STATUS_NOT_SUBSCRIBED;
     }
-    /* The ADC can only serve one consumer: a raw bulk capture and the phasor
-     * stream own it while they run. A "stop" would leave the capture never
-     * finishing (every later bulk request BUSY), a "start" would look like it
-     * worked while the demod math stays bypassed. */
-    if (s_bulk.active || svc_displacement_phasor_stream_active()) {
-        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
-        return;
+    if (r->sub == API2_SUB_EVENT && r->ev->stop) {
+        r->ev->stop(r, t, s);
     }
-    if (on) {
-        /* A start while the demod is already running is a true no-op
-         * (svc_displacement_start()); the only failure is the ADS131M04 not
-         * having initialised at boot (g_system_state.ads_ok false), which is
-         * reported as BUSY_RESOURCE. */
-        if (svc_displacement_start() != DRV_OK) {
-            send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-            return;
-        }
-    } else {
-        svc_displacement_stop();
-    }
-    svc_logf(API2_LOG_INFO, "cmd: displacement %s", on ? "start" : "stop");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+    s->active = false;
+    return API2_STATUS_OK;
 }
 
-static void cmd_force_charge(ApiTransport t, uint16_t opcode,
-                             const uint8_t *pl, uint16_t paylen)
+static void clear_subs(ApiTransport t)
 {
-    (void)pl; (void)paylen;
-    svc_battery_force_charge();
-    svc_log(API2_LOG_INFO, "cmd: force charge");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-static void cmd_end_charging(ApiTransport t, uint16_t opcode,
-                             const uint8_t *pl, uint16_t paylen)
-{
-    (void)pl; (void)paylen;
-    svc_battery_cancel_force_charge();
-    svc_log(API2_LOG_INFO, "cmd: end charging");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-static void cmd_charge_inhibit(ApiTransport t, uint16_t opcode,
-                               const uint8_t *pl, uint16_t paylen)
-{
-    (void)paylen;
-    uint8_t action = pl[0];
-    if (action > 1U) {
-        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-        return;
-    }
-    svc_battery_set_charge_inhibit(action != 0U);
-    svc_logf(API2_LOG_INFO, "cmd: charge inhibit %s", action ? "set" : "cleared");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-static void cmd_power_test(ApiTransport t, uint16_t opcode,
-                           const uint8_t *pl, uint16_t paylen)
-{
-    (void)paylen;
-    uint32_t mask = (uint32_t)pl[0] | ((uint32_t)pl[1] << 8)
-                  | ((uint32_t)pl[2] << 16) | ((uint32_t)pl[3] << 24);
-    svc_powertest_apply(mask);
-    uint32_t applied = svc_powertest_mask();
-    uint8_t rsp[4] = { (uint8_t)applied, (uint8_t)(applied >> 8),
-                       (uint8_t)(applied >> 16), (uint8_t)(applied >> 24) };
-    send_response(t, opcode, API2_STATUS_OK, rsp, sizeof rsp);
-}
-
-static void cmd_pin_test(ApiTransport t, uint16_t opcode,
-                         const uint8_t *pl, uint16_t paylen)
-{
-    (void)paylen;
-    uint8_t p = pl[0];
-    if (p & 0x80U) {
-        svc_log(API2_LOG_WARN, "pintest: reboot");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        for (volatile uint32_t i = 0; i < 400000U; ++i) { }   /* let the frame drain */
-        hal_power_reset();
-    }
-    hal_pintest_apply(p & 0x3FU, (p & 0x40U) != 0U);
-    svc_logf(API2_LOG_WARN, "pintest: pat 0x%02X%s", p & 0x3FU,
-             (p & 0x40U) ? " (DISP_ON allowed)" : "");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-static void cmd_reboot_dfu(ApiTransport t, uint16_t opcode,
-                           const uint8_t *pl, uint16_t paylen)
-{
-    (void)pl; (void)paylen;
-    svc_log(API2_LOG_WARN, "cmd: reboot to DFU (nBOOT0=0; reflash with nBOOT0=1 to recover)");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-    /* Let the response frame drain out of the transport before we go
-     * offline (same approach as PIN_TEST's reboot bit). */
-    for (volatile uint32_t i = 0; i < 400000U; ++i) { }
-    hal_dfu_enter_bootloader();
-}
-
-/* Zero calibration (180-degree reversal test) -- see svc_api.h's
- * API2_RES_CMD_ZERO_CAL comment and Config/config.h's "Displacement zero
- * calibration" comment for the procedure/math. Applying the RESULT_READY
- * phase (writing g_device_settings + the EEPROM save) happens in
- * svc_api_update() below, not here -- step 2's EXECUTE just arms the
- * averaging and acks immediately; the result isn't ready until
- * DISPLACEMENT_ZERO_CAL_SAMPLES batches later. */
-static void cmd_zero_cal(ApiTransport t, uint16_t opcode,
-                         const uint8_t *pl, uint16_t paylen)
-{
-    /* Payload: 1 byte action, optionally followed (step 1 only) by a sensor
-     * mask, bit 0 = S1, bit 1 = S2 (default and 3 = both). Step 2 continues
-     * the sensors chosen in step 1. */
-    if (paylen < 1U || paylen > 2U) {            /* the table says CMD_LEN_ANY: pl[0] would be the CRC */
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    uint8_t action = pl[0];
-    uint8_t mask   = (paylen >= 2U) ? pl[1] : ZERO_CAL_SENSORS_BOTH;
-    DrvStatus rc;
-    if (action != 1U && paylen != 1U) {          /* only step 1 carries a sensor mask */
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    switch (action) {
-        case 0U:
-            svc_displacement_zero_cal_cancel();
-            svc_log(API2_LOG_INFO, "cmd: zero-cal cancelled");
-            send_response(t, opcode, API2_STATUS_OK, 0, 0);
-            return;
-        case 1U:
-            if ((mask & ZERO_CAL_SENSORS_BOTH) == 0U || paylen > 2U) {
-                send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-                return;
+    if (t >= API_TRANSPORT_COUNT) return;
+    for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
+        const ApiCategory *c = &g_api_categories[ci];
+        for (uint8_t i = 0; i < c->count; ++i) {
+            const ApiResource *r = &c->res[i];
+            if (r->sub == API2_SUB_NONE) continue;
+            ApiSub *s = &s_t[t].sub[r->slot];
+            if (s->active && r->sub == API2_SUB_EVENT && r->ev && r->ev->stop) {
+                r->ev->stop(r, t, s);   /* subscriber gone: release whatever it armed */
             }
-            rc = svc_displacement_zero_cal_step1_begin(mask);
-            break;
-        case 2U:
-            rc = svc_displacement_zero_cal_step2_begin();
-            break;
-        default:
-            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-            return;
-    }
-    if (rc != DRV_OK) {
-        /* Not running yet, or the wrong step for the current phase
-         * (e.g. step 2 before step 1 finished) -- same BUSY_RESOURCE
-         * mapping the bulk-capture begin() failures use. */
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    svc_logf(API2_LOG_INFO, "cmd: zero-cal step %u started (sensors 0x%02X)",
-             (unsigned)action, (unsigned)svc_displacement_zero_cal_get_mask());
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-/* Triggered precision measurement -- see svc_api.h's API2_RES_CMD_PRECISION_MEASURE
- * comment. Just arms/cancels the run and acks immediately; a host polls
- * Raw data (0x7) resource 0x04 for progress and the final averaged result. */
-static void cmd_precision_measure(ApiTransport t, uint16_t opcode,
-                                   const uint8_t *pl, uint16_t paylen)
-{
-    (void)paylen;
-    uint8_t action = pl[0];
-    switch (action) {
-        case 0U: {
-            DrvStatus rc = svc_displacement_precision_begin();
-            if (rc != DRV_OK) {
-                /* Not running yet, or a zero-cal is currently using the
-                 * batch stream -- same BUSY_RESOURCE mapping zero-cal's
-                 * own begin() failures use. */
-                send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-                return;
-            }
-            svc_log(API2_LOG_INFO, "cmd: precision measurement started");
-            send_response(t, opcode, API2_STATUS_OK, 0, 0);
-            return;
-        }
-        case 1U:
-            svc_displacement_precision_cancel();
-            svc_log(API2_LOG_INFO, "cmd: precision measurement cancelled");
-            send_response(t, opcode, API2_STATUS_OK, 0, 0);
-            return;
-        default:
-            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-            return;
-    }
-}
-
-static const CommandDesc s_commands[] = {
-    { API2_RES_CMD_TEST_BEEP,       0U, cmd_test_beep       },
-    { API2_RES_CMD_DISPLACEMENT,    1U, cmd_displacement    },
-    { API2_RES_CMD_FORCE_CHARGE,    0U, cmd_force_charge    },
-    { API2_RES_CMD_POWER_TEST,      4U, cmd_power_test      },
-    { API2_RES_CMD_PIN_TEST,        1U, cmd_pin_test        },
-    { API2_RES_CMD_ZERO_CAL,        CMD_LEN_ANY, cmd_zero_cal },   /* 1 or 2 bytes, validated in the handler */
-    { API2_RES_CMD_REBOOT_DFU,      0U, cmd_reboot_dfu      },
-    { API2_RES_CMD_PRECISION_MEASURE, 1U, cmd_precision_measure },
-    { API2_RES_CMD_END_CHARGING,      0U, cmd_end_charging     },
-    { API2_RES_CMD_CHARGE_INHIBIT,    1U, cmd_charge_inhibit   },
-};
-#define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
-
-static void dispatch_commands(ApiTransport t, uint16_t opcode, uint8_t verb,
-                              uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_EXECUTE) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    const CommandDesc *cmd = 0;
-    for (size_t i = 0; i < COMMAND_COUNT; ++i) {
-        if (s_commands[i].resource == res) { cmd = &s_commands[i]; break; }
-    }
-    if (cmd == 0) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-    if (cmd->exact_len != CMD_LEN_ANY && paylen != cmd->exact_len) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    cmd->handler(t, opcode, &frame[API2_PACKET_HDR_BYTES], paylen);
-}
-
-/* ---------------- Bulk transfers (0x8: START_BULK, CANCEL_BULK) ---------------- */
-
-static void bulk_abort(void)
-{
-    svc_displacement_capture_end();
-    s_bulk.active = false;
-    s_bulk.phase  = BULK_IDLE;
-}
-
-static void dispatch_bulk(ApiTransport t, uint16_t opcode, uint8_t verb,
-                          uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_START_BULK && verb != API2_VERB_CANCEL_BULK) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    if (res != API2_RES_BULK_RAW_ADC) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-
-    if (verb == API2_VERB_CANCEL_BULK) {
-        if (!s_bulk.active) {
-            send_response(t, opcode, API2_STATUS_NOTHING_TO_CANCEL, 0, 0);
-            return;
-        }
-        bulk_abort();
-        svc_log(API2_LOG_INFO, "bulk: cancelled");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    /* START_BULK */
-    if (s_bulk.active) {
-        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
-        return;
-    }
-    if (!g_system_state.ads_ok) {
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    if (svc_displacement_is_running()) {
-        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
-        return;
-    }
-    DrvStatus rc = svc_displacement_capture_begin();
-    if (rc != DRV_OK) {
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    s_bulk.active    = true;
-    s_bulk.phase     = BULK_CAPTURING;
-    s_bulk.transport = t;
-    s_bulk.opcode    = opcode;
-    s_bulk.send_pos  = 0;
-    s_bulk.page      = 0;
-    svc_log(API2_LOG_INFO, "bulk: raw adc capture started");
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-/* Chunk pump for the raw-ADC capture (called from bulk_pump() below). */
-static void bulk_pump_raw_adc(ApiTransport t)
-{
-    if (s_bulk.phase == BULK_CAPTURING) {
-        if (!svc_displacement_capture_done()) return;
-        uint16_t drops = svc_displacement_capture_drops();
-        svc_displacement_capture_end();   /* stop the stream ASAP */
-        s_bulk.phase    = BULK_SENDING;
-        s_bulk.send_pos = 0;
-        s_bulk.page     = 0;
-        svc_logf(API2_LOG_INFO, "bulk: raw adc capture full, %u ring overflows", (unsigned)drops);
-    }
-
-    const uint8_t *buf   = svc_displacement_capture_buffer();   /* total * BPS bytes */
-    const uint16_t total = svc_displacement_capture_sample_count();
-    const ApiReadyFn ready = s_t[t].ready_fn;
-    enum { BPS = ADC_BULK_BYTES_PER_SAMPLE };
-
-    for (uint8_t c = 0; c < ADC_BULK_CHUNKS_PER_TICK && s_bulk.send_pos < total; ++c) {
-        if (ready != 0 && !ready()) break;   /* let the link drain */
-
-        uint16_t k = (uint16_t)(total - s_bulk.send_pos);
-        if (k > ADC_BULK_CHUNK_SAMPLES) k = ADC_BULK_CHUNK_SAMPLES;
-
-        uint8_t payload[1U + ADC_BULK_CHUNK_SAMPLES * BPS];
-        payload[0] = s_bulk.page++;
-        memcpy(&payload[1], &buf[(size_t)s_bulk.send_pos * BPS], (size_t)k * BPS);
-
-        send_framed(t, s_bulk.opcode, API2_STATUS_OK, payload,
-                    (uint16_t)(1U + (size_t)k * BPS), false);
-        s_bulk.send_pos = (uint16_t)(s_bulk.send_pos + k);
-    }
-
-    if (s_bulk.send_pos >= total) {
-        svc_logf(API2_LOG_INFO, "bulk: raw adc sent (%u samples)", (unsigned)total);
-        s_bulk.active = false;
-        s_bulk.phase  = BULK_IDLE;
-    }
-}
-
-/* Chunk pump — runs from svc_api_update() each tick while a bulk transfer
- * is active. CAPTURING: wait for the RAM buffer to fill. SENDING: emit a
- * few chunks, but only while the owning transport's TX ring has headroom
- * (ready_fn) so we pace to the wire and yield to other traffic between
- * bursts (spec §4.1). Dispatches to whichever resource's own pump is
- * actually running this transfer. */
-static void bulk_pump(void)
-{
-    if (!s_bulk.active) return;
-
-    ApiTransport t = s_bulk.transport;
-    if (!s_t[t].connected) {           /* peer vanished mid-transfer */
-        bulk_abort();
-        return;
-    }
-    /* The acquisition died while the buffer was still filling (an ADC integrity
-     * fault stops it): capture_done() would never become true and every later
-     * bulk request would get BUSY_EXCLUSIVE until a host cancelled. */
-    if (s_bulk.phase == BULK_CAPTURING && !svc_displacement_capture_done()
-        && !svc_displacement_is_running()) {
-        svc_log(API2_LOG_ERROR, "bulk: acquisition stopped during the capture -- aborted");
-        bulk_abort();
-        return;
-    }
-
-    bulk_pump_raw_adc(t);
-}
-
-/* ---------------- Raw data (0x7: GET) ---------------- */
-
-static void dispatch_raw_data(ApiTransport t, uint16_t opcode, uint8_t verb,
-                              uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_GET) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    if (res != API2_RES_RAW_ADC_DIAG && res != API2_RES_RAW_PWRTEST
-        && res != API2_RES_RAW_DISPLACEMENT_DIAG && res != API2_RES_RAW_ZERO_CAL_STATUS
-        && res != API2_RES_RAW_PRECISION_STATUS) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-
-    if (res == API2_RES_RAW_PWRTEST) {
-        uint32_t mask = svc_powertest_mask();
-        uint8_t p[5] = {
-            (uint8_t)mask, (uint8_t)(mask >> 8), (uint8_t)(mask >> 16), (uint8_t)(mask >> 24),
-            (uint8_t)((hal_power_rail_3v3_on() ? 0x01U : 0U)
-                    | (hal_power_rail_5v_on()  ? 0x02U : 0U)),
-        };
-        send_response(t, opcode, API2_STATUS_OK, p, sizeof p);
-        return;
-    }
-
-    if (res == API2_RES_RAW_DISPLACEMENT_DIAG) {
-        struct __attribute__((packed)) {
-            uint16_t input_drop, output_drop, degenerate;
-            uint8_t  disp_ok;
-            uint16_t phasor_log_progress;
-            uint16_t clip_count, amplitude_fault_count;
-            uint16_t max_update_gap_ms;
-            uint32_t max_gap_at_uptime_ms;
-            uint16_t gap_over_threshold_count;
-        } p;
-        p.input_drop  = svc_displacement_get_input_drop_count();
-        p.output_drop = svc_displacement_get_output_drop_count();
-        p.degenerate  = svc_displacement_get_degenerate_count();
-        p.disp_ok     = svc_displacement_get_ok() ? 1U : 0U;
-        p.phasor_log_progress = 0U;   /* the bulk phasor log was removed 2026-10-07; field kept for the wire layout */
-        p.clip_count            = svc_displacement_get_clip_count();
-        p.amplitude_fault_count = svc_displacement_get_amplitude_fault_count();
-        /* Local temporaries -- see the zero-cal/precision-status blocks
-         * above for why taking the address of a packed struct's members
-         * directly is a real -Werror hazard on this build. */
-        uint16_t gap_ms, over_count;
-        uint32_t gap_at_ms;
-        svc_displacement_get_max_update_gap(&gap_ms, &gap_at_ms, &over_count);
-        p.max_update_gap_ms         = gap_ms;
-        p.max_gap_at_uptime_ms      = gap_at_ms;
-        p.gap_over_threshold_count  = over_count;
-        send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
-        return;
-    }
-
-    if (res == API2_RES_RAW_ZERO_CAL_STATUS) {
-        struct __attribute__((packed)) {
-            uint8_t  phase;
-            uint16_t progress, target;
-            uint8_t  sensor_mask;   /* appended 2026-10-06: sensors covered by the current run */
-        } p;
-        uint16_t progress, target;
-        p.phase = (uint8_t)svc_displacement_zero_cal_get_phase();
-        svc_displacement_zero_cal_progress(&progress, &target);
-        p.progress = progress;
-        p.target   = target;
-        p.sensor_mask = svc_displacement_zero_cal_get_mask();
-        send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
-        return;
-    }
-
-    if (res == API2_RES_RAW_PRECISION_STATUS) {
-        struct __attribute__((packed)) {
-            uint8_t  phase;
-            uint16_t target, count1, count2, count_diff;
-            uint32_t elapsed_ms;
-            uint8_t  timed_out;      /* 1 = error: no clean window in time */
-            float    delta1_mm, delta2_mm, delta_diff_mm;
-            uint8_t  disturbed;      /* appended 2026-10-07 */
-        } p;
-        _Static_assert(sizeof p == 27U, "precision status response layout (27 B, see svc_api.h)");
-        /* Local (non-packed) temporaries -- svc_displacement_precision_progress()
-         * takes pointers, and taking the address of a packed struct's
-         * members directly is a real -Werror=address-of-packed-member
-         * hazard on this Cortex-M0+ build (bitten by this exact issue
-         * with zero-cal's progress earlier -- see that history). */
-        uint16_t target, count1, count2, count_diff;
-        uint32_t elapsed_ms;
-        p.phase = (uint8_t)svc_displacement_precision_get_phase();
-        svc_displacement_precision_progress(&count1, &count2, &count_diff, &target, &elapsed_ms);
-        p.target = target;  p.count1 = count1;  p.count2 = count2;  p.count_diff = count_diff;
-        p.elapsed_ms = elapsed_ms;
-        bool timed_out = false;
-        float d1 = 0.0f, d2 = 0.0f, ddiff = 0.0f;
-        (void)svc_displacement_precision_get_result(&d1, &d2, &ddiff, &timed_out);
-        p.timed_out = timed_out ? 1U : 0U;
-        p.delta1_mm = d1;
-        p.delta2_mm = d2;
-        p.delta_diff_mm = ddiff;
-        p.disturbed = svc_displacement_precision_get_disturbed() ? 1U : 0U;
-        send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
-        return;
-    }
-
-    const Ads131m04Regs *r = drv_ads131m04_get_regs();
-    const volatile Ads131m04Integrity *ig = drv_ads131m04_get_integrity();
-    uint16_t samples = 0, drops = 0;
-    uint32_t elapsed = 0;
-    svc_displacement_last_capture(&samples, &drops, &elapsed);
-
-    struct __attribute__((packed)) {
-        uint16_t id, status, mode, clock, gain1, cfg;
-        uint16_t clock_expected;
-        uint8_t  regs_read_ok;
-        uint8_t  ads_ok;
-        uint16_t last_samples;
-        uint16_t last_drops;
-        uint32_t last_elapsed_ms;
-        /* acquisition integrity (docs/adc_acquisition_redesign.md) */
-        uint32_t frames_produced;
-        uint32_t frames_drained;
-        uint32_t tim7_fires;
-        uint32_t ring_overflow;
-        uint32_t drain_clamped;
-        uint32_t framing_err;
-        uint32_t crc_err;
-        uint32_t run_ms;
-        int32_t  frame_deficit;
-        int32_t  frame_deficit_min;
-        int32_t  frame_deficit_max;
-        uint16_t drain_clamp_max;
-        uint16_t word0_last;
-        uint16_t crc_rx_last;
-        uint16_t crc_calc_last;
-        uint8_t  fault_code;
-        uint32_t now_ms;            /* device SysTick ms — a clock-independent
-                                       time base for rate checks */
-    } p;
-    p.id              = r->id;
-    p.status          = r->status;
-    p.mode            = r->mode;
-    p.clock           = r->clock;
-    p.gain1           = r->gain1;
-    p.cfg             = r->cfg;
-    p.clock_expected  = r->clock_expected;
-    p.regs_read_ok    = r->read_ok ? 1U : 0U;
-    p.ads_ok          = g_system_state.ads_ok ? 1U : 0U;
-    p.last_samples    = samples;
-    p.last_drops      = drops;
-    p.last_elapsed_ms = elapsed;
-    p.frames_produced = ig->frames_produced;
-    p.frames_drained  = ig->frames_drained;
-    p.tim7_fires      = ig->tim7_fires;
-    p.ring_overflow   = ig->ring_overflow;
-    p.drain_clamped   = ig->drain_clamped;
-    p.framing_err       = ig->framing_err;
-    p.crc_err           = ig->crc_err;
-    p.run_ms            = ig->run_ms;
-    p.frame_deficit     = ig->frame_deficit;
-    p.frame_deficit_min = ig->frame_deficit_min;
-    p.frame_deficit_max = ig->frame_deficit_max;
-    p.drain_clamp_max   = ig->drain_clamp_max;
-    p.word0_last        = ig->word0_last;
-    p.crc_rx_last     = ig->crc_rx_last;
-    p.crc_calc_last   = ig->crc_calc_last;
-    p.fault_code      = ig->fault_code;
-    p.now_ms          = hal_systick_get_ms();
-
-    send_response(t, opcode, API2_STATUS_OK, (const uint8_t *)&p, sizeof p);
-}
-
-/* ---------------- Measurements (0x4: GET, SUBSCRIBE, UNSUBSCRIBE) ---------------- */
-
-#define MEAS_VALUE_MAX_LEN 4U
-typedef uint16_t (*MeasurementReadFn)(uint8_t *buf);
-
-static uint16_t read_onboard_temp(uint8_t *buf)
-{
-    int16_t v = g_system_state.temperature_cdeg;
-    memcpy(buf, &v, sizeof v);
-    return sizeof v;
-}
-static uint16_t read_battery_mv(uint8_t *buf)
-{
-    uint16_t v = svc_battery_get_vbat_mv();
-    memcpy(buf, &v, sizeof v);
-    return sizeof v;
-}
-static uint16_t read_battery_soc(uint8_t *buf)
-{
-    buf[0] = svc_battery_get_soc_pct();
-    return 1U;
-}
-static uint16_t read_bme280_temp(uint8_t *buf)
-{
-    int16_t v = g_system_state.bme280_temp_cdeg;
-    memcpy(buf, &v, sizeof v);
-    return sizeof v;
-}
-static uint16_t read_bme280_press(uint8_t *buf)
-{
-    uint32_t v = g_system_state.bme280_pressure_pa;
-    memcpy(buf, &v, sizeof v);
-    return sizeof v;
-}
-static uint16_t read_bme280_humid(uint8_t *buf)
-{
-    uint16_t v = g_system_state.bme280_humidity_centipct;
-    memcpy(buf, &v, sizeof v);
-    return sizeof v;
-}
-static uint16_t read_bme280_ok(uint8_t *buf)
-{
-    buf[0] = g_system_state.bme280_ok ? 1U : 0U;
-    return 1U;
-}
-static uint16_t read_ext_temp(uint8_t *buf)
-{
-    int16_t v = g_system_state.temp_ext_cdeg;
-    memcpy(buf, &v, sizeof v);
-    return sizeof v;
-}
-static uint16_t read_ext_temp_ok(uint8_t *buf)
-{
-    buf[0] = g_system_state.temp_ext_ok ? 1U : 0U;
-    return 1U;
-}
-/* Displacement (WP10) -- float32 LE, memcpy'd as raw bytes like every
- * other fixed-width field here (Cortex-M0+ is little-endian, matching
- * the wire's declared byte order). */
-static uint16_t read_disp1_delta(uint8_t *buf)
-{
-    float v = svc_displacement_get_delta1_mm();
-    memcpy(buf, &v, sizeof(float));
-    return sizeof(float);
-}
-static uint16_t read_disp1_residual(uint8_t *buf)
-{
-    float v = svc_displacement_get_residual1();
-    memcpy(buf, &v, sizeof(float));
-    return sizeof(float);
-}
-static uint16_t read_disp2_delta(uint8_t *buf)
-{
-    float v = svc_displacement_get_delta2_mm();
-    memcpy(buf, &v, sizeof(float));
-    return sizeof(float);
-}
-static uint16_t read_disp2_residual(uint8_t *buf)
-{
-    float v = svc_displacement_get_residual2();
-    memcpy(buf, &v, sizeof(float));
-    return sizeof(float);
-}
-static uint16_t read_disp_ok(uint8_t *buf)
-{
-    buf[0] = svc_displacement_get_ok() ? 1U : 0U;
-    return 1U;
-}
-static uint16_t read_disp_diff_delta(uint8_t *buf)
-{
-    float v = svc_displacement_get_delta_diff_mm();
-    memcpy(buf, &v, sizeof(float));
-    return sizeof(float);
-}
-
-typedef struct {
-    uint8_t           resource;
-    MeasurementReadFn read;
-} MeasurementResourceDesc;
-
-static const MeasurementResourceDesc s_meas_resources[] = {
-    { API2_RES_MEAS_ONBOARD_TEMP, read_onboard_temp },
-    { API2_RES_MEAS_BATTERY_MV,   read_battery_mv },
-    { API2_RES_MEAS_BATTERY_SOC,  read_battery_soc },
-    { API2_RES_MEAS_BME280_TEMP,  read_bme280_temp },
-    { API2_RES_MEAS_BME280_PRESS, read_bme280_press },
-    { API2_RES_MEAS_BME280_HUMID, read_bme280_humid },
-    { API2_RES_MEAS_BME280_OK,    read_bme280_ok },
-    { API2_RES_MEAS_EXT_TEMP,     read_ext_temp },
-    { API2_RES_MEAS_EXT_TEMP_OK,  read_ext_temp_ok },
-    { API2_RES_MEAS_DISP1_DELTA_MM, read_disp1_delta },
-    { API2_RES_MEAS_DISP1_RESIDUAL, read_disp1_residual },
-    { API2_RES_MEAS_DISP2_DELTA_MM, read_disp2_delta },
-    { API2_RES_MEAS_DISP2_RESIDUAL, read_disp2_residual },
-    { API2_RES_MEAS_DISP_OK,        read_disp_ok },
-    { API2_RES_MEAS_DISP_DIFF_MM,   read_disp_diff_delta },
-};
-#define MEAS_RESOURCE_COUNT (sizeof(s_meas_resources) / sizeof(s_meas_resources[0]))
-
-static const MeasurementResourceDesc *find_meas_resource(uint8_t res)
-{
-    for (size_t i = 0; i < MEAS_RESOURCE_COUNT; ++i) {
-        if (s_meas_resources[i].resource == res) {
-            return &s_meas_resources[i];
         }
     }
-    return 0;
-}
-
-static void dispatch_measurements(ApiTransport t, uint16_t opcode, uint8_t verb,
-                                  uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_GET && verb != API2_VERB_SUBSCRIBE && verb != API2_VERB_UNSUBSCRIBE) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    const MeasurementResourceDesc *desc = find_meas_resource(res);
-    if (desc == 0 || res >= API2_MEASUREMENT_SLOTS) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-
-    if (verb == API2_VERB_GET) {
-        if (paylen != 0U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint8_t  val[MEAS_VALUE_MAX_LEN];
-        uint16_t vlen = desc->read(val);
-        send_response(t, opcode, API2_STATUS_OK, val, vlen);
-        return;
-    }
-
-    if (verb == API2_VERB_SUBSCRIBE) {
-        if (paylen != 4U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint32_t interval_ms = (uint32_t)frame[API2_PACKET_HDR_BYTES + 0U]
-                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 1U] << 8)
-                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 2U] << 16)
-                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 3U] << 24);
-        if (interval_ms < API2_MEASUREMENT_MIN_INTERVAL_MS
-            || interval_ms > API2_MEASUREMENT_MAX_INTERVAL_MS) {
-            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-            return;
-        }
-        MeasurementSubSlot *slot = &s_t[t].meas[res];
-        if (!slot->active) {
-            slot->issue_seq = 0;
-        }
-        slot->active       = true;
-        slot->interval_ms  = interval_ms;
-        slot->last_push_ms = hal_systick_get_ms();
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    /* UNSUBSCRIBE */
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    MeasurementSubSlot *slot = &s_t[t].meas[res];
-    if (!slot->active) {
-        send_response(t, opcode, API2_STATUS_NOT_SUBSCRIBED, 0, 0);
-        return;
-    }
-    slot->active = false;
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-/* ---------------- Topic groups (0x5: GET, SUBSCRIBE, UNSUBSCRIBE) ---------------- */
-
-typedef uint16_t (*TopicBuildFn)(uint8_t *buf);
-
-static uint16_t build_topic_env(uint8_t *buf)
-{
-    Api2TopicEnvPayload p;
-    p.bme280_temp_cdeg     = g_system_state.bme280_temp_cdeg;
-    p.bme280_pressure_pa   = g_system_state.bme280_pressure_pa;
-    p.bme280_humidity_cpct = g_system_state.bme280_humidity_centipct;
-    p.bme280_ok            = g_system_state.bme280_ok ? 1U : 0U;
-    p.onboard_temp_cdeg    = g_system_state.temperature_cdeg;
-    p.external_temp_cdeg   = g_system_state.temp_ext_cdeg;
-    p.external_temp_ok     = g_system_state.temp_ext_ok ? 1U : 0U;
-    memcpy(buf, &p, sizeof p);
-    return sizeof p;
-}
-
-static uint16_t build_topic_status(uint8_t *buf)
-{
-    Api2TopicStatusPayload p;
-    p.battery_mv      = svc_battery_get_vbat_mv();
-    p.battery_soc_pct = svc_battery_get_soc_pct();
-    p.battery_state   = (uint8_t)svc_battery_get_state();
-    p.usb_connected   = g_system_state.usb_connected     ? 1U : 0U;
-    p.ble_connected   = g_system_state.ble_connected     ? 1U : 0U;
-    p.charging        = svc_battery_is_charging()        ? 1U : 0U;
-    p.force_charging  = svc_battery_is_force_charging()  ? 1U : 0U;
-    p.charge_inhibited = svc_battery_is_charge_inhibited() ? 1U : 0U;
-    p.rail_3v3_on     = hal_power_rail_3v3_on()          ? 1U : 0U;
-    p.rail_5v_on      = hal_power_rail_5v_on()           ? 1U : 0U;
-
-    rtc_datetime_t dt;
-    hal_rtc_get(&dt);
-    p.rtc_year   = dt.year;
-    p.rtc_month  = dt.month;
-    p.rtc_day    = dt.day;
-    p.rtc_hour   = dt.hour;
-    p.rtc_minute = dt.minute;
-    p.rtc_second = dt.second;
-    p.rtc_set    = hal_rtc_is_set() ? 1U : 0U;
-    memcpy(buf, &p, sizeof p);
-    return sizeof p;
-}
-
-static uint16_t build_topic_phasors(uint8_t *buf)
-{
-    DisplacementPhasors ph;
-    svc_displacement_get_phasors(&ph);
-    Api2TopicPhasorsPayload p;
-    p.iB = ph.iB;   p.qB = ph.qB;
-    p.iA = ph.iA;   p.qA = ph.qA;
-    p.iS1 = ph.iS1; p.qS1 = ph.qS1;
-    p.iS2 = ph.iS2; p.qS2 = ph.qS2;
-    memcpy(buf, &p, sizeof p);
-    return sizeof p;
-}
-
-static uint16_t build_topic_raw_displacement(uint8_t *buf)
-{
-    Api2TopicRawDisplacementPayload p;
-    p.delta1_mm_raw = svc_displacement_get_delta1_mm_raw();
-    p.residual1     = svc_displacement_get_residual1();
-    p.delta2_mm_raw = svc_displacement_get_delta2_mm_raw();
-    p.residual2     = svc_displacement_get_residual2();
-    p.quality1_ok   = svc_displacement_get_quality1_ok() ? 1U : 0U;
-    p.quality2_ok   = svc_displacement_get_quality2_ok() ? 1U : 0U;
-    p.delta_diff_mm_raw = svc_displacement_get_delta_diff_mm_raw();
-    p.quality_diff_ok   = svc_displacement_get_quality_diff_ok() ? 1U : 0U;
-    memcpy(buf, &p, sizeof p);
-    return sizeof p;
-}
-
-static uint16_t build_topic_signal_diag(uint8_t *buf)
-{
-    DisplacementSignalDiag d;
-    svc_displacement_get_signal_diag(&d);
-    Api2TopicSignalDiagPayload p;
-    for (uint8_t ch = 0; ch < 4U; ++ch) {
-        p.rms_mv[ch]   = d.rms_mv[ch];
-        p.p2p_mv[ch]   = d.p2p_mv[ch];
-        p.phase_deg[ch] = d.phase_deg[ch];
-    }
-    p.theoretical_tilt1_mm_per_m = d.theoretical_tilt1_mm_per_m;
-    p.theoretical_tilt2_mm_per_m = d.theoretical_tilt2_mm_per_m;
-    memcpy(buf, &p, sizeof p);
-    return sizeof p;
-}
-
-typedef struct {
-    uint8_t      resource;
-    TopicBuildFn build;
-} TopicResourceDesc;
-
-static const TopicResourceDesc s_topic_resources[] = {
-    { API2_RES_TOPIC_ENV,              build_topic_env },
-    { API2_RES_TOPIC_STATUS,           build_topic_status },
-    { API2_RES_TOPIC_PHASORS,          build_topic_phasors },
-    { API2_RES_TOPIC_RAW_DISPLACEMENT, build_topic_raw_displacement },
-    { API2_RES_TOPIC_SIGNAL_DIAG,      build_topic_signal_diag },
-};
-#define TOPIC_RESOURCE_COUNT (sizeof(s_topic_resources) / sizeof(s_topic_resources[0]))
-
-static const TopicResourceDesc *find_topic_resource(uint8_t res)
-{
-    for (size_t i = 0; i < TOPIC_RESOURCE_COUNT; ++i) {
-        if (s_topic_resources[i].resource == res) return &s_topic_resources[i];
-    }
-    return 0;
-}
-
-/* Phasor batch stream (Topic 0x05, svc_api.h): SUBSCRIBE arms the ADC +
- * the per-batch FIFO, UNSUBSCRIBE stops it. The push itself is event-driven
- * from svc_api_update(), not the interval loop. */
-static void dispatch_phasor_stream(ApiTransport t, uint16_t opcode, uint8_t verb,
-                                   const uint8_t *frame, uint16_t paylen)
-{
-    if (verb == API2_VERB_GET) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-    MeasurementSubSlot *slot = &s_t[t].topic[API2_RES_TOPIC_PHASOR_STREAM];
-
-    if (verb == API2_VERB_SUBSCRIBE) {
-        if (paylen != 4U) {   /* interval field kept for wire-compat with the other topics; ignored */
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        if (slot->active) {
-            send_response(t, opcode, API2_STATUS_OK, 0, 0);
-            return;
-        }
-        if (s_bulk.active || !g_system_state.ads_ok) {
-            send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
-            return;
-        }
-        if (svc_displacement_phasor_stream_begin() != DRV_OK) {
-            send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-            return;
-        }
-        slot->active    = true;
-        slot->issue_seq = 0;
-        svc_log(API2_LOG_INFO, "stream: phasor batch stream started");
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    /* UNSUBSCRIBE */
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    if (!slot->active) {
-        send_response(t, opcode, API2_STATUS_NOT_SUBSCRIBED, 0, 0);
-        return;
-    }
-    slot->active = false;
-    svc_displacement_phasor_stream_end();
-    svc_logf(API2_LOG_INFO, "stream: phasor batch stream stopped (%u FIFO drops)",
-             (unsigned)svc_displacement_phasor_stream_drops());
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-static void dispatch_topic_groups(ApiTransport t, uint16_t opcode, uint8_t verb,
-                                  uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_GET && verb != API2_VERB_SUBSCRIBE && verb != API2_VERB_UNSUBSCRIBE) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    if (res == API2_RES_TOPIC_PHASOR_STREAM) {
-        dispatch_phasor_stream(t, opcode, verb, frame, paylen);
-        return;
-    }
-    const TopicResourceDesc *desc = find_topic_resource(res);
-    if (desc == 0 || res >= API2_TOPIC_SLOTS) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-
-    if (verb == API2_VERB_GET) {
-        if (paylen != 0U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint8_t  val[TOPIC_VALUE_MAX_LEN];
-        uint16_t vlen = desc->build(val);
-        send_response(t, opcode, API2_STATUS_OK, val, vlen);
-        return;
-    }
-
-    if (verb == API2_VERB_SUBSCRIBE) {
-        if (paylen != 4U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint32_t interval_ms = (uint32_t)frame[API2_PACKET_HDR_BYTES + 0U]
-                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 1U] << 8)
-                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 2U] << 16)
-                              | ((uint32_t)frame[API2_PACKET_HDR_BYTES + 3U] << 24);
-        if (interval_ms < API2_MEASUREMENT_MIN_INTERVAL_MS
-            || interval_ms > API2_MEASUREMENT_MAX_INTERVAL_MS) {
-            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-            return;
-        }
-        MeasurementSubSlot *slot = &s_t[t].topic[res];
-        if (!slot->active) {
-            slot->issue_seq = 0;
-        }
-        slot->active       = true;
-        slot->interval_ms  = interval_ms;
-        slot->last_push_ms = hal_systick_get_ms();
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    /* UNSUBSCRIBE */
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    MeasurementSubSlot *slot = &s_t[t].topic[res];
-    if (!slot->active) {
-        send_response(t, opcode, API2_STATUS_NOT_SUBSCRIBED, 0, 0);
-        return;
-    }
-    slot->active = false;
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
-}
-
-/* ---------------- Settings (0x3: GET, SET) ---------------- */
-
-typedef enum { SF_UNSIGNED, SF_SIGNED } SettingsFieldType;   /* signedness only — width comes from sizeof(field) */
-
-typedef struct {
-    uint8_t           resource;
-    SettingsFieldType type;
-    uint8_t           size;    /* == sizeof(field), derived by SF() below */
-    size_t            offset;  /* offsetof(DeviceSettings, field) */
-    int64_t           min;
-    int64_t           max;
-} SettingsFieldDesc;
-
-/* size is sizeof(field), never a hand-typed literal — a wrong width is
- * then impossible by construction (was a real footgun: a copy-pasted
- * size-2 row for a 4-byte field silently truncated GET/SET). */
-#define SF(res, type, field, lo, hi) \
-    { (res), (type), (uint8_t)sizeof(((DeviceSettings *)0)->field), \
-      offsetof(DeviceSettings, field), (lo), (hi) }
-
-/* Bounds (tightened 2026-10-07: a host could persist a USB/BLE period of a
- * minute, or a critical-battery level above the normal operating range, and
- * brick the transports / force Standby on every boot): task_sensors_ms 1..1000,
- * task_ble/usb_ms 1..250, task_battery_ms 100..10000, task_temperature_ms
- * 100..60000, task_display_ms 1..60000 (no longer used by the scheduler);
- * battery_critical_mv 2500..3600, battery_low/charge_start_mv 3000..4200
- * (single-cell Li-ion real range); tmp236 voffs /
- * boundary 0..3300 (ADC VDDA); num/den ratio pairs 1..10000 (nonzero
- * divisors); lm35_scale 1..1000; encoder_counts 1..100; tmp236 tinfl
- * 0..20000 (0..200.00 degC); auto_poweroff_s 0..65535 (0 = disabled).
- *
- * Resource IDs 0x02 and 0x07..0x0B are retired (REV A task_processing /
- * stream_interval / settling / complementary-filter fields) — the gaps
- * are left so the surviving IDs keep their numbers. */
-static const SettingsFieldDesc s_settings_fields[] = {
-    SF(API2_RES_SET_TASK_SENSORS_MS,         SF_UNSIGNED,  task_sensors_ms,              1, 1000),
-    SF(API2_RES_SET_TASK_DISPLAY_MS,         SF_UNSIGNED,  task_display_ms,              1, 60000),
-    SF(API2_RES_SET_TASK_BLE_MS,             SF_UNSIGNED,  task_ble_ms,                  1, 250),
-    SF(API2_RES_SET_TASK_USB_MS,             SF_UNSIGNED,  task_usb_ms,                  1, 250),
-    SF(API2_RES_SET_TASK_BATTERY_MS,         SF_UNSIGNED,  task_battery_ms,            100, 10000),
-    SF(API2_RES_SET_TASK_TEMPERATURE_MS,     SF_UNSIGNED,  task_temperature_ms,        100, 60000),
-    SF(API2_RES_SET_BATTERY_CRITICAL_MV,     SF_UNSIGNED,  battery_critical_mv,       2500, 3600),
-    SF(API2_RES_SET_BATTERY_LOW_MV,          SF_UNSIGNED,  battery_low_mv,            3000, 4200),
-    SF(API2_RES_SET_BATTERY_CHARGE_START_MV, SF_UNSIGNED,  battery_charge_start_mv,   3000, 4200),
-    SF(API2_RES_SET_VBAT_SCALE_NUM,          SF_UNSIGNED,  vbat_scale_num,               1, 10000),
-    SF(API2_RES_SET_VBAT_SCALE_DEN,          SF_UNSIGNED,  vbat_scale_den,               1, 10000),
-    SF(API2_RES_SET_TMP236_SEG1_VOFFS_MV,    SF_UNSIGNED,  tmp236_seg1_voffs_mv,         0, 3300),
-    SF(API2_RES_SET_TMP236_SEG1_NUM,         SF_UNSIGNED,  tmp236_seg1_num,              1, 10000),
-    SF(API2_RES_SET_TMP236_SEG1_DEN,         SF_UNSIGNED,  tmp236_seg1_den,              1, 10000),
-    SF(API2_RES_SET_TMP236_SEG_BOUNDARY_MV,  SF_UNSIGNED,  tmp236_seg_boundary_mv,       0, 3300),
-    SF(API2_RES_SET_TMP236_SEG2_VOFFS_MV,    SF_UNSIGNED,  tmp236_seg2_voffs_mv,         0, 3300),
-    SF(API2_RES_SET_TMP236_SEG2_NUM,         SF_UNSIGNED,  tmp236_seg2_num,              1, 10000),
-    SF(API2_RES_SET_TMP236_SEG2_DEN,         SF_UNSIGNED,  tmp236_seg2_den,              1, 10000),
-    SF(API2_RES_SET_TMP236_SEG2_TINFL_CDEG,  SF_UNSIGNED,  tmp236_seg2_tinfl_cdeg,       0, 20000),
-    SF(API2_RES_SET_LM35_SCALE_MV_PER_C,     SF_UNSIGNED,  lm35_scale_mv_per_c,          1, 1000),
-    SF(API2_RES_SET_ENCODER_COUNTS_PER_DET,  SF_UNSIGNED,  encoder_counts_per_detent,    1, 100),
-    SF(API2_RES_SET_AUTO_POWEROFF_S,         SF_UNSIGNED,  auto_poweroff_s,              0, 65535),
-    SF(API2_RES_SET_VBAT_OFFSET_MV,          SF_SIGNED,    vbat_offset_mv,            -500, 500),
-};
-#define SETTINGS_FIELD_COUNT (sizeof(s_settings_fields) / sizeof(s_settings_fields[0]))
-
-static const SettingsFieldDesc *find_settings_field(uint8_t res)
-{
-    for (size_t i = 0; i < SETTINGS_FIELD_COUNT; ++i) {
-        if (s_settings_fields[i].resource == res) {
-            return &s_settings_fields[i];
-        }
-    }
-    return 0;
-}
-
-static int64_t parse_settings_value(const SettingsFieldDesc *d, const uint8_t *p)
-{
-    uint32_t u = 0;
-    for (uint8_t i = 0; i < d->size; ++i) {
-        u |= (uint32_t)p[i] << (8U * i);
-    }
-    if (d->type == SF_SIGNED) {
-        return (d->size == 4U) ? (int64_t)(int32_t)u : (int64_t)(int16_t)u;
-    }
-    return (int64_t)u;
-}
-
-static void dispatch_settings(ApiTransport t, uint16_t opcode, uint8_t verb,
-                              uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_GET && verb != API2_VERB_SET) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    const SettingsFieldDesc *desc = find_settings_field(res);
-    if (desc == 0) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-
-    if (verb == API2_VERB_GET) {
-        if (paylen != 0U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint8_t buf[4];
-        memcpy(buf, (const uint8_t *)&g_device_settings + desc->offset, desc->size);
-        send_response(t, opcode, API2_STATUS_OK, buf, desc->size);
-        return;
-    }
-
-    /* SET */
-    if (paylen != desc->size) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    if (svc_storage_is_busy()) {
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    int64_t val = parse_settings_value(desc, &frame[API2_PACKET_HDR_BYTES]);
-    if (val < desc->min || val > desc->max) {
-        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-        return;
-    }
-    /* Cross-field: battery_critical_mv < battery_low_mv (svc_battery.c's
-     * classify order). Per-field bounds can't express a 2-resource
-     * relationship; checked here for this one pair. */
-    if (res == API2_RES_SET_BATTERY_CRITICAL_MV && val >= g_device_settings.battery_low_mv) {
-        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-        return;
-    }
-    if (res == API2_RES_SET_BATTERY_LOW_MV && val <= g_device_settings.battery_critical_mv) {
-        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-        return;
-    }
-
-    uint32_t u = (uint32_t)val;
-    memcpy((uint8_t *)&g_device_settings + desc->offset, &u, desc->size);
-    svc_storage_validate_settings(&g_device_settings);
-    DrvStatus rc = svc_storage_save_settings(&g_device_settings);
-    if (rc == DRV_OK) {
-        if (s_settings_changed_fn) {
-            s_settings_changed_fn();   /* App re-applies (scheduler periods, ...) */
-        }
-        svc_logf(API2_LOG_INFO, "set: res 0x%02X saved", res);
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-    } else {
-        g_system_state.settings_save_failed = true;
-        svc_logf(API2_LOG_ERROR, "set: res 0x%02X save failed", res);
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-    }
-}
-
-/* ---------------- Calibrations (0x2: GET, SET) ----------------
- * Structurally identical to Settings above -- same SettingsFieldDesc /
- * SF() / parse_settings_value() machinery (those aren't Settings-
- * specific despite the name; they just describe a field within
- * DeviceSettings), a separate table and dispatch function only so the
- * two categories can evolve independently on the wire. First resources
- * in this category (WP10, 2026-09-24) -- see svc_api.h's Calibrations
- * comment for why displacement calibration lives here, not Settings. */
-static const SettingsFieldDesc s_calibration_fields[] = {
-    /* Tilt calibration (2026-10-06 redesign): k x1e-6 at PGA 1, zero in ppm
-     * of the ratio. k bounds 0.0001..1.0 per mm/m are wide headroom around
-     * the nominal 0.0213 and catch a value typed in the wrong unit. */
-    SF(API2_RES_CALIB_DISP_S1_K_MICRO,        SF_SIGNED,   disp_s1_k_micro,            100, 1000000),
-    SF(API2_RES_CALIB_DISP_S1_ZERO_PPM,       SF_SIGNED,   disp_s1_zero_ppm,
-       -DISPLACEMENT_ZERO_PPM_MAX, DISPLACEMENT_ZERO_PPM_MAX),
-    SF(API2_RES_CALIB_DISP_S2_K_MICRO,        SF_SIGNED,   disp_s2_k_micro,            100, 1000000),
-    SF(API2_RES_CALIB_DISP_S2_ZERO_PPM,       SF_SIGNED,   disp_s2_zero_ppm,
-       -DISPLACEMENT_ZERO_PPM_MAX, DISPLACEMENT_ZERO_PPM_MAX),
-    /* Sign flip on the final reading (2026-09-29) -- see svc_api.h's
-     * API2_RES_CALIB_DISP_S1_INVERT comment. */
-    SF(API2_RES_CALIB_DISP_S1_INVERT,            SF_UNSIGNED, disp_s1_invert,                0, 1),
-    SF(API2_RES_CALIB_DISP_S2_INVERT,            SF_UNSIGNED, disp_s2_invert,                0, 1),
-    /* Phase calibration (2026-10-06): +-45 deg is far wider than any real
-     * sensor delay and catches a value typed in the wrong unit. */
-    SF(API2_RES_CALIB_DISP_S1_PHASE_CDEG,        SF_SIGNED,   disp_s1_phase_cdeg,        -4500, 4500),
-    SF(API2_RES_CALIB_DISP_S2_PHASE_CDEG,        SF_SIGNED,   disp_s2_phase_cdeg,        -4500, 4500),
-};
-#define CALIBRATION_FIELD_COUNT (sizeof(s_calibration_fields) / sizeof(s_calibration_fields[0]))
-
-static const SettingsFieldDesc *find_calibration_field(uint8_t res)
-{
-    for (size_t i = 0; i < CALIBRATION_FIELD_COUNT; ++i) {
-        if (s_calibration_fields[i].resource == res) {
-            return &s_calibration_fields[i];
-        }
-    }
-    return 0;
-}
-
-static void dispatch_calibrations(ApiTransport t, uint16_t opcode, uint8_t verb,
-                                  uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_GET && verb != API2_VERB_SET) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    const SettingsFieldDesc *desc = find_calibration_field(res);
-    if (desc == 0) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-
-    if (verb == API2_VERB_GET) {
-        if (paylen != 0U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint8_t buf[4];
-        memcpy(buf, (const uint8_t *)&g_device_settings + desc->offset, desc->size);
-        send_response(t, opcode, API2_STATUS_OK, buf, desc->size);
-        return;
-    }
-
-    /* SET */
-    if (paylen != desc->size) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    if (svc_storage_is_busy()) {
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-        return;
-    }
-    int64_t val = parse_settings_value(desc, &frame[API2_PACKET_HDR_BYTES]);
-    if (val < desc->min || val > desc->max) {
-        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-        return;
-    }
-
-    uint32_t u = (uint32_t)val;
-    memcpy((uint8_t *)&g_device_settings + desc->offset, &u, desc->size);
-    svc_storage_validate_settings(&g_device_settings);
-    DrvStatus rc = svc_storage_save_settings(&g_device_settings);
-    if (rc == DRV_OK) {
-        /* No s_settings_changed_fn() call: nothing derived from a
-         * calibration constant needs re-applying outside
-         * svc_displacement.c, which reads g_device_settings live every
-         * cycle (see load_sensor_cal()) -- unlike Settings' scheduler
-         * periods, there's no cached copy to refresh. */
-        svc_logf(API2_LOG_INFO, "calib: res 0x%02X saved", res);
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-    } else {
-        g_system_state.settings_save_failed = true;
-        svc_logf(API2_LOG_ERROR, "calib: res 0x%02X save failed", res);
-        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
-    }
-}
-
-/* ---------------- Debug messages (0x6: SUBSCRIBE, UNSUBSCRIBE) ---------------- */
-
-static void dispatch_debug(ApiTransport t, uint16_t opcode, uint8_t verb,
-                           uint8_t res, const uint8_t *frame, uint16_t paylen)
-{
-    if (verb != API2_VERB_SUBSCRIBE && verb != API2_VERB_UNSUBSCRIBE) {
-        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
-        return;
-    }
-    if (res != API2_RES_DEBUG_LOG_STREAM) {
-        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
-        return;
-    }
-    if (!check_crc(t, opcode, frame, paylen)) return;
-
-    if (verb == API2_VERB_SUBSCRIBE) {
-        if (paylen != 1U) {
-            send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-            return;
-        }
-        uint8_t min_sev = frame[API2_PACKET_HDR_BYTES];
-        if (min_sev > (uint8_t)API2_LOG_ERROR) {
-            send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
-            return;
-        }
-        DebugSubState *d = &s_t[t].dbg;
-        if (!d->active) {
-            d->issue_seq = 0;
-            d->cursor    = 0;   /* 0 -> first drain flushes whatever backlog is held */
-        }
-        d->active  = true;
-        d->min_sev = (Api2LogSeverity)min_sev;
-        send_response(t, opcode, API2_STATUS_OK, 0, 0);
-        return;
-    }
-
-    /* UNSUBSCRIBE */
-    if (paylen != 0U) {
-        send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
-        return;
-    }
-    DebugSubState *d = &s_t[t].dbg;
-    if (!d->active) {
-        send_response(t, opcode, API2_STATUS_NOT_SUBSCRIBED, 0, 0);
-        return;
-    }
-    d->active = false;
-    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+    memset(s_t[t].sub, 0, sizeof s_t[t].sub);
 }
 
 /* ---------------- dispatch ---------------- */
 
+/* Order of checks (docs/api-v3-spec.md section 4): category known -> verb valid for the category -> resource known
+ * -> verb valid for the resource -> CRC -> payload length -> handler. Each failure answers with its own status;
+ * nothing after a failed stage runs. */
 static void dispatch(ApiTransport t, uint16_t opcode, const uint8_t *frame, uint16_t paylen)
 {
     uint8_t verb = API2_OPCODE_VERB(opcode);
     uint8_t cat  = API2_OPCODE_CATEGORY(opcode);
     uint8_t res  = API2_OPCODE_RESOURCE(opcode);
 
-    switch (cat) {
-        case API2_CAT_SYSTEM_STATUS:
-            dispatch_system_status(t, opcode, verb, res, frame, paylen);
+    const ApiCategory *c = find_category(cat);
+    if (c == 0) {
+        send_response(t, opcode, API2_STATUS_UNKNOWN_CATEGORY, 0, 0);
+        return;
+    }
+    if (verb > (uint8_t)API2_VERB_CANCEL_BULK || (c->verbs & API2_VERB_BIT(verb)) == 0U) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    const ApiResource *r = find_resource(c, res);
+    if (r == 0) {
+        send_response(t, opcode, API2_STATUS_UNKNOWN_RESOURCE, 0, 0);
+        return;
+    }
+    if ((r->verbs & API2_VERB_BIT(verb)) == 0U) {
+        send_response(t, opcode, API2_STATUS_VERB_NOT_VALID, 0, 0);
+        return;
+    }
+    if (!check_crc(t, opcode, frame, paylen)) return;
+
+    const uint8_t *in = &frame[API2_PACKET_HDR_BYTES];
+
+    /* payload length, then the verb-specific work */
+    switch (verb) {
+        case API2_VERB_SUBSCRIBE:
+            if (paylen != r->sub_in_len) {
+                send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+                return;
+            }
+            send_response(t, opcode, subscribe(t, r, in, paylen), 0, 0);
             return;
-        case API2_CAT_COMMANDS:
-            dispatch_commands(t, opcode, verb, res, frame, paylen);
+        case API2_VERB_UNSUBSCRIBE:
+            if (paylen != 0U) {
+                send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+                return;
+            }
+            send_response(t, opcode, unsubscribe(t, r), 0, 0);
             return;
-        case API2_CAT_SETTINGS:
-            dispatch_settings(t, opcode, verb, res, frame, paylen);
-            return;
-        case API2_CAT_MEASUREMENTS:
-            dispatch_measurements(t, opcode, verb, res, frame, paylen);
-            return;
-        case API2_CAT_TOPIC_GROUPS:
-            dispatch_topic_groups(t, opcode, verb, res, frame, paylen);
-            return;
-        case API2_CAT_DEBUG_MSGS:
-            dispatch_debug(t, opcode, verb, res, frame, paylen);
-            return;
-        case API2_CAT_RAW_DATA:
-            dispatch_raw_data(t, opcode, verb, res, frame, paylen);
-            return;
-        case API2_CAT_CALIBRATIONS:
-            dispatch_calibrations(t, opcode, verb, res, frame, paylen);
-            return;
-        case API2_CAT_BULK:
-            dispatch_bulk(t, opcode, verb, res, frame, paylen);
-            return;
-        default:
-            /* 0x9-0xF: not built. Spec §7 -- "not implemented yet" and
-             * "not a real category" are the same answer on the wire. */
-            send_response(t, opcode, API2_STATUS_UNKNOWN_CATEGORY, 0, 0);
-            return;
+        case API2_VERB_GET:
+        case API2_VERB_START_BULK:
+        case API2_VERB_CANCEL_BULK:
+            if (paylen != 0U) {
+                send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+                return;
+            }
+            break;
+        default:   /* SET, EXECUTE */
+            if (paylen < r->in_min || paylen > r->in_max) {
+                send_response(t, opcode, API2_STATUS_BAD_LENGTH, 0, 0);
+                return;
+            }
+            break;
+    }
+
+    uint8_t out[API2_RESPONSE_DATA_MAX];
+    ApiCall call = {
+        .t = t, .verb = verb, .res = res, .in = in, .in_len = paylen,
+        .out = out, .out_cap = (uint16_t)sizeof out, .out_len = 0, .after_reply = 0,
+    };
+    Api2Status st = r->handler(r, &call);
+    if (st == API2_STATUS_OK) {
+        send_response(t, opcode, st, out, call.out_len);
+    } else {
+        send_response(t, opcode, st, 0, 0);
+    }
+    if (call.after_reply) {
+        call.after_reply();
     }
 }
 
 /* ---------------- public API ---------------- */
 
-static void clear_subs(ApiTransport t)
-{
-    if (t >= API_TRANSPORT_COUNT) return;
-    if (s_t[t].topic[API2_RES_TOPIC_PHASOR_STREAM].active) {
-        svc_displacement_phasor_stream_end();   /* subscriber gone: stop the ADC */
-    }
-    memset(s_t[t].meas, 0, sizeof s_t[t].meas);
-    memset(s_t[t].topic, 0, sizeof s_t[t].topic);
-    memset(&s_t[t].dbg, 0, sizeof s_t[t].dbg);
-}
-
 void svc_api_init(void)
 {
     memset(s_t, 0, sizeof s_t);
-    memset(&s_bulk, 0, sizeof s_bulk);
+    s_rx_malformed = 0;
 }
 
 void svc_api_register_transport(ApiTransport t, ApiSendFn send_fn)
@@ -1749,6 +295,13 @@ void svc_api_register_settings_changed(ApiSettingsChangedFn fn)
     s_settings_changed_fn = fn;
 }
 
+void svc_api_settings_changed(void)
+{
+    if (s_settings_changed_fn) {
+        s_settings_changed_fn();   /* App re-applies (scheduler periods, ...) */
+    }
+}
+
 void svc_api_connected(ApiTransport t)
 {
     if (t >= API_TRANSPORT_COUNT) return;
@@ -1761,9 +314,7 @@ void svc_api_disconnected(ApiTransport t)
     if (t >= API_TRANSPORT_COUNT) return;
     s_t[t].connected = false;
     clear_subs(t);
-    if (s_bulk.active && s_bulk.transport == t) {
-        bulk_abort();
-    }
+    api_res_transport_disconnected(t);
 }
 
 void svc_api_receive(ApiTransport t, const uint8_t *data, uint16_t len)
@@ -1810,194 +361,56 @@ void svc_api_reassembler_check_timeout(ApiByteReassembler *r, uint32_t timeout_m
     }
 }
 
-/* Applies a completed zero-calibration run (svc_displacement.h's
- * DISP_ZERO_CAL_RESULT_READY phase) to this instrument's own
- * g_device_settings and persists it, the same "only the API layer
- * touches settings/EEPROM" split dispatch_calibrations()'s SET handler
- * follows -- svc_displacement.c computes the result but never writes
- * settings itself. Called every tick from svc_api_update() so the save
- * happens promptly (usually the very tick step 2 finishes) rather than
- * waiting for a host to poll Raw data 0x03. Converts to ppm of the ratio
- * (k-independent, 2026-10-06) so the persisted value stays valid across k
- * calibrations. Bounds match dispatch_calibrations()'s ZERO_PPM
- * bounds (+-DISPLACEMENT_ZERO_PPM_MAX, config.h) exactly -- clamped,
- * not rejected, since this is a computed result, not a host-supplied value
- * that should ever be "invalid" in normal use. */
-static void zero_cal_apply_if_ready(void)
-{
-    if (svc_displacement_zero_cal_get_phase() != DISP_ZERO_CAL_RESULT_READY) {
-        return;
-    }
-    if (svc_storage_is_busy()) {
-        return;   /* a settings write is in flight: leave the result ready and retry next tick */
-    }
-    float offset1_mm, offset2_mm;
-    uint8_t mask;
-    if (!svc_displacement_zero_cal_consume_result(&offset1_mm, &offset2_mm, &mask)) {
-        return;
-    }
-    /* svc_displacement.c hands back the new absolute zero in OUTPUT-mm
-     * domain (the same domain as the delta_mm readings it was measured
-     * from). The stored zero is in ppm of the ratio r, independent of k, so
-     * a later k calibration cannot invalidate it: zero_ppm = zero_mm * k_micro
-     * (k_micro is guarded > 0 by svc_storage_validate_settings()). Round to
-     * the nearest ppm. A result outside +-DISPLACEMENT_ZERO_PPM_MAX is NOT
-     * clamped and stored (that would silently store a wrong zero): it is
-     * refused and logged -- the instrument is far from level, or the two
-     * orientations were not a 180 degree flip. */
-    float p1 = offset1_mm * (float)g_device_settings.disp_s1_k_micro;
-    float p2 = offset2_mm * (float)g_device_settings.disp_s2_k_micro;
-    bool in_range = true;
-    int32_t off1_ppm = 0, off2_ppm = 0;
-    if ((mask & ZERO_CAL_SENSOR_S1) != 0U) {
-        if (p1 > (float)DISPLACEMENT_ZERO_PPM_MAX || p1 < -(float)DISPLACEMENT_ZERO_PPM_MAX) {
-            in_range = false;
-        } else {
-            off1_ppm = (int32_t)(p1 + (p1 >= 0.0f ? 0.5f : -0.5f));
-        }
-    }
-    if ((mask & ZERO_CAL_SENSOR_S2) != 0U) {
-        if (p2 > (float)DISPLACEMENT_ZERO_PPM_MAX || p2 < -(float)DISPLACEMENT_ZERO_PPM_MAX) {
-            in_range = false;
-        } else {
-            off2_ppm = (int32_t)(p2 + (p2 >= 0.0f ? 0.5f : -0.5f));
-        }
-    }
-    if (!in_range) {
-        svc_logf(API2_LOG_ERROR, "zero-cal: result out of range (S1 %ld ppm, S2 %ld ppm, limit +-%ld) -- NOT applied",
-                 (long)p1, (long)p2, (long)DISPLACEMENT_ZERO_PPM_MAX);
-        return;
-    }
-    /* Only the sensors this run covered are updated; the other keeps its
-     * stored zero (per-sensor calibration, 2026-10-06). */
-    if (mask & ZERO_CAL_SENSOR_S1) g_device_settings.disp_s1_zero_ppm = off1_ppm;
-    if (mask & ZERO_CAL_SENSOR_S2) g_device_settings.disp_s2_zero_ppm = off2_ppm;
-    svc_storage_validate_settings(&g_device_settings);
-    DrvStatus rc = svc_storage_save_settings(&g_device_settings);
-    if (rc == DRV_OK) {
-        svc_logf(API2_LOG_INFO, "zero-cal: applied (sensors 0x%02X), S1 zero %ld ppm, S2 zero %ld ppm",
-                 (unsigned)mask, (long)g_device_settings.disp_s1_zero_ppm,
-                 (long)g_device_settings.disp_s2_zero_ppm);
-    } else {
-        g_system_state.settings_save_failed = true;
-        svc_log(API2_LOG_ERROR, "zero-cal: save failed");
-    }
-}
-
-/* Debug-log push: a few lines per call per subscribed transport so a slow
- * BLE link isn't flooded in one tick. */
-#define DEBUG_PUSH_PER_TICK 4U
-
-/* Phasor batch stream pump: one frame per queued batch, only while the
- * transport's TX ring has headroom -- an entry is consumed only once handed
- * to the transport, so back-pressure leaves it in the FIFO. */
-static void phasor_stream_pump(void)
-{
-    for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
-        MeasurementSubSlot *slot = &s_t[t].topic[API2_RES_TOPIC_PHASOR_STREAM];
-        if (!s_t[t].connected || !slot->active) continue;
-        const ApiReadyFn ready = s_t[t].ready_fn;
-
-        for (uint8_t k = 0; k < DISPLACEMENT_PHASOR_STREAM_PER_TICK; ++k) {
-            if (ready != 0 && !ready()) break;
-            DisplacementPhasorEntry e;
-            if (!svc_displacement_phasor_stream_peek(&e)) break;
-
-            uint8_t push[2U + sizeof e];
-            push[0] = slot->issue_seq++;
-            push[1] = 0U;   /* page */
-            memcpy(&push[2], &e, sizeof e);
-            send_framed(t, API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_TOPIC_GROUPS,
-                                       API2_RES_TOPIC_PHASOR_STREAM),
-                        API2_STATUS_OK, push, (uint16_t)sizeof push, false);
-            svc_displacement_phasor_stream_consume();
-        }
-    }
-}
-
+/* Event-driven pushes (the resource decides when), then the resource side's own periodic work. */
 void svc_api_update(void)
 {
-    bulk_pump();
-    phasor_stream_pump();
-    zero_cal_apply_if_ready();
+    api_res_update();
 
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
-        if (!s_t[t].connected || !s_t[t].dbg.active) continue;
-        DebugSubState *d = &s_t[t].dbg;
-
-        for (uint8_t k = 0; k < DEBUG_PUSH_PER_TICK; ++k) {
-            char    msg[SVC_LOG_MSG_MAX];
-            uint8_t mlen = 0;
-            Api2LogSeverity sev = API2_LOG_INFO;
-            if (!svc_log_drain(&d->cursor, d->min_sev, &sev, msg, &mlen)) {
-                break;
+        if (!s_t[t].connected) continue;
+        for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
+            const ApiCategory *c = &g_api_categories[ci];
+            for (uint8_t i = 0; i < c->count; ++i) {
+                const ApiResource *r = &c->res[i];
+                if (r->sub != API2_SUB_EVENT) continue;
+                ApiSub *s = &s_t[t].sub[r->slot];
+                if (!s->active) continue;
+                for (uint8_t k = 0; k < r->burst; ++k) {
+                    if (!api_transport_ready(t)) break;
+                    uint8_t  data[API2_PUSH_DATA_MAX];
+                    uint16_t n = 0;
+                    if (!r->ev->poll(r, t, s, data, &n)) break;
+                    send_sub_push(t, API2_OPCODE(API2_VERB_SUBSCRIBE, c->id, r->id), s, data, n);
+                }
             }
-            uint16_t opcode = API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_DEBUG_MSGS,
-                                          API2_RES_DEBUG_LOG_STREAM);
-            uint8_t push[3U + SVC_LOG_MSG_MAX];
-            push[0] = d->issue_seq++;
-            push[1] = 0U;                 /* page */
-            push[2] = (uint8_t)sev;
-            memcpy(&push[3], msg, mlen);
-            /* stream push — not urgent, must leave the TX reserve free */
-            send_framed(t, opcode, API2_STATUS_OK, push, (uint16_t)(3U + mlen), false);
         }
     }
 }
 
-void svc_api_measurement_subscriptions_update(void)
+/* Pushes every interval subscription that is due, built by the resource's GET handler. */
+void svc_api_subscriptions_update(void)
 {
     uint32_t now = hal_systick_get_ms();
     for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
         if (!s_t[t].connected) continue;
-        for (uint8_t res = 0; res < API2_MEASUREMENT_SLOTS; ++res) {
-            MeasurementSubSlot *slot = &s_t[t].meas[res];
-            if (!slot->active) continue;
-            if ((uint32_t)(now - slot->last_push_ms) < slot->interval_ms) continue;
+        for (uint8_t ci = 0; ci < g_api_category_count; ++ci) {
+            const ApiCategory *c = &g_api_categories[ci];
+            for (uint8_t i = 0; i < c->count; ++i) {
+                const ApiResource *r = &c->res[i];
+                if (r->sub != API2_SUB_INTERVAL) continue;
+                ApiSub *s = &s_t[t].sub[r->slot];
+                if (!s->active || (uint32_t)(now - s->last_push_ms) < s->interval_ms) continue;
 
-            const MeasurementResourceDesc *desc = find_meas_resource(res);
-            if (desc == 0) continue;
-
-            uint16_t opcode = API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_MEASUREMENTS, res);
-            uint8_t  val[MEAS_VALUE_MAX_LEN];
-            uint16_t vlen = desc->read(val);
-
-            uint8_t push[2U + MEAS_VALUE_MAX_LEN];
-            push[0] = slot->issue_seq++;
-            push[1] = 0U;   /* page */
-            memcpy(&push[2], val, vlen);
-            /* stream push — not urgent, must leave the TX reserve free */
-            send_framed(t, opcode, API2_STATUS_OK, push, (uint16_t)(2U + vlen), false);
-
-            slot->last_push_ms = now;
-        }
-    }
-}
-
-void svc_api_topic_subscriptions_update(void)
-{
-    uint32_t now = hal_systick_get_ms();
-    for (ApiTransport t = 0; t < API_TRANSPORT_COUNT; ++t) {
-        if (!s_t[t].connected) continue;
-        for (uint8_t res = 0; res < API2_TOPIC_SLOTS; ++res) {
-            MeasurementSubSlot *slot = &s_t[t].topic[res];
-            if (!slot->active) continue;
-            if ((uint32_t)(now - slot->last_push_ms) < slot->interval_ms) continue;
-
-            const TopicResourceDesc *desc = find_topic_resource(res);
-            if (desc == 0) continue;
-
-            uint16_t opcode = API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_TOPIC_GROUPS, res);
-            uint8_t  val[TOPIC_VALUE_MAX_LEN];
-            uint16_t vlen = desc->build(val);
-
-            uint8_t push[2U + TOPIC_VALUE_MAX_LEN];
-            push[0] = slot->issue_seq++;
-            push[1] = 0U;   /* page */
-            memcpy(&push[2], val, vlen);
-            send_framed(t, opcode, API2_STATUS_OK, push, (uint16_t)(2U + vlen), false);
-
-            slot->last_push_ms = now;
+                uint8_t out[API2_PUSH_DATA_MAX];
+                ApiCall call = {
+                    .t = t, .verb = API2_VERB_GET, .res = r->id, .in = 0, .in_len = 0,
+                    .out = out, .out_cap = (uint16_t)sizeof out, .out_len = 0, .after_reply = 0,
+                };
+                if (r->handler(r, &call) == API2_STATUS_OK) {
+                    send_sub_push(t, API2_OPCODE(API2_VERB_SUBSCRIBE, c->id, r->id), s, out, call.out_len);
+                }
+                s->last_push_ms = now;
+            }
         }
     }
 }

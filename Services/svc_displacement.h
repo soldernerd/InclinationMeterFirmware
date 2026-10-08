@@ -230,6 +230,8 @@ void svc_displacement_check_integrity(void);
  * exactly-zero denominator (A and B phasors identical) and was skipped
  * entirely -- should not occur in practice. Surfaced over the API on
  * Raw data (0x7) GET API2_RES_RAW_ADC_DIAG. */
+/* Zeroes the drop / clip / fault / timing counters below (API Commands CLEAR_COUNTERS). */
+void     svc_displacement_clear_counters(void);
 uint16_t svc_displacement_get_input_drop_count(void);
 uint16_t svc_displacement_get_output_drop_count(void);
 uint16_t svc_displacement_get_degenerate_count(void);

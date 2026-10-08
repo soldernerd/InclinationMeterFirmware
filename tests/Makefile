@@ -9,16 +9,20 @@
 
 CC     ?= cc
 CFLAGS ?= -std=c17 -Wall -Wextra -Werror -O1 -g \
-          -I. -I../Config -I../Math -I../Services -I../Drivers_App -I../HAL_App
+          -I. -I.. -I../Config -I../Math -I../Services -I../Drivers_App -I../HAL_App
 
 SUITES := test_math_crc test_math_phasor test_math_window test_math_displacement test_math_quality \
-          test_golden_displacement test_txframe test_transfer
+          test_golden_displacement test_api_core test_api_tables test_txframe test_transfer
 
 LDLIBS ?= -lm
 
-.PHONY: all clean $(addprefix run-,$(SUITES))
+.PHONY: all clean check-api $(addprefix run-,$(SUITES))
 
-all: $(addprefix run-,$(SUITES))
+all: check-api $(addprefix run-,$(SUITES))
+
+# the generated API files must match tools/api_spec.py
+check-api:
+	python ../tools/gen_api.py --check
 
 $(SUITES): %: %.c test.h
 	$(CC) $(CFLAGS) -o $@ $< $(LDLIBS)

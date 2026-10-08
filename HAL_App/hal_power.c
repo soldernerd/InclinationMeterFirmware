@@ -45,6 +45,27 @@ void hal_power_configure_rail_retention(void)
     HAL_PWREx_EnablePullUpPullDownConfig();
 }
 
+static uint8_t s_reset_cause = 0U;
+
+void hal_power_capture_reset_cause(void)
+{
+    uint8_t c = 0U;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PINRST)  != 0U) c |= 0x01U;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_PWRRST)  != 0U) c |= 0x02U;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_SFTRST)  != 0U) c |= 0x04U;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_IWDGRST) != 0U) c |= 0x08U;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_WWDGRST) != 0U) c |= 0x10U;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_LPWRRST) != 0U) c |= 0x20U;
+    if (__HAL_RCC_GET_FLAG(RCC_FLAG_OBLRST)  != 0U) c |= 0x40U;
+    __HAL_RCC_CLEAR_RESET_FLAGS();
+    s_reset_cause = c;
+}
+
+uint8_t hal_power_reset_cause(void)
+{
+    return s_reset_cause;
+}
+
 bool hal_power_woke_from_standby(void)
 {
     bool woke = __HAL_PWR_GET_FLAG(PWR_FLAG_SB) != 0U;

@@ -27,7 +27,6 @@ static int32_t s_enc2_pos;
  * keeping its own parallel switch statements. */
 
 static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
-    [UI_SETTING_DISPLAY_RATE]     = { "Display rate",     "ms",   10,    50,    500 },
     [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
     [UI_SETTING_AUTO_POWEROFF]    = { "Auto power-off",   "s",    30,     0,   3600 },
     /* step 0 marks these action rows — see UiSettingMeta's comment. */
@@ -42,7 +41,7 @@ static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
 const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i)
 {
     if ((unsigned)i >= UI_SETTING_COUNT) {
-        i = UI_SETTING_DISPLAY_RATE;
+        i = UI_SETTING_BATTERY_CRITICAL;
     }
     return &s_setting_meta[i];
 }
@@ -50,7 +49,6 @@ const UiSettingMeta *app_ui_setting_meta(UiSettingIndex i)
 int32_t app_ui_setting_read(UiSettingIndex i)
 {
     switch (i) {
-        case UI_SETTING_DISPLAY_RATE:     return (int32_t)g_device_settings.task_display_ms;
         case UI_SETTING_BATTERY_CRITICAL: return (int32_t)g_device_settings.battery_critical_mv;
         case UI_SETTING_AUTO_POWEROFF:    return (int32_t)g_device_settings.auto_poweroff_s;
         default:                          return 0;
@@ -60,8 +58,6 @@ int32_t app_ui_setting_read(UiSettingIndex i)
 static void setting_write(UiSettingIndex i, int32_t v)
 {
     switch (i) {
-        case UI_SETTING_DISPLAY_RATE:
-            g_device_settings.task_display_ms = (uint16_t)v;     break;
         case UI_SETTING_BATTERY_CRITICAL:
             g_device_settings.battery_critical_mv = (uint16_t)v; break;
         case UI_SETTING_AUTO_POWEROFF:

@@ -20,8 +20,7 @@ typedef enum {
 /* Identifiers for editable settings on the SETTINGS screen.
  * Order here is the visual order on screen. */
 typedef enum {
-    UI_SETTING_DISPLAY_RATE = 0,
-    UI_SETTING_BATTERY_CRITICAL,   /* battery_critical_mv — REV B renamed
+    UI_SETTING_BATTERY_CRITICAL = 0,   /* battery_critical_mv — REV B renamed
                                      * this from the original WP3 spec's
                                      * "battery cutoff"; see config.h */
     UI_SETTING_AUTO_POWEROFF,       /* auto_poweroff_s (WP6); 0 = disabled */

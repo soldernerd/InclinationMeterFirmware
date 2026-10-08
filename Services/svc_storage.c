@@ -79,6 +79,9 @@ static const SettingsSection s_sections[] = {
     { EEPROM_ENCODER_SETTINGS_ADDR, EEPROM_ENCODER_SETTINGS_VERSION,
       offsetof(DeviceSettings, encoder_counts_per_detent),
       SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) },
+    { EEPROM_RTC_SETTINGS_ADDR, EEPROM_RTC_SETTINGS_VERSION,
+      offsetof(DeviceSettings, rtc_trim_ppm_x10),
+      SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad) },
     { EEPROM_DISPLACEMENT_SETTINGS_ADDR, EEPROM_DISPLACEMENT_SETTINGS_VERSION,
       offsetof(DeviceSettings, disp_s1_k_micro),
       SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad) },
@@ -103,8 +106,11 @@ _Static_assert(offsetof(DeviceSettings, lm35_scale_mv_per_c) + SECTION_SPAN(lm35
                 == offsetof(DeviceSettings, encoder_counts_per_detent),
                 "lm35 section must end exactly where encoder section begins");
 _Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent)
+                == offsetof(DeviceSettings, rtc_trim_ppm_x10),
+                "encoder section must end exactly where the rtc section begins");
+_Static_assert(offsetof(DeviceSettings, rtc_trim_ppm_x10) + SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad)
                 == offsetof(DeviceSettings, disp_s1_k_micro),
-                "encoder section must end exactly where displacement section begins");
+                "rtc section must end exactly where displacement section begins");
 _Static_assert(offsetof(DeviceSettings, disp_s1_k_micro) + SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad)
                 == sizeof(DeviceSettings),
                 "displacement section must end exactly at the struct's end");
@@ -119,6 +125,8 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c)
                "lm35 page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) <= 0x0100U,
                "encoder page must fit within its 256-byte EEPROM page budget");
+_Static_assert(HDR_SIZE + SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad) <= 0x0100U,
+               "rtc page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad) <= 0x0100U,
                "displacement page must fit within its 256-byte EEPROM page budget");
 
@@ -126,7 +134,8 @@ _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
                && EEPROM_BATTERY_SETTINGS_ADDR != EEPROM_TMP236_SETTINGS_ADDR
                && EEPROM_TMP236_SETTINGS_ADDR != EEPROM_LM35_SETTINGS_ADDR
                && EEPROM_LM35_SETTINGS_ADDR != EEPROM_ENCODER_SETTINGS_ADDR
-               && EEPROM_ENCODER_SETTINGS_ADDR != EEPROM_DISPLACEMENT_SETTINGS_ADDR,
+               && EEPROM_ENCODER_SETTINGS_ADDR != EEPROM_DISPLACEMENT_SETTINGS_ADDR
+               && EEPROM_DISPLACEMENT_SETTINGS_ADDR != EEPROM_RTC_SETTINGS_ADDR,
                "every settings EEPROM page address must be distinct");
 
 /* Pending-write state machine. Sized for one section's header+data (all
@@ -158,7 +167,6 @@ static void fill_default_settings(DeviceSettings *s)
 
     /* Scheduler/Timing page */
     s->task_sensors_ms          = DEFAULT_TASK_SENSORS_MS;
-    s->task_display_ms          = DEFAULT_TASK_DISPLAY_MS;
     s->task_ble_ms              = DEFAULT_TASK_BLE_MS;
     s->task_usb_ms              = DEFAULT_TASK_USB_MS;
     s->task_battery_ms          = DEFAULT_TASK_BATTERY_MS;
@@ -188,6 +196,9 @@ static void fill_default_settings(DeviceSettings *s)
 
     /* Encoder page */
     s->encoder_counts_per_detent = DEFAULT_ENCODER_COUNTS_PER_DETENT;
+
+    /* RTC page */
+    s->rtc_trim_ppm_x10         = DEFAULT_RTC_TRIM_PPM_X10;
 
     /* Displacement calibration page (WP10) */
     s->disp_s1_k_micro          = DEFAULT_DISP_S1_K_MICRO;
@@ -600,4 +611,18 @@ void svc_storage_validate_settings(DeviceSettings *settings)
     if (settings->disp_s2_k_micro <= 0) {
         settings->disp_s2_k_micro = DEFAULT_DISP_S2_K_MICRO;
     }
+    /* RTC trim: the RTC digital calibration covers about +-488 ppm. */
+    if (settings->rtc_trim_ppm_x10 < -4880 || settings->rtc_trim_ppm_x10 > 4880) {
+        settings->rtc_trim_ppm_x10 = DEFAULT_RTC_TRIM_PPM_X10;
+    }
+}
+
+DrvStatus svc_storage_restore_defaults(void)
+{
+    if (s_pending.active) {
+        return DRV_ERR_NOT_READY;
+    }
+    fill_default_settings(&g_device_settings);
+    svc_storage_validate_settings(&g_device_settings);
+    return svc_storage_save_settings(&g_device_settings);
 }

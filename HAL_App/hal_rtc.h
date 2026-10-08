@@ -22,6 +22,7 @@ typedef struct {
     uint8_t  hour;      /* 0..23 */
     uint8_t  minute;    /* 0..59 */
     uint8_t  second;    /* 0..59 */
+    uint8_t  subsecond; /* 0..255 = 1/256 s, counting up; output only (hal_rtc_set starts a second at 0) */
 } rtc_datetime_t;
 
 void      hal_rtc_init(void);
@@ -43,5 +44,10 @@ bool      hal_rtc_is_set(void);
  * the RTC itself normalises). Exposed for callers that want to validate
  * before calling hal_rtc_set(). */
 bool      hal_rtc_datetime_valid(const rtc_datetime_t *dt);
+
+/* Clock-rate trim through the RTC's smooth digital calibration: ppm_x10 in 0.1 ppm, positive = the clock runs
+ * faster. One step is 1/2^20 = 0.954 ppm, the range about -487 .. +488 ppm; the request is rounded to the
+ * nearest step and clamped. Applied immediately, not persistent (the value lives in DeviceSettings). */
+DrvStatus hal_rtc_set_trim_ppm_x10(int16_t ppm_x10);
 
 #endif /* HAL_RTC_H */

@@ -7,22 +7,25 @@
 #include "system_state.h"
 #include <string.h>
 
-/* USB transport for svc_api (API v2), mirroring svc_ble.c / svc_uart.c.
+/* USB transport for svc_api (API v3), mirroring svc_ble.c / svc_uart.c.
  *
- * RX: the HAL USB ISR fires hal_usb_on_rx() -> rx_handler() here; we copy
- * the report bytes and flag the scheduler tick to drain (svc_api_receive
- * is never called from interrupt context). One HID OUT report is one
- * complete request packet at current payload sizes.
+ * Framing on top of the fixed 64-byte HID reports (docs/api-v3-spec.md section 2.2): an API packet always starts at
+ * the beginning of a report and occupies ceil((6 + LEN) / 64) consecutive reports, the last one zero-padded; the
+ * receiver learns the packet length from the LEN field in the first report. Both directions use it.
  *
- * TX: svc_api hands us an exact 6+LEN packet via send_via_usb(), which
- * enqueues it in a per-transport TX frame ring (CLAUDE.md §8.3).
- * usb_tx_pump() then feeds frames to hal_usb_send() (which pads each to
- * the fixed 64-byte HID IN report) as fast as the host picks them up,
- * so a slow host cannot stall the dispatcher. */
+ * RX: the HAL USB ISR fires hal_usb_on_rx() -> rx_handler() here; reports are collected into one packet buffer and
+ * the scheduler tick is flagged when it is complete (svc_api_receive is never called from interrupt context).
+ *
+ * TX: svc_api hands us an exact 6+LEN packet via send_via_usb(), which enqueues it in a per-transport TX frame ring
+ * (CLAUDE.md 8.3). usb_tx_pump() then feeds the frame to hal_usb_send() one report at a time as fast as the host
+ * picks them up, so a slow host cannot stall the dispatcher. */
 
 static volatile bool     s_rx_pending    = false;
-static          uint8_t  s_rx_buf[USB_HID_REPORT_SIZE];
-static volatile uint16_t s_rx_len        = 0;
+static          uint8_t  s_rx_buf[API2_PACKET_MAX_SIZE];
+static volatile uint16_t s_rx_len        = 0;        /* complete packet length once s_rx_pending */
+static          uint16_t s_rx_fill       = 0;        /* bytes collected so far (ISR-owned) */
+static          uint16_t s_rx_total      = 0;        /* length of the packet being collected, 0 = none */
+static          uint16_t s_tx_off        = 0;        /* bytes of the frame at the ring front already sent */
 static          bool     s_was_connected = false;
 
 static SvcTxFrame        s_tx;
@@ -38,9 +41,28 @@ static void rx_handler(const uint8_t *data, uint16_t len)
         return;
     }
     uint16_t copy = len > USB_HID_REPORT_SIZE ? USB_HID_REPORT_SIZE : len;
-    memcpy(s_rx_buf, data, copy);
-    s_rx_len     = copy;
-    s_rx_pending = true;
+    if (s_rx_total == 0U) {
+        /* first report of a packet: LEN is in bytes 2..3 */
+        if (copy < API2_PACKET_HDR_BYTES) {
+            return;
+        }
+        uint32_t total = (uint32_t)API2_PACKET_HDR_BYTES + (uint16_t)(data[2] | ((uint16_t)data[3] << 8))
+                       + API2_PACKET_CRC_BYTES;
+        if (total > API2_PACKET_MAX_SIZE) {
+            return;   /* oversized: ignore (svc_api counts malformed frames it sees, this one never reaches it) */
+        }
+        s_rx_total = (uint16_t)total;
+        s_rx_fill  = 0;
+    }
+    uint16_t room = (uint16_t)(s_rx_total - s_rx_fill);
+    if (copy > room) copy = room;      /* the zero padding of the last report is not part of the packet */
+    memcpy(&s_rx_buf[s_rx_fill], data, copy);
+    s_rx_fill = (uint16_t)(s_rx_fill + copy);
+    if (s_rx_fill >= s_rx_total) {
+        s_rx_len     = s_rx_total;
+        s_rx_total   = 0;
+        s_rx_pending = true;
+    }
 }
 
 static void usb_tx_pump(void)
@@ -51,23 +73,20 @@ static void usb_tx_pump(void)
     for (;;) {
         uint16_t n = svc_txframe_peek(&s_tx, s_stage, sizeof s_stage);
         if (n == 0) {
-            s_tx_overflowed = false;   /* drained — re-arm the WARN */
+            s_tx_overflowed = false;   /* drained -- re-arm the WARN */
+            s_tx_off = 0;
             break;
         }
-        if (n > USB_HID_REPORT_SIZE) {
-            /* One HID report carries 64 bytes; a longer frame (the 56 B diag
-             * topic and bulk chunks are 65+ with the header) used to be cut
-             * silently. Drop it and say so -- use UART/BLE for those. */
-            if (g_system_state.usb_tx_dropped_count < UINT16_MAX) {
-                g_system_state.usb_tx_dropped_count++;
+        /* One report per iteration; a frame longer than 64 bytes continues in the next report. */
+        while (s_tx_off < n) {
+            uint16_t chunk = (uint16_t)(n - s_tx_off);
+            if (chunk > USB_HID_REPORT_SIZE) chunk = USB_HID_REPORT_SIZE;
+            if (!hal_usb_send(&s_stage[s_tx_off], chunk)) {
+                return;                /* USBD_BUSY -- retry from this offset next tick */
             }
-            svc_log(API2_LOG_WARN, "usb: frame > 64 B dropped (use UART/BLE for this resource)");
-            svc_txframe_drop_front(&s_tx);
-            continue;
+            s_tx_off = (uint16_t)(s_tx_off + chunk);
         }
-        if (!hal_usb_send(s_stage, n)) {
-            break;                     /* USBD_BUSY — retry next tick */
-        }
+        s_tx_off = 0;
         svc_txframe_drop_front(&s_tx);
     }
 }
@@ -95,6 +114,9 @@ void svc_usb_init(void)
 {
     s_rx_pending    = false;
     s_rx_len        = 0;
+    s_rx_fill       = 0;
+    s_rx_total      = 0;
+    s_tx_off        = 0;
     s_was_connected = false;
     s_tx_overflowed = false;
 
@@ -112,12 +134,16 @@ void svc_usb_update(void)
     if (now_connected && !s_was_connected) {
         svc_txframe_reset(&s_tx);
         s_tx_overflowed = false;
+        s_tx_off   = 0;
+        s_rx_total = 0;
         svc_api_connected(API_TRANSPORT_USB);
         svc_log(API2_LOG_INFO, "usb: host connected");
     } else if (!now_connected && s_was_connected) {
         svc_api_disconnected(API_TRANSPORT_USB);
         svc_txframe_reset(&s_tx);   /* queued frames are for a gone host */
         s_tx_overflowed = false;
+        s_tx_off   = 0;
+        s_rx_total = 0;
         svc_log(API2_LOG_INFO, "usb: host disconnected");
     }
     s_was_connected = now_connected;

@@ -120,6 +120,7 @@ int main(void)
    * see the long comment in USER CODE 2 below for why and where the rest
    * of this sequence now lives). Checked/cleared as early as possible,
    * before anything else touches PWR. */
+  hal_power_capture_reset_cause();
   g_system_state.woke_from_standby = hal_power_woke_from_standby();
   /* USER CODE END Init */
 
@@ -318,6 +319,9 @@ int main(void)
    * so svc_power_init() sees valid encoder state and the loaded
    * auto_poweroff_s. */
   hal_rtc_init();
+  if (hal_rtc_set_trim_ppm_x10(g_device_settings.rtc_trim_ppm_x10) != DRV_OK) {   /* settings are loaded by now */
+    svc_log(API2_LOG_WARN, "rtc: trim not applied");
+  }
   svc_power_init();
 
   app_scheduler_init();

@@ -7,7 +7,6 @@
 
 /* --- Scheduler task periods (ms) --- */
 #define DEFAULT_TASK_SENSORS_MS         100
-#define DEFAULT_TASK_DISPLAY_MS         100
 #define DEFAULT_TASK_LED_MS             250     /* status LED toggle period -> 2 Hz blink */
 #define DEFAULT_TASK_BLE_MS             100
 #define DEFAULT_TASK_USB_MS             100
@@ -93,6 +92,11 @@
  * bare #define — see App/app_ui.c's consume_detents(). */
 #define DEFAULT_ENCODER_COUNTS_PER_DETENT  4
 
+/* --- RTC trim (2026-10-08) ---
+ * Clock-rate correction in 0.1 ppm, positive = faster. 0 = the crystal as it is. Calibrate by measuring the drift
+ * against a reference over several hours (API Calibrations RTC_TRIM, System RTC has a 1/256 s counter). */
+#define DEFAULT_RTC_TRIM_PPM_X10  0
+
 /* --- EEPROM (REV B, 2026-08-17: per-subsystem page split) ---
  * DeviceSettings used to live under ONE version number covering the
  * whole struct — any single field addition (most recently
@@ -112,7 +116,8 @@
  * needing to shift addresses again. */
 
 #define EEPROM_SCHEDULER_SETTINGS_ADDR    0x0000  /* task periods */
-#define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0002  /* 0x0002: dropped the REV A
+#define EEPROM_SCHEDULER_SETTINGS_VERSION 0x0003  /* 0x0003: dropped task_display_ms (the display task runs every
+                                                     tick; the setting paced nothing). 0x0002: dropped the REV A
                                                      stream_interval / settling /
                                                      complementary-filter / task_processing
                                                      fields — a stored 0x0001 page is
@@ -144,6 +149,8 @@
 #define EEPROM_LM35_SETTINGS_VERSION      0x0001
 #define EEPROM_ENCODER_SETTINGS_ADDR      0x0400  /* quadrature counts/detent */
 #define EEPROM_ENCODER_SETTINGS_VERSION   0x0001
+#define EEPROM_RTC_SETTINGS_ADDR          0x0600  /* RTC crystal trim */
+#define EEPROM_RTC_SETTINGS_VERSION       0x0001
 #define EEPROM_DISPLACEMENT_SETTINGS_ADDR    0x0500  /* WP10 disp calibration —
                                                          was the REV A SCL3300/
                                                          PCAP04 tilt CalibrationData
