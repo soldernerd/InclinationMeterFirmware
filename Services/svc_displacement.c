@@ -1,4 +1,5 @@
 #include "svc_displacement.h"
+#include "svc_displacement_internal.h"
 #include "drv_ads131m04.h"
 #include "math_phasor.h"
 #include "math_window.h"
@@ -120,27 +121,6 @@ static bool s_fault_reported          = false;
 static bool s_clip_logged             = false;
 static bool s_amplitude_fault_logged  = false;
 
-/* --- Bulk raw-ADC capture buffer (restored 2026-09-25, see
- * svc_displacement.h's comment) --- packed 24-bit codes, little-endian
- * signed, ch0..ch3 interleaved: 12 bytes per sample. Filled from
- * on_sample() (the same SysTick-frame-drain context, not a raw ISR) while
- * s_cap_active; drained by svc_api's bulk pump (task) once s_cap_done. */
-static uint8_t           s_cap_buf[ADC_BULK_SAMPLE_COUNT * ADC_BULK_BYTES_PER_SAMPLE];
-static volatile uint16_t s_cap_idx    = 0;
-static volatile bool     s_cap_active = false;
-static volatile bool     s_cap_done   = false;
-static volatile uint32_t s_cap_t0     = 0;   /* tick at capture_begin() */
-static volatile uint32_t s_cap_t1     = 0;   /* tick when the buffer filled */
-
-/* Stats of the most recently completed capture — held past capture_end()
- * so a host diagnostic can read them back (effective sample rate =
- * samples / elapsed_ms). s_last_drops is the acquisition ring-overflow
- * count (drain fell a whole ring behind) accumulated during the fill —
- * the only lost-sample mechanism a full-rate capture has. */
-static uint16_t s_last_samples    = 0;
-static uint16_t s_last_drops      = 0;
-static uint32_t s_last_elapsed_ms = 0;
-
 /* Latest-batch snapshot for the API v2 Measurements (0x4) GET/SUBSCRIBE
  * resources (Services/svc_api.c) -- kept here, not in g_system_state,
  * same pattern as svc_battery_get_vbat_mv()/svc_powertest_mask() in
@@ -179,42 +159,6 @@ static MathDisplay s_ds;
  * real-time diagnostic resource. Written alongside s_delta1_mm etc. in
  * process_one_batch(). */
 static DisplacementPhasors s_phasors = {0};
-
-/* Continuous phasor batch stream: FIFO filled by svc_displacement_update(),
- * drained by the API layer (svc_displacement.h "Continuous phasor batch
- * stream"). Both sides run in task context, so no locking is needed. */
-#define PSTREAM_MASK (DISPLACEMENT_PHASOR_STREAM_DEPTH - 1U)
-#if (DISPLACEMENT_PHASOR_STREAM_DEPTH & PSTREAM_MASK) != 0
-#error "DISPLACEMENT_PHASOR_STREAM_DEPTH must be a power of two"
-#endif
-static DisplacementPhasorEntry s_pstream[DISPLACEMENT_PHASOR_STREAM_DEPTH];
-static uint16_t s_pstream_head   = 0;
-static uint16_t s_pstream_tail   = 0;
-static uint16_t s_pstream_drops  = 0;
-static bool     s_pstream_active = false;
-
-/* --- Zero calibration state (2026-09-25) --- see svc_displacement.h's
- * comment. Task context only, same reasoning as the phasor log state
- * above (the "producer" is process_one_batch(), the "consumer" is
- * svc_api.c's svc_api_update(), both task-context callers). */
-static DisplacementZeroCalPhase s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
-static uint16_t s_zero_cal_count = 0;
-static uint8_t  s_zero_cal_mask  = ZERO_CAL_SENSORS_BOTH;   /* sensors covered by the current run */
-static float    s_zero_cal_sum1  = 0.0f;   /* running sum for the CURRENT step */
-static float    s_zero_cal_sum2  = 0.0f;
-static float    s_zero_cal_step1_avg1 = 0.0f;   /* saved once step 1 completes */
-static float    s_zero_cal_step1_avg2 = 0.0f;
-static float    s_zero_cal_result1_mm = 0.0f;   /* new absolute zero_offset, once RESULT_READY */
-static float    s_zero_cal_result2_mm = 0.0f;
-
-/* --- Triggered precision measurement state (2026-09-26, redesigned
- * 2026-10-07) --- see svc_displacement.h's comment. Task context only, same
- * reasoning as the zero-cal state above (the "producer" is
- * process_one_batch(), the "consumer" is Services/svc_api.c's command
- * handler). */
-static DisplacementPrecisionPhase s_precision_phase     = DISP_PRECISION_IDLE;
-static MathPrecision s_prec;                     /* fill / disturbed / failed / result (Math/math_quality.h) */
-static uint32_t s_precision_start_ms   = 0;
 
 /* --- Scheduler-gap diagnostic (2026-09-26) --- added specifically to
  * investigate why observed batch throughput and input_drop_count run
@@ -285,25 +229,12 @@ static void note_saturating(volatile uint16_t *counter)
 
 static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
 {
-    /* Bulk-capture mode: just store the raw codes and get out. The phasor
-     * accumulation below is skipped so this stays trivially cheap for the
-     * ~0.3 s a capture runs (see svc_displacement.h). Mutually exclusive
-     * with the demod path by construction -- svc_api's bulk dispatch only
-     * arms this while svc_displacement_is_running() is false. */
-    if (s_cap_active) {
-        if (s_cap_idx < ADC_BULK_SAMPLE_COUNT) {
-            uint8_t *p = &s_cap_buf[(size_t)s_cap_idx * ADC_BULK_BYTES_PER_SAMPLE];
-            const int32_t v[4] = { ch0, ch1, ch2, ch3 };
-            for (uint8_t i = 0; i < 4U; ++i) {
-                p[i * 3 + 0] = (uint8_t)(v[i] & 0xFF);
-                p[i * 3 + 1] = (uint8_t)((v[i] >> 8) & 0xFF);
-                p[i * 3 + 2] = (uint8_t)((v[i] >> 16) & 0xFF);
-            }
-            if (++s_cap_idx >= ADC_BULK_SAMPLE_COUNT) {
-                s_cap_t1   = hal_systick_get_ms();
-                s_cap_done = true;
-            }
-        }
+    /* Bulk-capture mode (svc_disp_capture.c): store the raw codes and get out; the phasor
+     * accumulation below is skipped so this stays trivially cheap for the ~0.3 s a capture
+     * runs. Mutually exclusive with the demod path by construction -- svc_api's bulk dispatch
+     * only arms this while svc_displacement_is_running() is false. */
+    if (g_disp_cap_active) {
+        disp_capture_store(ch0, ch1, ch2, ch3);
         return;
     }
 
@@ -394,87 +325,6 @@ static void load_sensor_cal(MathSensorCal *out, int32_t k_micro, uint32_t pga,
  * division-heavy math runs once per batch). */
 typedef MathBatchSums BatchSums;
 
-/* Feeds one batch's delta1_mm/delta2_mm into an in-progress zero-cal
- * step, if one is armed -- called unconditionally from process_one_batch()
- * (cheap no-op via the phase check when idle). Completing
- * DISPLACEMENT_ZERO_CAL_SAMPLES samples finishes the current step: step 1
- * just saves its average and waits for step2_begin(); step 2 combines
- * both steps' averages into the new absolute zero offset (config.h's
- * "Displacement zero calibration" comment has the derivation) and moves
- * to RESULT_READY for svc_api.c to consume. */
-static void zero_cal_accumulate(float delta1, float delta2)
-{
-    if (s_zero_cal_phase != DISP_ZERO_CAL_STEP1_RUNNING
-        && s_zero_cal_phase != DISP_ZERO_CAL_STEP2_RUNNING) {
-        return;
-    }
-    s_zero_cal_sum1 += delta1;
-    s_zero_cal_sum2 += delta2;
-    if (++s_zero_cal_count < DISPLACEMENT_ZERO_CAL_SAMPLES) {
-        return;
-    }
-    float avg1 = s_zero_cal_sum1 / (float)DISPLACEMENT_ZERO_CAL_SAMPLES;
-    float avg2 = s_zero_cal_sum2 / (float)DISPLACEMENT_ZERO_CAL_SAMPLES;
-    if (s_zero_cal_phase == DISP_ZERO_CAL_STEP1_RUNNING) {
-        s_zero_cal_step1_avg1 = avg1;
-        s_zero_cal_step1_avg2 = avg2;
-        s_zero_cal_phase = DISP_ZERO_CAL_STEP1_DONE;
-    } else {
-        /* zero_error = (step1_avg + step2_avg) / 2 -- see config.h. The
-         * NEW absolute offset is the OLD one plus that error: delta_mm
-         * already has the old zero_offset subtracted (compute_sensor_delta()),
-         * so the averaged residual bias IS the correction still needed.
-         * disp_s1/s2_zero_offset_um is stored in the cal_mult-INDEPENDENT
-         * theoretical domain (load_sensor_cal()'s 2026-09-29 comment), but
-         * avg1/avg2 above are full compute_sensor_delta() outputs -- the
-         * OUTPUT-mm domain, cal_mult already applied. Scale the stored
-         * value up by the CURRENT cal_mult here so this combination happens
-         * in one consistent domain; svc_api.c's zero_cal_apply_if_ready()
-         * scales the finished result back down before persisting it, so
-         * disp_s1/s2_zero_offset_um itself never leaves the theoretical
-         * domain on disk. */
-        /* zero_ppm / k_micro = the stored zero expressed in mm/m (both are
-         * x1e-6); the averaged delta already has it subtracted. */
-        s_zero_cal_result1_mm = math_zero_cal_new_zero(g_device_settings.disp_s1_zero_ppm,
-                                                       g_device_settings.disp_s1_k_micro,
-                                                       s_zero_cal_step1_avg1, avg1);
-        s_zero_cal_result2_mm = math_zero_cal_new_zero(g_device_settings.disp_s2_zero_ppm,
-                                                       g_device_settings.disp_s2_k_micro,
-                                                       s_zero_cal_step1_avg2, avg2);
-        s_zero_cal_phase = DISP_ZERO_CAL_RESULT_READY;
-    }
-}
-
-/* Ends the precision measurement with a result (the Hann-weighted means of the
- * accepted 81-batch window, computed by math_precision_batch()). */
-static void precision_succeed(void)
-{
-    s_precision_phase = DISP_PRECISION_DONE;
-}
-
-/* Ends the precision measurement with an error: no clean window within
- * DISPLACEMENT_PRECISION_TIMEOUT_MS. No value is reported. */
-static void precision_fail(void)
-{
-    s_prec.result[0] = s_prec.result[1] = 0.0f;
-    s_prec.failed = true;
-    s_precision_phase = DISP_PRECISION_DONE;
-}
-
-/* Called once per batch, after the display stream was fed. */
-static void precision_batch(void)
-{
-    if (s_precision_phase != DISP_PRECISION_RUNNING) {
-        return;
-    }
-    bool timed_out = (uint32_t)(hal_systick_get_ms() - s_precision_start_ms) >= DISPLACEMENT_PRECISION_TIMEOUT_MS;
-    switch (math_precision_batch(&s_prec, &s_ds, timed_out)) {
-        case MATH_PRECISION_OK:      precision_succeed(); break;
-        case MATH_PRECISION_TIMEOUT: precision_fail();    break;
-        default:                     break;
-    }
-}
-
 /* Highest |I+jQ| a genuinely full-scale (ADS131M04_CODE_MAX-amplitude),
  * UNDISTORTED sinusoid at exactly the matched carrier frequency could
  * ever produce over one DISPLACEMENT_BATCH_CYCLES-cycle batch.
@@ -535,7 +385,7 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
      * apart. A dropped batch (or a restart) forgets the windows, and a precision
      * measurement in progress starts filling again. */
     if (!math_display_feed(&s_ds, seq, (uint16_t)DISPLACEMENT_BATCH_CYCLES, res.delta, res.residual)) {
-        math_precision_break(&s_prec);
+        disp_procs_break();
     }
 
     s_delta1_mm_raw = res.delta[0];
@@ -544,8 +394,7 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     s_residual2 = res.residual[1];
     s_disp_ok   = true;
 
-    zero_cal_accumulate(res.delta[0], res.delta[1]);
-    precision_batch();
+    disp_procs_batch(&s_ds, res.delta[0], res.delta[1]);
 }
 
 DrvStatus svc_displacement_init(void)
@@ -556,7 +405,7 @@ DrvStatus svc_displacement_init(void)
                       DISPLACEMENT_PRECISION_WINDOW_BATCHES, DISPLACEMENT_QUALITY_K,
                       0.693147f / ((float)DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S * BATCH_RATE_HZ),
                       (uint32_t)((float)DISPLACEMENT_QUALITY_RESEED_S * BATCH_RATE_HZ));
-    math_precision_start(&s_prec);
+    disp_procs_init();
     accum_reset();
     s_input_drop_count  = 0;
     s_degenerate_count  = 0;
@@ -617,36 +466,22 @@ DrvStatus svc_displacement_start(void)
     return drv_ads131m04_start();
 }
 
-/* Sign convention is arbitrary at the sensor level -- disp_s1/s2_invert
- * (system_state.h) let each instrument's FINAL reported reading be flipped
- * so "front up" can read positive, without touching the gain/zero-cal math
- * upstream of it. Applied here, at the getter layer, deliberately -- every
- * external consumer (API Measurements/Topics, the LIVE screen, the
- * triggered precision measurement's result) reads through one of these
- * getters, so this is the one place that has to know about the flip.
- * zero_cal_accumulate()/precision_batch() upstream in
- * process_one_batch() use the UNFLIPPED delta1/delta2 locals directly, not
- * these getters -- zero-cal and the precision-run's live progress stay
- * entirely in the sensor's native sign convention; only the finished,
- * reported numbers flip. */
-static float sensor_sign(uint8_t invert_flag) { return invert_flag ? -1.0f : 1.0f; }
-
 /* The polled / subscribed Measurements values are the Hann display value once
  * it exists (first one ~0.6 s after a start), the raw batch value until then. */
 float svc_displacement_get_delta1_mm(void)
 {
-    return sensor_sign(g_device_settings.disp_s1_invert) * (s_ds.valid ? s_ds.out[0] : s_delta1_mm_raw);
+    return disp_sensor_sign(g_device_settings.disp_s1_invert) * (s_ds.valid ? s_ds.out[0] : s_delta1_mm_raw);
 }
 float svc_displacement_get_residual1(void) { return s_residual1; }
 float svc_displacement_get_delta2_mm(void)
 {
-    return sensor_sign(g_device_settings.disp_s2_invert) * (s_ds.valid ? s_ds.out[1] : s_delta2_mm_raw);
+    return disp_sensor_sign(g_device_settings.disp_s2_invert) * (s_ds.valid ? s_ds.out[1] : s_delta2_mm_raw);
 }
 float svc_displacement_get_residual2(void) { return s_residual2; }
 bool  svc_displacement_get_ok(void)        { return s_disp_ok; }
 
-float svc_displacement_get_display_delta1_mm(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_ds.out[0]; }
-float svc_displacement_get_display_delta2_mm(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_ds.out[1]; }
+float svc_displacement_get_display_delta1_mm(void) { return disp_sensor_sign(g_device_settings.disp_s1_invert) * s_ds.out[0]; }
+float svc_displacement_get_display_delta2_mm(void) { return disp_sensor_sign(g_device_settings.disp_s2_invert) * s_ds.out[1]; }
 float svc_displacement_get_display_delta_diff_mm(void)
 {
     return svc_displacement_get_display_delta1_mm() - svc_displacement_get_display_delta2_mm();
@@ -657,8 +492,8 @@ bool     svc_displacement_get_display_doubtful_diff(void) { return s_ds.doubtful
 uint16_t svc_displacement_get_display_seq(void)   { return s_ds.seq; }
 bool     svc_displacement_get_display_valid(void) { return s_disp_ok && s_ds.valid; }
 
-float svc_displacement_get_delta1_mm_raw(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_delta1_mm_raw; }
-float svc_displacement_get_delta2_mm_raw(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_delta2_mm_raw; }
+float svc_displacement_get_delta1_mm_raw(void) { return disp_sensor_sign(g_device_settings.disp_s1_invert) * s_delta1_mm_raw; }
+float svc_displacement_get_delta2_mm_raw(void) { return disp_sensor_sign(g_device_settings.disp_s2_invert) * s_delta2_mm_raw; }
 
 /* Recomputed from the already-flipped individual getters above (not simply
  * `sign * (s_delta1_mm - s_delta2_mm)`), so this is correct even in the
@@ -772,24 +607,6 @@ bool svc_displacement_is_running(void)
     return drv_ads131m04_is_running();
 }
 
-/* Queues one completed batch for the continuous stream. A full FIFO drops
- * the NEWEST batch (counted) -- the consumer sees the loss as a seq jump. */
-static void store_phasor_stream_entry(const BatchSums *s, uint16_t seq)
-{
-    uint16_t next = (uint16_t)((s_pstream_head + 1U) & PSTREAM_MASK);
-    if (next == s_pstream_tail) {
-        if (s_pstream_drops < UINT16_MAX) s_pstream_drops++;
-        return;
-    }
-    DisplacementPhasorEntry *e = &s_pstream[s_pstream_head];
-    e->iB  = (float)s->iB;  e->qB  = (float)s->qB;
-    e->iA  = (float)s->iA;  e->qA  = (float)s->qA;
-    e->iS1 = (float)s->iS1; e->qS1 = (float)s->qS1;
-    e->iS2 = (float)s->iS2; e->qS2 = (float)s->qS2;
-    e->seq = seq;
-    s_pstream_head = next;
-}
-
 void svc_displacement_update(void)
 {
     /* Scheduler-gap diagnostic -- see s_max_update_gap_ms's comment.
@@ -841,21 +658,16 @@ void svc_displacement_update(void)
          * is a tap on the running measurement: it copies each batch's raw sums out
          * and the demod runs as usual, so the LIVE screen / API readings stay valid
          * while a host logs the phasors. */
-        if (s_pstream_active) {
-            store_phasor_stream_entry(&sums, batch_seq);
+        if (g_disp_pstream_active) {
+            disp_pstream_store(&sums, batch_seq);
         }
         process_one_batch(&sums, batch_seq);
     }
 
-    /* Precision-measurement timeout, checked every tick regardless of
-     * whether a batch completed this pass -- precision_batch() above also
-     * checks it, but only when a batch arrives; this is what guarantees the
-     * error still fires if acquisition stalls (see config.h's
-     * DISPLACEMENT_PRECISION_TIMEOUT_MS comment). */
-    if (s_precision_phase == DISP_PRECISION_RUNNING
-        && (uint32_t)(hal_systick_get_ms() - s_precision_start_ms) >= DISPLACEMENT_PRECISION_TIMEOUT_MS) {
-        precision_fail();
-    }
+    /* Precision-measurement timeout, checked every tick regardless of whether a batch
+     * completed this pass -- this is what guarantees the error still fires if acquisition
+     * stalls (see config.h's DISPLACEMENT_PRECISION_TIMEOUT_MS comment). */
+    disp_procs_poll();
 }
 
 void svc_displacement_check_integrity(void)
@@ -902,7 +714,7 @@ void svc_displacement_check_integrity(void)
     /* Stop through the service, not just the driver: the displacement reading
      * must not stay "valid" with frozen values, and a running zero-cal /
      * precision measurement must not hang in its RUNNING phase. */
-    s_pstream_active = false;
+    g_disp_pstream_active = false;
     svc_displacement_stop();
 }
 
@@ -917,7 +729,7 @@ void svc_displacement_clear_counters(void)
     s_max_update_gap_ms        = 0;
     s_max_gap_at_uptime_ms     = 0;
     s_gap_over_threshold_count = 0;
-    s_pstream_drops            = 0;
+    disp_pstream_clear_drops();
 }
 
 uint16_t svc_displacement_get_input_drop_count(void)
@@ -953,249 +765,3 @@ uint16_t svc_displacement_get_amplitude_fault_count(void)
     return s_amplitude_fault_count;
 }
 
-DrvStatus svc_displacement_capture_begin(void)
-{
-    if (s_cap_active) {
-        return DRV_ERR_NOT_READY;
-    }
-    s_cap_idx    = 0;
-    s_cap_done   = false;
-    s_cap_t1     = 0;
-    s_cap_t0     = hal_systick_get_ms();
-    s_cap_active = true;   /* on_sample() now stores into s_cap_buf */
-    return drv_ads131m04_start();
-}
-
-bool svc_displacement_capture_done(void)
-{
-    return s_cap_done;
-}
-
-void svc_displacement_capture_end(void)
-{
-    if (s_cap_active) {
-        uint32_t t1 = s_cap_t1 ? s_cap_t1 : hal_systick_get_ms();
-        s_last_samples    = s_cap_idx;
-        s_last_drops      = (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
-        s_last_elapsed_ms = t1 - s_cap_t0;
-    }
-    s_cap_active = false;
-    drv_ads131m04_stop();
-}
-
-void svc_displacement_last_capture(uint16_t *samples, uint16_t *drops,
-                                    uint32_t *elapsed_ms)
-{
-    if (samples)    *samples    = s_last_samples;
-    if (drops)      *drops      = s_last_drops;
-    if (elapsed_ms) *elapsed_ms = s_last_elapsed_ms;
-}
-
-const uint8_t *svc_displacement_capture_buffer(void)
-{
-    return s_cap_buf;
-}
-
-uint16_t svc_displacement_capture_sample_count(void)
-{
-    return ADC_BULK_SAMPLE_COUNT;
-}
-
-uint16_t svc_displacement_capture_drops(void)
-{
-    return (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
-}
-
-DrvStatus svc_displacement_phasor_stream_begin(void)
-{
-    if (s_pstream_active || s_cap_active) {
-        return DRV_ERR_NOT_READY;
-    }
-    s_pstream_head   = 0;
-    s_pstream_tail   = 0;
-    s_pstream_drops  = 0;
-    s_pstream_active = true;   /* svc_displacement_update() now copies every batch into the FIFO */
-    if (!drv_ads131m04_is_running()) {
-        /* Not measuring (e.g. stopped over the API): start the real measurement, so the
-         * demod state is initialised properly and the stream is a tap on it, as always. */
-        DrvStatus rc = svc_displacement_start();
-        if (rc != DRV_OK) {
-            s_pstream_active = false;
-            return rc;
-        }
-    }
-    return DRV_OK;
-}
-
-bool svc_displacement_phasor_stream_active(void)
-{
-    return s_pstream_active;
-}
-
-void svc_displacement_phasor_stream_end(void)
-{
-    s_pstream_active = false;   /* the measurement keeps running; only the tap is removed */
-}
-
-bool svc_displacement_phasor_stream_peek(DisplacementPhasorEntry *out)
-{
-    if (s_pstream_tail == s_pstream_head) return false;
-    *out = s_pstream[s_pstream_tail];
-    return true;
-}
-
-void svc_displacement_phasor_stream_consume(void)
-{
-    if (s_pstream_tail != s_pstream_head) {
-        s_pstream_tail = (uint16_t)((s_pstream_tail + 1U) & PSTREAM_MASK);
-    }
-}
-
-uint16_t svc_displacement_phasor_stream_drops(void)
-{
-    return s_pstream_drops;
-}
-
-DrvStatus svc_displacement_zero_cal_step1_begin(uint8_t sensor_mask)
-{
-    if ((sensor_mask & ZERO_CAL_SENSORS_BOTH) == 0U) {
-        return DRV_ERR_INVALID;
-    }
-    if (!svc_displacement_is_running()) {
-        return DRV_ERR_NOT_READY;
-    }
-    if (s_zero_cal_phase != DISP_ZERO_CAL_IDLE
-        && s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
-        return DRV_ERR_NOT_READY;   /* already mid-run -- cancel first */
-    }
-    /* Mutually exclusive with an in-progress precision measurement -- the
-     * reverse check svc_displacement_precision_begin() already does.
-     * Without this, both could run concurrently: harmless to memory (each
-     * has its own sum/count state) but semantically wrong -- a zero-cal's
-     * 180-degree flip mid-precision-measurement would silently corrupt
-     * that measurement's average, and the two features' own doc comments
-     * both claim this exclusivity, so it needs to actually hold in both
-     * directions. */
-    if (s_precision_phase == DISP_PRECISION_RUNNING) {
-        return DRV_ERR_NOT_READY;
-    }
-    s_zero_cal_mask  = (uint8_t)(sensor_mask & ZERO_CAL_SENSORS_BOTH);
-    s_zero_cal_sum1  = s_zero_cal_sum2  = 0.0f;
-    s_zero_cal_count = 0;
-    s_zero_cal_phase = DISP_ZERO_CAL_STEP1_RUNNING;
-    return DRV_OK;
-}
-
-DrvStatus svc_displacement_zero_cal_step2_begin(void)
-{
-    if (!svc_displacement_is_running()) {
-        return DRV_ERR_NOT_READY;
-    }
-    if (s_zero_cal_phase != DISP_ZERO_CAL_STEP1_DONE) {
-        return DRV_ERR_NOT_READY;   /* step 1 hasn't finished (or wasn't started) */
-    }
-    s_zero_cal_sum1  = s_zero_cal_sum2  = 0.0f;
-    s_zero_cal_count = 0;
-    s_zero_cal_phase = DISP_ZERO_CAL_STEP2_RUNNING;
-    return DRV_OK;
-}
-
-void svc_displacement_zero_cal_cancel(void)
-{
-    s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
-    s_zero_cal_count = 0;
-}
-
-DisplacementZeroCalPhase svc_displacement_zero_cal_get_phase(void)
-{
-    return s_zero_cal_phase;
-}
-
-void svc_displacement_zero_cal_progress(uint16_t *count_out, uint16_t *target_out)
-{
-    if (count_out)  *count_out  = s_zero_cal_count;
-    if (target_out) *target_out = DISPLACEMENT_ZERO_CAL_SAMPLES;
-}
-
-uint8_t svc_displacement_zero_cal_get_mask(void)
-{
-    return s_zero_cal_mask;
-}
-
-bool svc_displacement_zero_cal_consume_result(float *offset1_mm_out, float *offset2_mm_out,
-                                               uint8_t *sensor_mask_out)
-{
-    if (s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
-        return false;
-    }
-    if (offset1_mm_out) *offset1_mm_out = s_zero_cal_result1_mm;
-    if (offset2_mm_out) *offset2_mm_out = s_zero_cal_result2_mm;
-    if (sensor_mask_out) *sensor_mask_out = s_zero_cal_mask;
-    s_zero_cal_phase = DISP_ZERO_CAL_IDLE;
-    return true;
-}
-
-DrvStatus svc_displacement_precision_begin(void)
-{
-    if (!svc_displacement_is_running()) {
-        return DRV_ERR_NOT_READY;
-    }
-    if (s_zero_cal_phase != DISP_ZERO_CAL_IDLE
-        && s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
-        return DRV_ERR_NOT_READY;   /* mutually exclusive with an in-progress zero-cal */
-    }
-    math_precision_start(&s_prec);
-    s_precision_start_ms   = hal_systick_get_ms();
-    s_precision_phase      = DISP_PRECISION_RUNNING;
-    return DRV_OK;
-}
-
-void svc_displacement_precision_cancel(void)
-{
-    s_precision_phase     = DISP_PRECISION_IDLE;
-    s_prec.fill           = 0;
-    s_prec.disturbed      = false;
-}
-
-DisplacementPrecisionPhase svc_displacement_precision_get_phase(void)
-{
-    return s_precision_phase;
-}
-
-bool svc_displacement_precision_get_disturbed(void)
-{
-    return s_precision_phase == DISP_PRECISION_RUNNING && s_prec.disturbed;
-}
-
-void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_out,
-                                          uint16_t *count_diff_out, uint16_t *target_out,
-                                          uint32_t *elapsed_ms_out)
-{
-    /* All three counts report the same thing now (the window fill since the
-     * trigger); the three fields are kept for wire compatibility. */
-    if (count1_out)     *count1_out     = s_prec.fill;
-    if (count2_out)     *count2_out     = s_prec.fill;
-    if (count_diff_out) *count_diff_out = s_prec.fill;
-    if (target_out)     *target_out     = DISPLACEMENT_PRECISION_WINDOW_BATCHES;
-    if (elapsed_ms_out) {
-        *elapsed_ms_out = (s_precision_phase == DISP_PRECISION_IDLE)
-            ? 0U : (uint32_t)(hal_systick_get_ms() - s_precision_start_ms);
-    }
-}
-
-bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_mm_out,
-                                            float *delta_diff_mm_out, bool *failed_out)
-{
-    if (s_precision_phase != DISP_PRECISION_DONE) {
-        return false;
-    }
-    /* Same sign-flip-at-the-output-boundary policy as the getters above --
-     * the window means are in the sensors' native sign convention. */
-    float d1 = sensor_sign(g_device_settings.disp_s1_invert) * s_prec.result[0];
-    float d2 = sensor_sign(g_device_settings.disp_s2_invert) * s_prec.result[1];
-    if (delta1_mm_out)      *delta1_mm_out      = d1;
-    if (delta2_mm_out)      *delta2_mm_out      = d2;
-    if (delta_diff_mm_out)  *delta_diff_mm_out  = d1 - d2;   /* correct for any combination of invert flags */
-    if (failed_out)         *failed_out         = s_prec.failed;
-    return true;
-}

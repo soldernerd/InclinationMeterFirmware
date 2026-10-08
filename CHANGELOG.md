@@ -5,6 +5,11 @@ of the wire protocol or the stored settings; the patch number with every build h
 newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a line says so; the acceptance list for 1.0.0 is
 `docs/release-checklist.md`.
 
+## Unreleased
+- `svc_displacement.c` (1200 lines) split into the acquisition / demodulation core, `svc_disp_capture.c` (bulk raw capture),
+  `svc_disp_phasor_stream.c` and `svc_disp_procedures.c` (flip calibration, precision measurement); no behaviour change.
+  Host tests for the two procedures added.
+
 ## 0.11.1 - 2026-10-08
 - Service mode: calibration writes and the maintenance commands (zero calibration, factory defaults, DFU, power / pin test,
   rails, fault test) need it. It can only be entered on the instrument; it ends by menu, `SERVICE_END`, 10 minutes without API

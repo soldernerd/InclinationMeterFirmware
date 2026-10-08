@@ -36,6 +36,9 @@ void svc_logf(Api2LogSeverity s, const char *f, ...) { (void)s; (void)f; }
 #include "../Math/math_displacement.c"
 #include "../Math/math_quality.c"
 #include "../Services/svc_displacement.c"
+#include "../Services/svc_disp_capture.c"
+#include "../Services/svc_disp_phasor_stream.c"
+#include "../Services/svc_disp_procedures.c"
 
 /* ---------------- helpers ---------------- */
 #define EXC_AMP   400000.0                    /* A = +EXC_AMP, B = -EXC_AMP: D = A - B = 2 EXC_AMP */
