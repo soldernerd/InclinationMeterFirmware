@@ -54,6 +54,14 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined library search paths
 )
 
+# Build id (commit + dirty flag), regenerated at every build into ${CMAKE_BINARY_DIR}/generated/build_info.h; the file is
+# only rewritten when the id changes, so an unchanged tree does not recompile anything.
+add_custom_target(build_info ALL
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/generated/build_info.h
+            -P ${CMAKE_SOURCE_DIR}/cmake/build_info.cmake
+    COMMENT "Updating the build id")
+add_dependencies(${CMAKE_PROJECT_NAME} build_info)
+
 # Add sources to executable
 file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_SOURCE_DIR}/App/*.c"
@@ -87,6 +95,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     "${CMAKE_SOURCE_DIR}/HAL_App"
     "${CMAKE_SOURCE_DIR}/Config"
     "${CMAKE_SOURCE_DIR}/Middleware/u8g2/csrc"
+    "${CMAKE_BINARY_DIR}/generated"
 )
 
 # Add project symbols (macros)

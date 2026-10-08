@@ -16,6 +16,9 @@ parts that are only otherwise exercised by flashing a board:
 | `test_apiv3.py` | the Python client library (`PythonTestCode/apiv3.py`): CRC, framing, byte-stream and USB HID reassembly, every generated payload round-tripped, generated files up to date |
 | `test_math_fault.c` / `test_math_supervisor.c` | the fault record kept across a reset (pack / unpack / corruption check) and the decision logic of the supervised watchdog (when the SysTick interrupt may refresh it) |
 | `test_svc_service.c` | service mode: entered only locally, left explicitly, ended by 10 minutes without API activity, restarted by each request |
+| `test_svc_battery.c` | battery policy: voltage scaling, state of charge, low / critical thresholds, charge start / latch / force / inhibit, VBUS debounce, shutdown timing (real `svc_battery.c` against GPIO / ADC doubles) |
+| `test_svc_storage.c` | EEPROM pages against a fake 24LC256: seeding, reboot round trip, CRC / version corruption, busy / retry / give-up, stuck-op timeout, range guards |
+| `test_math_bme280.c` | BME280 compensation against the Bosch datasheet example and a double-precision reference |
 | `test_txframe.c`   | `Services/svc_txframe.c` — the SPSC frame FIFO: FIFO order, wrap, the 64-byte urgent reserve, oversized-frame refusal, reset |
 | `test_transfer.c`  | the extracted fixed-point transfer / decode functions: `drv_tmp236_mv_to_cdeg` (two-segment fit, boundary continuity, negative °C), `drv_lm35_mv_to_cdeg`, `drv_encoder_quad_step` (all 16 Gray-code transitions) |
 

@@ -1,6 +1,7 @@
 #include "drv_bme280.h"
 #include "hal_i2c.h"
 #include "hal_systick.h"
+#include "math_bme280.h"
 #include "config.h"
 #include <string.h>
 #include <stdbool.h>
@@ -32,13 +33,7 @@
  * subsequent compensation calculation. Types/names match the datasheet's
  * own compensation formulas (4.2.3) exactly, to keep that code
  * transcribable without translation. */
-static uint16_t dig_T1;
-static int16_t  dig_T2, dig_T3;
-static uint16_t dig_P1;
-static int16_t  dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
-static uint8_t  dig_H1, dig_H3;
-static int16_t  dig_H2, dig_H4, dig_H5;
-static int8_t   dig_H6;
+static MathBme280Calib s_cal;
 
 static bme280_data_t s_last_result;
 static bool          s_have_result = false;
@@ -83,53 +78,6 @@ static DrvStatus read_regs(uint8_t reg, uint8_t *buf, uint16_t len)
  * fine-resolution temperature value over into the pressure/humidity
  * formulas, exactly as documented. */
 static int32_t t_fine;
-
-static int32_t compensate_T_int32(int32_t adc_T)
-{
-    int32_t var1, var2, T;
-    var1 = ((((adc_T >> 3) - ((int32_t)dig_T1 << 1))) * ((int32_t)dig_T2)) >> 11;
-    var2 = (((((adc_T >> 4) - ((int32_t)dig_T1)) * ((adc_T >> 4) - ((int32_t)dig_T1))) >> 12) *
-            ((int32_t)dig_T3)) >> 14;
-    t_fine = var1 + var2;
-    T = (t_fine * 5 + 128) >> 8;
-    return T;
-}
-
-static uint32_t compensate_P_int64(int32_t adc_P)
-{
-    int64_t var1, var2, p;
-    var1 = ((int64_t)t_fine) - 128000;
-    var2 = var1 * var1 * (int64_t)dig_P6;
-    var2 = var2 + ((var1 * (int64_t)dig_P5) << 17);
-    var2 = var2 + (((int64_t)dig_P4) << 35);
-    var1 = ((var1 * var1 * (int64_t)dig_P3) >> 8) + ((var1 * (int64_t)dig_P2) << 12);
-    var1 = (((((int64_t)1) << 47) + var1)) * ((int64_t)dig_P1) >> 33;
-    if (var1 == 0) {
-        return 0;   /* avoid exception caused by division by zero */
-    }
-    p = 1048576 - adc_P;
-    p = (((p << 31) - var2) * 3125) / var1;
-    var1 = (((int64_t)dig_P9) * (p >> 13) * (p >> 13)) >> 25;
-    var2 = (((int64_t)dig_P8) * p) >> 19;
-    p = ((p + var1 + var2) >> 8) + (((int64_t)dig_P7) << 4);
-    return (uint32_t)p;
-}
-
-static uint32_t compensate_H_int32(int32_t adc_H)
-{
-    int32_t v_x1_u32r;
-    v_x1_u32r = (t_fine - ((int32_t)76800));
-    v_x1_u32r = (((((adc_H << 14) - (((int32_t)dig_H4) << 20) - (((int32_t)dig_H5) *
-                 v_x1_u32r)) + ((int32_t)16384)) >> 15) * (((((((v_x1_u32r *
-                 ((int32_t)dig_H6)) >> 10) * (((v_x1_u32r * ((int32_t)dig_H3)) >> 11) +
-                 ((int32_t)32768))) >> 10) + ((int32_t)2097152)) * ((int32_t)dig_H2) +
-                 8192) >> 14));
-    v_x1_u32r = (v_x1_u32r - (((((v_x1_u32r >> 15) * (v_x1_u32r >> 15)) >> 7) *
-                 ((int32_t)dig_H1)) >> 4));
-    v_x1_u32r = (v_x1_u32r < 0 ? 0 : v_x1_u32r);
-    v_x1_u32r = (v_x1_u32r > 419430400 ? 419430400 : v_x1_u32r);
-    return (uint32_t)(v_x1_u32r >> 12);
-}
 
 /* Full reset+chip-ID+calibration-readout sequence -- the actual body of
  * drv_bme280_init() below, factored out so drv_bme280_update() can also
@@ -180,35 +128,11 @@ static DrvStatus try_init(void)
     if (read_regs(REG_CALIB00, calib_low, sizeof(calib_low)) != DRV_OK) {
         return DRV_ERR_COMM;
     }
-    dig_T1 = (uint16_t)(calib_low[0]  | (calib_low[1]  << 8));
-    dig_T2 = (int16_t)(calib_low[2]  | (calib_low[3]  << 8));
-    dig_T3 = (int16_t)(calib_low[4]  | (calib_low[5]  << 8));
-    dig_P1 = (uint16_t)(calib_low[6]  | (calib_low[7]  << 8));
-    dig_P2 = (int16_t)(calib_low[8]  | (calib_low[9]  << 8));
-    dig_P3 = (int16_t)(calib_low[10] | (calib_low[11] << 8));
-    dig_P4 = (int16_t)(calib_low[12] | (calib_low[13] << 8));
-    dig_P5 = (int16_t)(calib_low[14] | (calib_low[15] << 8));
-    dig_P6 = (int16_t)(calib_low[16] | (calib_low[17] << 8));
-    dig_P7 = (int16_t)(calib_low[18] | (calib_low[19] << 8));
-    dig_P8 = (int16_t)(calib_low[20] | (calib_low[21] << 8));
-    dig_P9 = (int16_t)(calib_low[22] | (calib_low[23] << 8));
-    /* calib_low[24] = register 0xA0, reserved/unused (gap between the
-     * pressure trim block and dig_H1). */
-    dig_H1 = calib_low[25];   /* register 0xA1 */
-
     uint8_t calib_high[7];
     if (read_regs(REG_CALIB26, calib_high, sizeof(calib_high)) != DRV_OK) {
         return DRV_ERR_COMM;
     }
-    dig_H2 = (int16_t)(calib_high[0] | (calib_high[1] << 8));
-    dig_H3 = calib_high[2];
-    /* dig_H4/dig_H5 are packed as two 12-bit values sharing register
-     * 0xE5's two nibbles (datasheet Table 16) -- transcribed directly
-     * from Bosch's own reference driver, not re-derived, since this
-     * layout is a well-known source of transcription errors. */
-    dig_H4 = (int16_t)(((int8_t)calib_high[3] * 16) | (calib_high[4] & 0x0FU));
-    dig_H5 = (int16_t)(((int8_t)calib_high[5] * 16) | (calib_high[4] >> 4));
-    dig_H6 = (int8_t)calib_high[6];
+    math_bme280_parse_calib(calib_low, calib_high, &s_cal);
 
     s_initialized = true;
     return DRV_OK;
@@ -335,9 +259,9 @@ DrvStatus drv_bme280_update(void)
     int32_t adc_T = ((int32_t)data[3] << 12) | ((int32_t)data[4] << 4) | (data[5] >> 4);
     int32_t adc_H = ((int32_t)data[6] << 8) | data[7];
 
-    int32_t  temp_c01   = compensate_T_int32(adc_T);          /* 0.01 degC */
-    uint32_t pressure_q24_8 = compensate_P_int64(adc_P);      /* Q24.8 Pa */
-    uint32_t humidity_q22_10 = compensate_H_int32(adc_H);     /* Q22.10 %RH */
+    int32_t  temp_c01   = math_bme280_temperature(&s_cal, adc_T, &t_fine);          /* 0.01 degC */
+    uint32_t pressure_q24_8 = math_bme280_pressure_q24_8(&s_cal, adc_P, t_fine);      /* Q24.8 Pa */
+    uint32_t humidity_q22_10 = math_bme280_humidity_q22_10(&s_cal, adc_H, t_fine);     /* Q22.10 %RH */
 
     s_last_result.temp_cdeg          = (int16_t)temp_c01;
     s_last_result.pressure_pa        = pressure_q24_8 >> 8;

@@ -1,5 +1,6 @@
 #include "svc_api_res.h"
 #include "app_version.h"
+#include "build_info.h"      /* FW_BUILD_ID, generated at build time */
 #include "config.h"
 #include "system_state.h"
 #include "svc_battery.h"
@@ -49,7 +50,7 @@ Api2Status api_h_system_identity(const ApiResource *r, ApiCall *c)
     /* all three words of the 96-bit factory UID folded to 32 bits (HAL_App/hal_mcu.c): the same value the STATUS
      * screen shows and the USB serial string is derived from */
     format_hex32(p.serial, hal_mcu_uid_low());
-    copy_fixed(p.build, __DATE__ " " __TIME__, sizeof p.build);
+    copy_fixed(p.build, FW_BUILD_ID, sizeof p.build);
     API2_REPLY(c, &p);
     return API2_STATUS_OK;
 }

@@ -89,7 +89,8 @@ SYSTEM = Cat(0x0, "SYSTEM", "System", (GET, SET),
            F(U8, "api_version", "protocol version, 3"),
            F(U16, "max_payload", "largest payload any packet may carry (122)", "B"),
            F(S(16), "product"), F(S(8), "serial", "8 hex digits of the factory UID, identical to the USB serial"),
-           F(S(20), "build", "compile date and time, e.g. 'Oct  8 2026 19:52:59'")]),
+           F(S(20), "build", "build id: the git commit the firmware was built from (8 hex digits), '-dirty' appended if the "
+                       "working tree had uncommitted changes, 'nogit' for a build from a source archive")]),
   Res("STATE", 0x01, (GET,), "Live state: battery, connections, charging, rails and which activities are running. "
       "Also available as the periodic topic STATUS.",
       rsp=[F(U8, "battery_state", "0 normal, 1 low, 2 critical, 3 charging, 4 full"),

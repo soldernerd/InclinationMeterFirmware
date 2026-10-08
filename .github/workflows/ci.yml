@@ -1,0 +1,53 @@
+name: CI
+
+# Host tests and the firmware build, on every push and pull request.
+# NOTE: written 2026-10-08 without being able to run it (no GitHub Actions access from the dev box). The commands are the
+# ones that work locally (see README.md "Building"); check the first run and fix whatever differs on the runner image.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: Host unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build and run every suite (also checks that the generated API files are current)
+        run: make -C tests
+
+  firmware:
+    name: Firmware (${{ matrix.build_type }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive            # Middleware/u8g2
+          fetch-depth: 0                   # the build id is read from git
+      - uses: carlosperate/arm-none-eabi-gcc-action@v1
+        with:
+          release: "14.2.Rel1"             # the toolchain the project is developed with
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake --preset ${{ matrix.build_type }}
+      - name: Build (warnings are errors)
+        run: cmake --build build/${{ matrix.build_type }}
+      - name: Size
+        run: arm-none-eabi-size build/${{ matrix.build_type }}/InclinationMeterFirmware.elf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.build_type }}
+          path: |
+            build/${{ matrix.build_type }}/InclinationMeterFirmware.elf
+            build/${{ matrix.build_type }}/InclinationMeterFirmware.hex
+            build/${{ matrix.build_type }}/InclinationMeterFirmware.map
+          if-no-files-found: warn

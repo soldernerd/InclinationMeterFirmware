@@ -48,7 +48,7 @@ Verbs: `GET` = 0x0000
 | 4 | u16 | `max_payload` | B | largest payload any packet may carry (122) |
 | 6 | char[16] | `product` |  |  |
 | 22 | char[8] | `serial` |  | 8 hex digits of the factory UID, identical to the USB serial |
-| 30 | char[20] | `build` |  | compile date and time, e.g. 'Oct  8 2026 19:52:59' |
+| 30 | char[20] | `build` |  | build id: the git commit the firmware was built from (8 hex digits), '-dirty' appended if the working tree had uncommitted changes, 'nogit' for a build from a source archive |
 
 ### System STATE (0x0/0x01)
 

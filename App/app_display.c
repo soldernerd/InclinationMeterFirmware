@@ -7,6 +7,7 @@
 #include "svc_battery.h"
 #include "svc_api.h"
 #include "svc_service.h"
+#include "build_info.h"
 #include "svc_displacement.h"
 #include "hal_rtc.h"
 #include "hal_systick.h"
@@ -463,7 +464,7 @@ static void draw_status_screen(void)
 
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
     int y = 38;
-    snprintf(line, sizeof line, "Firmware:  v%s", FW_VERSION_STRING);
+    snprintf(line, sizeof line, "Firmware:  v%s  %s", FW_VERSION_STRING, FW_BUILD_ID);
     u8g2_DrawUTF8(&s_u8g2, 8, (u8g2_uint_t)y, line);  y += 18;
     /* Last 32 bits of the MCU's factory UID (HAL_App/hal_mcu.c) — same
      * value the API v2 IDENTITY response reports (svc_api.c), telling two
