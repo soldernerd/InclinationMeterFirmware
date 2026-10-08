@@ -24,6 +24,8 @@ falls to --abort-soc while not charging. Needs auto power-off disabled on the bo
 python drift_tests.py --plan quick            # ~12 min functional test
 python drift_tests.py --plan main             # the full sequence
 python drift_tests.py --plan quick --dry-run  # print the schedule only
+python drift_tests.py --plan freq             # static response at n = 10, 12, 9, 16 (excitation fs/n), fw >= 0.10.91
+python drift_tests.py --plan freqalt          # n = 8 / 10 interleaved in 10 min blocks for 4 h (freqalt12: 8 / 12)
 """
 import argparse
 import csv
@@ -42,13 +44,14 @@ F0 = 20833.3333 / 8.0
 BATCH_CYCLES = 64
 COLUMNS = ["index", "t_s", "seq", "cycles", "gap_cycles", "frame_gap", "first_batch",
            "iB", "qB", "iA", "qA", "iS1", "qS1", "iS2", "qS2",
-           "step", "exc_on", "phase", "mux",
+           "step", "exc_on", "phase", "mux", "n",
            "onboard_temp_cdeg", "soc_pct", "charging", "usb", "env_temp_cdeg", "env_press_pa", "env_humid_cpct"]
 
 OP_SUB = a.opcode(a.SUBSCRIBE, a.CAT_TOPICS, a.TOPIC_PHASOR_STREAM)
 OP_UNSUB = a.opcode(a.UNSUBSCRIBE, a.CAT_TOPICS, a.TOPIC_PHASOR_STREAM)
 OP_EXC = a.opcode(a.EXECUTE, a.CAT_COMMANDS, 0x0A)
 OP_MUX = a.opcode(a.EXECUTE, a.CAT_COMMANDS, 0x0B)
+OP_NFREQ = a.opcode(a.EXECUTE, a.CAT_COMMANDS, 0x0C)   # fw 0.10.91: excitation frequency = fs / n (n = samples per cycle, 4..16)
 OP_STATUS = a.opcode(a.GET, a.CAT_TOPICS, a.TOPIC_STATUS)
 OP_TEMP = a.opcode(a.GET, a.CAT_MEAS, a.MEAS_ONBOARD_TEMP)
 OP_ENV_T = a.opcode(a.GET, a.CAT_MEAS, a.MEAS_BME280_TEMP)
@@ -67,8 +70,8 @@ def decode_entry(d):
 
 
 # ------------------------------------------------------------------ plans
-def step(name, dur, exc=1, phase=0, mux=NORMAL, chop=0):
-    return dict(name=name, dur=dur, exc=exc, phase=phase, mux=tuple(mux), chop=chop)
+def step(name, dur, exc=1, phase=0, mux=NORMAL, chop=0, n=8):
+    return dict(name=name, dur=dur, exc=exc, phase=phase, mux=tuple(mux), chop=chop, n=n)
 
 def plan_quick():
     p = [step("baseline", 90)]
@@ -104,7 +107,26 @@ def plan_main():
     p.append(step("baseline_4", 600))
     return p
 
-PLANS = {"quick": plan_quick, "phase": plan_phase_reversal, "main": plan_main,
+def plan_freq_static():
+    """Static response at several excitation frequencies (fs / n): 3 min each, phase 0, plus a 0/180 reversal at each."""
+    p = [step("n08_start", 180, n=8)]
+    for n in (10, 12, 9, 16, 8):
+        p.append(step(f"n{n:02d}", 180, n=n))
+        p.append(step(f"n{n:02d}_ph180", 60, phase=2048, n=n))
+        p.append(step(f"n{n:02d}_ph000", 60, phase=0, n=n))
+    return p
+
+def plan_freq_alt(hours=4.0, block_s=600, n_alt=10):
+    """Interleaved n = 8 / n_alt blocks (block_s each) so both frequencies see the same slow drift."""
+    p = [step("n08_start", 300, n=8)]
+    for i in range(int(hours * 3600 // block_s)):
+        n = n_alt if i % 2 == 0 else 8
+        p.append(step(f"alt_n{n:02d}_{i:02d}", block_s, n=n))
+    p.append(step("n08_end", 300, n=8))
+    return p
+
+PLANS = {"freq": plan_freq_static, "freqalt": plan_freq_alt, "freqalt12": lambda: plan_freq_alt(4.0, 600, 12),
+         "quick": plan_quick, "phase": plan_phase_reversal, "main": plan_main,
          "short": lambda: [step("baseline", 600), step("short_ch0_ch3", 7200, mux=(1, 0, 0, 1)), step("baseline_after", 1200)],
          "off": lambda: [step("baseline", 600), step("excitation_off", 10800, exc=0), step("baseline_after", 3600)],
          "chop": lambda: [step("baseline", 600), step("chop_30s", 21600, chop=30), step("baseline_after", 600)]}
@@ -113,7 +135,7 @@ def desired(st, tin):
     phase = st["phase"]
     if st["chop"]:
         phase = (phase + (2048 if int(tin // st["chop"]) % 2 else 0)) & 0xFFF
-    return (st["exc"], phase, st["mux"])
+    return (st["exc"], phase, st["mux"], st["n"])
 
 
 # ------------------------------------------------------------------ helpers
@@ -161,7 +183,7 @@ def main():
                 if d != applied:
                     n += 1
                     if n <= 40 or tin == 0:
-                        print(f"    t+{tin:5d}s in {s['name']}: apply exc={d[0]} phase={d[1]} mux={d[2]}")
+                        print(f"    t+{tin:5d}s in {s['name']}: apply exc={d[0]} phase={d[1]} mux={d[2]} n={d[3]}")
                     applied = d
         print(f"  {n} state changes in total")
         return
@@ -189,8 +211,8 @@ def main():
     st, _ = request(ser, reasm, OP_SUB, a.build_interval(50))
     if st != 0:
         sys.exit(f"SUBSCRIBE refused: {a.STATUS.get(st, st)}")
-    applied = None                      # (exc, phase, mux) as applied to the board; None = unknown
-    cur_exc, cur_phase, cur_mux = 1, 0, NORMAL
+    applied = None                      # (exc, phase, mux, n) as applied to the board; None = unknown
+    cur_exc, cur_phase, cur_mux, cur_n = 1, 0, NORMAL, 8
     slow = dict(temp=None, soc=None, chg=None, usb=None, et=None, ep=None, eh=None)
     rows = 0; tot_gap = 0; tot_bad = 0; recoveries = 0
     prev_seq = prev_frame = None; cycles = 0
@@ -201,8 +223,11 @@ def main():
     aborted = False
 
     def send_state(d):
-        nonlocal applied, cur_exc, cur_phase, cur_mux
-        exc, phase, mux = d
+        nonlocal applied, cur_exc, cur_phase, cur_mux, cur_n
+        exc, phase, mux, nsel = d
+        if applied is None or applied[3] != nsel:
+            ser.write(a.build(OP_NFREQ, bytes([nsel])))
+            time.sleep(1.0)             # frequency word + demod switch + measurement restart
         if applied is None or (applied[0], applied[1]) != (exc, phase):
             ser.write(a.build(OP_EXC, struct.pack("<BH", exc, phase)))
         base = applied[2] if applied is not None else (None,) * 4
@@ -215,7 +240,7 @@ def main():
             ser.write(a.build(OP_MUX, bytes([mask, val])))
             time.sleep(0.4)             # the mux command restarts the measurement
         applied = d
-        cur_exc, cur_phase, cur_mux = exc, phase, mux
+        cur_exc, cur_phase, cur_mux, cur_n = exc, phase, mux, nsel
 
     try:
         while True:
@@ -229,7 +254,7 @@ def main():
                 log(f"STEP {step_idx+1}/{len(plan)}: {cur_step['name']} ({cur_step['dur']} s)")
             d = desired(cur_step, tin)
             if d != applied:
-                log(f"  apply exc={d[0]} phase={d[1]} mux={d[2]}") if not cur_step["chop"] or applied is None or applied[2] != d[2] or applied[0] != d[0] else None
+                log(f"  apply exc={d[0]} phase={d[1]} mux={d[2]} n={d[3]}") if not cur_step["chop"] or applied is None or applied[2] != d[2] or applied[0] != d[0] or applied[3] != d[3] else None
                 send_state(d)
             if now - t0 >= next_poll:
                 for op in (OP_STATUS, OP_TEMP, OP_ENV_T, OP_ENV_P, OP_ENV_H):
@@ -296,7 +321,7 @@ def main():
                 w.writerow([rows, f"{time.time() - t0:.4f}", e["seq"], cycles, gap, frame_gap, first,
                             repr(e["iB"]), repr(e["qB"]), repr(e["iA"]), repr(e["qA"]),
                             repr(e["iS1"]), repr(e["qS1"]), repr(e["iS2"]), repr(e["qS2"]),
-                            cur_step["name"], cur_exc, cur_phase, mux_s,
+                            cur_step["name"], cur_exc, cur_phase, mux_s, cur_n,
                             "" if slow["temp"] is None else slow["temp"], "" if slow["soc"] is None else slow["soc"],
                             "" if slow["chg"] is None else slow["chg"], "" if slow["usb"] is None else slow["usb"],
                             "" if slow["et"] is None else slow["et"], "" if slow["ep"] is None else slow["ep"],
@@ -316,10 +341,12 @@ def main():
     except KeyboardInterrupt:
         log("interrupted")
     finally:
-        log("restoring: excitation ON, phase 0, all ADC channels normal")
+        log("restoring: excitation ON, phase 0, n = 8 (2604 Hz), all ADC channels normal")
         try:
             ser.write(a.build(OP_EXC, struct.pack("<BH", 1, 0)))
             time.sleep(0.2)
+            ser.write(a.build(OP_NFREQ, bytes([8])))
+            time.sleep(1.0)
             ser.write(a.build(OP_MUX, bytes([0x0F, 0])))
             time.sleep(0.6)
         except Exception as ex:

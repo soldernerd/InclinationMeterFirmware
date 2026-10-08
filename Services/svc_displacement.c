@@ -1,4 +1,5 @@
 #include "svc_displacement.h"
+#include "drv_ad9833.h"
 #include "drv_ads131m04.h"
 #include "math_phasor.h"
 #include "math_window.h"
@@ -65,7 +66,7 @@ static inline bool code_is_clipped(int32_t code)
  * weights are applied later, once per batch, by math_phasor_combine().
  * seq = the per-cycle sequence number of the batch's LAST cycle. */
 typedef struct {
-    int32_t  pos_sum[4][MATH_PHASOR_SAMPLES_PER_CYCLE];
+    int32_t  pos_sum[4][MATH_PHASOR_MAX_N];
     uint16_t seq;
 } RawBatch;
 
@@ -97,7 +98,8 @@ static volatile uint16_t s_in_tail = 0;
  * svc_signal_analysis.c). */
 static uint8_t  s_sample_idx   = 0;                 /* position within the cycle, 0..7 */
 static uint8_t  s_batch_cycles = 0;                 /* cycles completed in the batch in progress */
-static int32_t  s_pos_sum[4][MATH_PHASOR_SAMPLES_PER_CYCLE];   /* [ADC channel][position] */
+static int32_t  s_pos_sum[4][MATH_PHASOR_MAX_N];   /* [ADC channel][position] */
+static uint8_t  s_n_pos = MATH_PHASOR_SAMPLES_PER_CYCLE;   /* samples per carrier cycle (runtime, probe build) */
 
 /* s_input_drop_count is written from on_sample() and read from
  * svc_displacement_get_input_drop_count() (task context) -- volatile,
@@ -262,7 +264,7 @@ static void accum_reset(void)
     s_batch_cycles = 0;
     s_cycle_seq    = 0;
     for (uint8_t ch = 0; ch < 4U; ++ch) {
-        for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+        for (uint8_t n = 0; n < MATH_PHASOR_MAX_N; ++n) {
             s_pos_sum[ch][n] = 0;
         }
     }
@@ -328,7 +330,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     s_pos_sum[3][s_sample_idx] += ch3;
 
     s_sample_idx++;
-    if (s_sample_idx < MATH_PHASOR_SAMPLES_PER_CYCLE) {
+    if (s_sample_idx < s_n_pos) {
         return;
     }
     s_sample_idx = 0;
@@ -354,7 +356,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     } else {
         RawBatch *slot = &s_in_ring[head];
         for (uint8_t ch = 0; ch < 4U; ++ch) {
-            for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+            for (uint8_t n = 0; n < MATH_PHASOR_MAX_N; ++n) {
                 slot->pos_sum[ch][n] = s_pos_sum[ch][n];
             }
         }
@@ -363,7 +365,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     }
 
     for (uint8_t ch = 0; ch < 4U; ++ch) {
-        for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+        for (uint8_t n = 0; n < MATH_PHASOR_MAX_N; ++n) {
             s_pos_sum[ch][n] = 0;
         }
     }
@@ -829,10 +831,10 @@ void svc_displacement_update(void)
     while (s_in_tail != s_in_head && drained < DISPLACEMENT_MAX_BATCHES_PER_TICK) {
         const RawBatch *rb = &s_in_ring[s_in_tail];
         BatchSums sums;
-        math_phasor_combine(rb->pos_sum[1], &sums.iB,  &sums.qB);    /* ch1 = B  */
-        math_phasor_combine(rb->pos_sum[2], &sums.iA,  &sums.qA);    /* ch2 = A  */
-        math_phasor_combine(rb->pos_sum[3], &sums.iS1, &sums.qS1);   /* ch3 = S1 */
-        math_phasor_combine(rb->pos_sum[0], &sums.iS2, &sums.qS2);   /* ch0 = S2 */
+        math_phasor_combine_n(rb->pos_sum[1], &sums.iB,  &sums.qB);    /* ch1 = B  */
+        math_phasor_combine_n(rb->pos_sum[2], &sums.iA,  &sums.qA);    /* ch2 = A  */
+        math_phasor_combine_n(rb->pos_sum[3], &sums.iS1, &sums.qS1);   /* ch3 = S1 */
+        math_phasor_combine_n(rb->pos_sum[0], &sums.iS2, &sums.qS2);   /* ch0 = S2 */
         const uint16_t batch_seq = rb->seq;
         s_in_tail = (uint16_t)((s_in_tail + 1U) & BATCH_RING_MASK);
         drained++;
@@ -990,6 +992,37 @@ uint16_t svc_displacement_capture_sample_count(void)
 uint16_t svc_displacement_capture_drops(void)
 {
     return (uint16_t)drv_ads131m04_get_integrity()->ring_overflow;
+}
+
+DrvStatus svc_displacement_set_samples_per_cycle(uint8_t n)
+{
+    if (n < 4U || n > MATH_PHASOR_MAX_N) {
+        return DRV_ERR_INVALID;
+    }
+    if (s_cap_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    const bool was_running = drv_ads131m04_is_running();
+    if (was_running) {
+        svc_displacement_stop();
+    }
+    DrvStatus rc = DRV_OK;
+    if (!math_phasor_set_n(n)) {
+        rc = DRV_ERR_INVALID;
+    } else {
+        s_n_pos = n;
+        rc = drv_ad9833_set_freqreg(((1UL << 20) + (uint32_t)n / 2U) / (uint32_t)n);   /* round(2^20 / n): f0 = fs / n */
+    }
+    accum_reset();
+    if (was_running) {
+        (void)svc_displacement_start();
+    }
+    return rc;
+}
+
+uint8_t svc_displacement_get_samples_per_cycle(void)
+{
+    return s_n_pos;
 }
 
 DrvStatus svc_displacement_adc_mux(uint8_t ch_mask, uint8_t mux)

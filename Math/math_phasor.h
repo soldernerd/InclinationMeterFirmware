@@ -6,6 +6,16 @@
 
 #define MATH_PHASOR_SAMPLES_PER_CYCLE 8U
 
+/* Runtime samples per carrier cycle (probe build, fw 0.10.91): the ADC rate is fixed (20833.3 Hz), the excitation
+ * frequency fs/N is chosen over the API, so N = fs/f0 may be any integer 4..MATH_PHASOR_MAX_N. math_phasor_set_n() rebuilds
+ * the Q14 cos/sin tables (cos/sin(2 pi k/N) * 16384, the same convention as the fixed N = 8 case); N = 8 keeps using the fast
+ * multiplier-free math_phasor_combine() below, so the default behaviour is bit-identical. Call it with the acquisition
+ * stopped. The scale of |I + jQ| is proportional to N, like the sample count, and cancels in the S/(A-B) ratio. */
+#define MATH_PHASOR_MAX_N 16U
+bool    math_phasor_set_n(uint8_t n);
+uint8_t math_phasor_get_n(void);
+void    math_phasor_combine_n(const int32_t *pos_sum, int64_t *i_out, int64_t *q_out);
+
 /* Combines ONE channel's per-position batch sums into the batch's I/Q
  * phasor (2026-10-03, replaces per-sample weighted accumulation in the hot
  * path).

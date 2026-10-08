@@ -36,4 +36,9 @@ DrvStatus drv_ad9833_set_phase(uint16_t phase12);
 DrvStatus drv_ad9833_set_output(bool on);
 bool      drv_ad9833_output_is_on(void);
 
+/* Investigation hook (fw 0.10.91): write the 28-bit FREQ0 frequency word (f0 = freqreg * MCLK / 2^28, MCLK = 5.3333 MHz)
+ * while the DDS runs (B28 two-word write; the sequence is sent twice because FSYNC on PC13 is a weak pin). The output
+ * state (on / RESET) is kept. A boot always starts at AD9833_FREQREG (2604 Hz). */
+DrvStatus drv_ad9833_set_freqreg(uint32_t freqreg);
+
 #endif /* DRV_AD9833_H */

@@ -262,6 +262,10 @@ typedef enum {
  * mux (0 normal, 1 inputs shorted, 2/3 DC test signal). A running measurement is restarted around the change.
  * Not persistent: every boot starts with all channels normal. */
 #define API2_RES_CMD_ADC_MUX           0x0BU
+/* 0x0C Excitation frequency (fw 0.10.91, drift investigation) -- 1-byte payload n = samples per carrier cycle (4..16, default 8):
+ * the excitation frequency becomes 20833.33 Hz / n (n = 10 -> 2083 Hz, 12 -> 1736 Hz), the demod follows. A running
+ * measurement is restarted. Not persistent: every boot starts at n = 8. */
+#define API2_RES_CMD_EXC_FREQ          0x0CU
 
 #define API2_OP_CMD_TEST_BEEP \
     API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_CMD_TEST_BEEP)

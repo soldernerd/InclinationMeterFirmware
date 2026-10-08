@@ -344,6 +344,13 @@ typedef struct {
  * (the demod state restarts, so the readings are invalid for ~2 s afterwards). Not persistent across a reboot. */
 DrvStatus svc_displacement_adc_mux(uint8_t ch_mask, uint8_t mux);
 
+/* Investigation hook (fw 0.10.91): choose the excitation frequency as fs / n (n = samples per carrier cycle, 4..16; 8 =
+ * 2604 Hz is the default and every boot's value): sets the AD9833 frequency word to round(2^20 / n), switches the demod
+ * to n positions per cycle and restarts a running measurement. Not persistent. The batch stays 64 cycles, so the batch
+ * period is 64 n / 20833.33 s and the cycle counter in the stream counts cycles of 1/f0. */
+DrvStatus svc_displacement_set_samples_per_cycle(uint8_t n);
+uint8_t   svc_displacement_get_samples_per_cycle(void);
+
 DrvStatus svc_displacement_phasor_stream_begin(void);   /* DRV_ERR_NOT_READY if a stream / bulk capture is already active */
 void      svc_displacement_phasor_stream_end(void);
 bool      svc_displacement_phasor_stream_active(void);

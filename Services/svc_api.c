@@ -508,6 +508,27 @@ static void cmd_adc_mux(ApiTransport t, uint16_t opcode,
     send_response(t, opcode, API2_STATUS_OK, 0, 0);
 }
 
+static void cmd_exc_freq(ApiTransport t, uint16_t opcode,
+                         const uint8_t *pl, uint16_t paylen)
+{
+    (void)paylen;
+    const uint8_t n = pl[0];
+    if (n < 4U || n > 16U) {
+        send_response(t, opcode, API2_STATUS_INVALID_PARAMETER, 0, 0);
+        return;
+    }
+    if (s_bulk.active || !g_system_state.ads_ok) {
+        send_response(t, opcode, API2_STATUS_BUSY_EXCLUSIVE, 0, 0);
+        return;
+    }
+    if (svc_displacement_set_samples_per_cycle(n) != DRV_OK) {
+        send_response(t, opcode, API2_STATUS_BUSY_RESOURCE, 0, 0);
+        return;
+    }
+    svc_logf(API2_LOG_INFO, "cmd: excitation frequency fs/%u", (unsigned)n);
+    send_response(t, opcode, API2_STATUS_OK, 0, 0);
+}
+
 static void cmd_power_test(ApiTransport t, uint16_t opcode,
                            const uint8_t *pl, uint16_t paylen)
 {
@@ -652,6 +673,7 @@ static const CommandDesc s_commands[] = {
     { API2_RES_CMD_CHARGE_INHIBIT,    1U, cmd_charge_inhibit   },
     { API2_RES_CMD_EXCITATION,        3U, cmd_excitation       },
     { API2_RES_CMD_ADC_MUX,           2U, cmd_adc_mux          },
+    { API2_RES_CMD_EXC_FREQ,          1U, cmd_exc_freq         },
 };
 #define COMMAND_COUNT (sizeof(s_commands) / sizeof(s_commands[0]))
 

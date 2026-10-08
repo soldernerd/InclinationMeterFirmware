@@ -118,6 +118,17 @@ bool drv_ad9833_output_is_on(void)
     return s_output_on;
 }
 
+DrvStatus drv_ad9833_set_freqreg(uint32_t freqreg)
+{
+    const uint16_t ctrl = s_output_on ? CTRL_B28 : (uint16_t)(CTRL_B28 | CTRL_RESET);
+    for (uint8_t pass = 0; pass < 2U; ++pass) {
+        if (write_word(ctrl) != DRV_OK) return DRV_ERR_COMM;                         /* also resets the LSB/MSB toggle */
+        if (write_word((uint16_t)(FREQ0_WRITE | (freqreg & 0x3FFFUL))) != DRV_OK) return DRV_ERR_COMM;
+        if (write_word((uint16_t)(FREQ0_WRITE | ((freqreg >> 14) & 0x3FFFUL))) != DRV_OK) return DRV_ERR_COMM;
+    }
+    return DRV_OK;
+}
+
 DrvStatus drv_ad9833_sleep(void)
 {
     /* Control-register write (D15:D14 = 00), RESET + SLEEP1 + SLEEP12. */
