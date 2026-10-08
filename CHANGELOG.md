@@ -12,6 +12,10 @@ newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a lin
 - API names only (opcodes unchanged): resource `DISPLACEMENT` -> `TILT_DEMOD` (Commands 0x50, Diagnostics 0x02), System
   state field `displacement_running` -> `demod_running`.
 
+- LIVE screen: heading "Tilt (mm per m)" and the readings carry the unit `mm/m` (they said "Displacement" and `mm`). Visual
+  check on the display pending.
+- `docs/operator-manual.md` (draft).
+
 ## 0.11.1 - 2026-10-08
 - Service mode: calibration writes and the maintenance commands (zero calibration, factory defaults, DFU, power / pin test,
   rails, fault test) need it. It can only be entered on the instrument; it ends by menu, `SERVICE_END`, 10 minutes without API

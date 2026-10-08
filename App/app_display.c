@@ -418,7 +418,7 @@ static void draw_screen_indicator(UiScreen current)
 static void draw_live_screen(void)
 {
     u8g2_SetFont(&s_u8g2, u8g2_font_7x13_tr);
-    u8g2_DrawUTF8(&s_u8g2, 8, 38, "Displacement");
+    u8g2_DrawUTF8(&s_u8g2, 8, 38, "Tilt (mm per m)");
 
     /* s_last.disp1_line/disp2_line/disp_diff_line are pre-formatted once per
      * redraw in snapshot_capture(), NOT here -- see that function's
@@ -861,11 +861,11 @@ static void snapshot_capture(void)
         /* A trailing " !" marks a reading whose window looked disturbed (quality
          * indicator above its threshold, svc_displacement.h); the value is shown
          * either way. */
-        snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "S1 %smm%s", d1,
+        snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "S1 %smm/m%s", d1,
                  svc_displacement_get_display_doubtful1() ? " !" : "");
-        snprintf(s_last.disp2_line, sizeof s_last.disp2_line, "S2 %smm%s", d2,
+        snprintf(s_last.disp2_line, sizeof s_last.disp2_line, "S2 %smm/m%s", d2,
                  svc_displacement_get_display_doubtful2() ? " !" : "");
-        snprintf(s_last.disp_diff_line, sizeof s_last.disp_diff_line, "Diff %smm%s", ddiff,
+        snprintf(s_last.disp_diff_line, sizeof s_last.disp_diff_line, "Diff %smm/m%s", ddiff,
                  svc_displacement_get_display_doubtful_diff() ? " !" : "");
     } else {
         snprintf(s_last.disp1_line, sizeof s_last.disp1_line, "-- not running --");

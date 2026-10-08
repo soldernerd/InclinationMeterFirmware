@@ -41,6 +41,6 @@ fault capture) is host-tested but **not yet run on hardware**.
 - [ ] Battery gauge: voltage calibration done on each unit (divider swap); SoC plausible.
 
 ## Documentation
-- [ ] An operator / service manual exists: screens and keys, the three calibrations step by step, service mode, charging,
-      recovery (DFU), what the flags mean.
+- [ ] `docs/operator-manual.md` checked against the real instrument; every *(unverified)* procedure in it (phase, k, clock trim)
+      run once and corrected.
 - [ ] `README.md` quick start works from a fresh clone (`git clone --recurse-submodules`).
