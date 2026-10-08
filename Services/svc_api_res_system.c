@@ -67,7 +67,7 @@ static void fill_state(Api2SystemStateResponse *p)
     p->charge_inhibited     = svc_battery_is_charge_inhibited() ? 1U : 0U;
     p->rail_3v3_on          = hal_power_rail_3v3_on() ? 1U : 0U;
     p->rail_5v_on           = hal_power_rail_5v_on() ? 1U : 0U;
-    p->displacement_running = svc_displacement_is_running() ? 1U : 0U;
+    p->demod_running = svc_displacement_is_running() ? 1U : 0U;
     p->phasor_stream_active = svc_displacement_phasor_stream_active() ? 1U : 0U;
     p->bulk_active          = api_bulk_active() ? 1U : 0U;
     p->service_mode         = svc_service_active() ? 1U : 0U;

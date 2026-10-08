@@ -32,7 +32,7 @@
 #define API2_RES_COMMANDS_FORCE_CHARGE               0x43U
 #define API2_RES_COMMANDS_END_CHARGING               0x44U
 #define API2_RES_COMMANDS_CHARGE_INHIBIT             0x45U
-#define API2_RES_COMMANDS_DISPLACEMENT               0x50U
+#define API2_RES_COMMANDS_TILT_DEMOD                 0x50U
 #define API2_RES_COMMANDS_ZERO_CAL                   0x51U
 #define API2_RES_COMMANDS_PRECISION                  0x52U
 #define API2_RES_COMMANDS_FACTORY_DEFAULTS           0x60U
@@ -97,7 +97,7 @@
 #define API2_RES_DEBUG_LOG                           0x00U
 #define API2_RES_DIAGNOSTICS_ADC                     0x00U
 #define API2_RES_DIAGNOSTICS_POWER                   0x01U
-#define API2_RES_DIAGNOSTICS_DISPLACEMENT            0x02U
+#define API2_RES_DIAGNOSTICS_TILT_DEMOD              0x02U
 #define API2_RES_BULK_RAW_ADC                        0x00U
 #define API2_RES_PROCEDURES_ZERO_CAL                 0x00U
 #define API2_RES_PROCEDURES_PRECISION                0x01U
@@ -114,7 +114,7 @@
 #define API2_OP_COMMANDS_FORCE_CHARGE_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_FORCE_CHARGE)
 #define API2_OP_COMMANDS_END_CHARGING_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_END_CHARGING)
 #define API2_OP_COMMANDS_CHARGE_INHIBIT_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_CHARGE_INHIBIT)
-#define API2_OP_COMMANDS_DISPLACEMENT_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_DISPLACEMENT)
+#define API2_OP_COMMANDS_TILT_DEMOD_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_TILT_DEMOD)
 #define API2_OP_COMMANDS_ZERO_CAL_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_ZERO_CAL)
 #define API2_OP_COMMANDS_PRECISION_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_PRECISION)
 #define API2_OP_COMMANDS_FACTORY_DEFAULTS_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_FACTORY_DEFAULTS)
@@ -250,7 +250,7 @@
 #define API2_OP_DEBUG_LOG_UNSUBSCRIBE  API2_OPCODE(API2_VERB_UNSUBSCRIBE, API2_CAT_DEBUG, API2_RES_DEBUG_LOG)
 #define API2_OP_DIAGNOSTICS_ADC_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_DIAGNOSTICS, API2_RES_DIAGNOSTICS_ADC)
 #define API2_OP_DIAGNOSTICS_POWER_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_DIAGNOSTICS, API2_RES_DIAGNOSTICS_POWER)
-#define API2_OP_DIAGNOSTICS_DISPLACEMENT_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_DIAGNOSTICS, API2_RES_DIAGNOSTICS_DISPLACEMENT)
+#define API2_OP_DIAGNOSTICS_TILT_DEMOD_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_DIAGNOSTICS, API2_RES_DIAGNOSTICS_TILT_DEMOD)
 #define API2_OP_BULK_RAW_ADC_START_BULK   API2_OPCODE(API2_VERB_START_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
 #define API2_OP_BULK_RAW_ADC_CANCEL_BULK  API2_OPCODE(API2_VERB_CANCEL_BULK, API2_CAT_BULK, API2_RES_BULK_RAW_ADC)
 #define API2_OP_PROCEDURES_ZERO_CAL_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_PROCEDURES, API2_RES_PROCEDURES_ZERO_CAL)
@@ -283,7 +283,7 @@ typedef struct {
     uint8_t  charge_inhibited;
     uint8_t  rail_3v3_on;
     uint8_t  rail_5v_on;
-    uint8_t  displacement_running;
+    uint8_t  demod_running;
     uint8_t  phasor_stream_active;
     uint8_t  bulk_active;
     uint8_t  service_mode;
@@ -337,8 +337,8 @@ typedef struct {
 _Static_assert(sizeof(Api2CommandsChargeInhibitRequest) == 1U, "Api2CommandsChargeInhibitRequest layout");
 typedef struct {
     uint8_t  run;
-} __attribute__((packed)) Api2CommandsDisplacementRequest;
-_Static_assert(sizeof(Api2CommandsDisplacementRequest) == 1U, "Api2CommandsDisplacementRequest layout");
+} __attribute__((packed)) Api2CommandsTiltDemodRequest;
+_Static_assert(sizeof(Api2CommandsTiltDemodRequest) == 1U, "Api2CommandsTiltDemodRequest layout");
 typedef struct {
     uint8_t  action;
     uint8_t  sensor_mask;
@@ -578,7 +578,7 @@ typedef struct {
     uint8_t  charge_inhibited;
     uint8_t  rail_3v3_on;
     uint8_t  rail_5v_on;
-    uint8_t  displacement_running;
+    uint8_t  demod_running;
     uint8_t  phasor_stream_active;
     uint8_t  bulk_active;
     uint8_t  service_mode;
@@ -682,8 +682,8 @@ typedef struct {
     uint32_t max_gap_at_uptime_ms;
     uint16_t gap_over_threshold;
     uint8_t  running;
-} __attribute__((packed)) Api2DiagnosticsDisplacementResponse;
-_Static_assert(sizeof(Api2DiagnosticsDisplacementResponse) == 17U, "Api2DiagnosticsDisplacementResponse layout");
+} __attribute__((packed)) Api2DiagnosticsTiltDemodResponse;
+_Static_assert(sizeof(Api2DiagnosticsTiltDemodResponse) == 17U, "Api2DiagnosticsTiltDemodResponse layout");
 typedef struct {
     uint8_t  page;
 } __attribute__((packed)) Api2BulkRawAdcPush;
@@ -719,7 +719,7 @@ Api2Status api_h_commands_reboot_dfu(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_force_charge(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_end_charging(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_charge_inhibit(const ApiResource *r, ApiCall *c);
-Api2Status api_h_commands_displacement(const ApiResource *r, ApiCall *c);
+Api2Status api_h_commands_tilt_demod(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_zero_cal(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_precision(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_factory_defaults(const ApiResource *r, ApiCall *c);
@@ -753,7 +753,7 @@ Api2Status api_h_topics_signal_diag(const ApiResource *r, ApiCall *c);
 Api2Status api_h_debug_log(const ApiResource *r, ApiCall *c);
 Api2Status api_h_diagnostics_adc(const ApiResource *r, ApiCall *c);
 Api2Status api_h_diagnostics_power(const ApiResource *r, ApiCall *c);
-Api2Status api_h_diagnostics_displacement(const ApiResource *r, ApiCall *c);
+Api2Status api_h_diagnostics_tilt_demod(const ApiResource *r, ApiCall *c);
 Api2Status api_h_bulk_raw_adc(const ApiResource *r, ApiCall *c);
 Api2Status api_h_procedures_zero_cal(const ApiResource *r, ApiCall *c);
 Api2Status api_h_procedures_precision(const ApiResource *r, ApiCall *c);

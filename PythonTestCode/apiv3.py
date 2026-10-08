@@ -157,7 +157,7 @@ def format_state(data: bytes):
     return (f"battery={BATTERY_STATE.get(d['battery_state'], d['battery_state'])} {d['battery_soc_pct']}% "
             f"{d['battery_mv']}mV  usb={d['usb_connected']} ble={d['ble_connected']} charging={d['charging']} "
             f"force={d['force_charging']} inhibit={d['charge_inhibited']}  3v3={d['rail_3v3_on']} "
-            f"5v={d['rail_5v_on']}  demod={d['displacement_running']} stream={d['phasor_stream_active']} "
+            f"5v={d['rail_5v_on']}  demod={d['demod_running']} stream={d['phasor_stream_active']} "
             f"bulk={d['bulk_active']} service={d['service_mode']}")
 
 

@@ -79,7 +79,7 @@ Api2Status api_h_commands_charge_inhibit(const ApiResource *r, ApiCall *c)
     return API2_STATUS_OK;
 }
 
-Api2Status api_h_commands_displacement(const ApiResource *r, ApiCall *c)
+Api2Status api_h_commands_tilt_demod(const ApiResource *r, ApiCall *c)
 {
     (void)r;
     uint8_t on = c->in[0];

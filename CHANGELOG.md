@@ -9,6 +9,8 @@ newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a lin
 - `svc_displacement.c` (1200 lines) split into the acquisition / demodulation core, `svc_disp_capture.c` (bulk raw capture),
   `svc_disp_phasor_stream.c` and `svc_disp_procedures.c` (flip calibration, precision measurement); no behaviour change.
   Host tests for the two procedures added.
+- API names only (opcodes unchanged): resource `DISPLACEMENT` -> `TILT_DEMOD` (Commands 0x50, Diagnostics 0x02), System
+  state field `displacement_running` -> `demod_running`.
 
 ## 0.11.1 - 2026-10-08
 - Service mode: calibration writes and the maintenance commands (zero calibration, factory defaults, DFU, power / pin test,

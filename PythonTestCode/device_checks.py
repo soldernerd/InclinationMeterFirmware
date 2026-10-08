@@ -80,7 +80,7 @@ def run_basic(link):
     print(f"  RTC           [{before}] -> set [{st(s2)}] -> [{after}]")
 
     # tilt demodulation: start / stop
-    s_on, _ = request(link, a.OP_COMMANDS_DISPLACEMENT_EXECUTE, b"\x01")
+    s_on, _ = request(link, a.OP_COMMANDS_TILT_DEMOD_EXECUTE, b"\x01")
     s_live, d_live = request(link, a.OP_TOPICS_LIVE_GET)
     live = a.decode_topics_live_response(d_live) if s_live == 0 else None
     if live:

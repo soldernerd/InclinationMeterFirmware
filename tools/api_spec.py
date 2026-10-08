@@ -103,7 +103,7 @@ SYSTEM = Cat(0x0, "SYSTEM", "System", (GET, SET),
            F(U8, "charge_inhibited", "charging is inhibited (Commands CHARGE_INHIBIT)"),
            F(U8, "rail_3v3_on", "switched 3V3 rail (EEPROM, BME280, battery divider)"),
            F(U8, "rail_5v_on", "5 V rail (display, analog front end, buzzer)"),
-           F(U8, "displacement_running", "the tilt demodulation is running"),
+           F(U8, "demod_running", "the tilt demodulation is running"),
            F(U8, "phasor_stream_active", "a phasor stream subscription owns the ADC"),
            F(U8, "bulk_active", "a bulk transfer is active"),
            F(U8, "service_mode", "service mode is active (unlocks the gated commands and calibration writes)")]),
@@ -155,7 +155,7 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
       "(use CHARGE_INHIBIT).", req=[]),
   Res("CHARGE_INHIBIT", 0x45, (EXECUTE,), "Hold charging off (also cancels a forced charge). Stays in effect until "
       "cleared; not cleared by a USB replug.", req=[F(U8, "inhibit", "1 = inhibit, 0 = allow")]),
-  Res("DISPLACEMENT", 0x50, (EXECUTE,), "Start or stop the tilt demodulation (runs from boot). BUSY_EXCLUSIVE while "
+  Res("TILT_DEMOD", 0x50, (EXECUTE,), "Start or stop the tilt demodulation (runs from boot). BUSY_EXCLUSIVE while "
       "a bulk capture or the phasor stream owns the ADC.", req=[F(U8, "run", "1 = run, 0 = stop")]),
   Res("ZERO_CAL", 0x51, (EXECUTE,), service=True, doc="Flip (zero) calibration, the 180-degree reversal test. Step 1 averages the "
       "reading in the current orientation (optionally only the selected sensors), step 2 after turning the "
@@ -368,7 +368,7 @@ DIAGNOSTICS = Cat(0x7, "DIAGNOSTICS", "Diagnostics", (GET,),
            F(U32, "now_ms", "device tick, a clock-independent time base for rate checks")]),
   Res("POWER", 0x01, (GET,), "Power-test mask and the switched rails.",
       rsp=[F(U32, "mask"), F(U8, "rails", "bit0 3V3 rail on, bit1 5V rail on")]),
-  Res("DISPLACEMENT", 0x02, (GET,), "Tilt demodulation counters and scheduler timing.",
+  Res("TILT_DEMOD", 0x02, (GET,), "Tilt demodulation counters and scheduler timing.",
       rsp=[F(U16, "input_drop", "raw cycles dropped because the batch ring was full (multiples of 64)"),
            F(U16, "degenerate", "batches skipped because A == B"),
            F(U16, "clip", "raw samples within 1 % of ADC full scale"),

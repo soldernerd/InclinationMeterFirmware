@@ -201,13 +201,13 @@ Api2Status api_h_diagnostics_power(const ApiResource *r, ApiCall *c)
     return API2_STATUS_OK;
 }
 
-Api2Status api_h_diagnostics_displacement(const ApiResource *r, ApiCall *c)
+Api2Status api_h_diagnostics_tilt_demod(const ApiResource *r, ApiCall *c)
 {
     (void)r;
     uint16_t gap_ms, over_count;
     uint32_t gap_at_ms;
     svc_displacement_get_max_update_gap(&gap_ms, &gap_at_ms, &over_count);
-    Api2DiagnosticsDisplacementResponse p;
+    Api2DiagnosticsTiltDemodResponse p;
     p.input_drop           = svc_displacement_get_input_drop_count();
     p.degenerate           = svc_displacement_get_degenerate_count();
     p.clip                 = svc_displacement_get_clip_count();

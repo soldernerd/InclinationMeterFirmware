@@ -39,7 +39,7 @@ RES_COMMANDS_REBOOT_DFU = 0x42
 RES_COMMANDS_FORCE_CHARGE = 0x43
 RES_COMMANDS_END_CHARGING = 0x44
 RES_COMMANDS_CHARGE_INHIBIT = 0x45
-RES_COMMANDS_DISPLACEMENT = 0x50
+RES_COMMANDS_TILT_DEMOD = 0x50
 RES_COMMANDS_ZERO_CAL = 0x51
 RES_COMMANDS_PRECISION = 0x52
 RES_COMMANDS_FACTORY_DEFAULTS = 0x60
@@ -104,7 +104,7 @@ RES_TOPICS_SIGNAL_DIAG = 0x05
 RES_DEBUG_LOG = 0x00
 RES_DIAGNOSTICS_ADC = 0x00
 RES_DIAGNOSTICS_POWER = 0x01
-RES_DIAGNOSTICS_DISPLACEMENT = 0x02
+RES_DIAGNOSTICS_TILT_DEMOD = 0x02
 RES_BULK_RAW_ADC = 0x00
 RES_PROCEDURES_ZERO_CAL = 0x00
 RES_PROCEDURES_PRECISION = 0x01
@@ -120,7 +120,7 @@ OP_COMMANDS_REBOOT_DFU_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_REBO
 OP_COMMANDS_FORCE_CHARGE_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_FORCE_CHARGE)
 OP_COMMANDS_END_CHARGING_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_END_CHARGING)
 OP_COMMANDS_CHARGE_INHIBIT_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_CHARGE_INHIBIT)
-OP_COMMANDS_DISPLACEMENT_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_DISPLACEMENT)
+OP_COMMANDS_TILT_DEMOD_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_TILT_DEMOD)
 OP_COMMANDS_ZERO_CAL_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_ZERO_CAL)
 OP_COMMANDS_PRECISION_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_PRECISION)
 OP_COMMANDS_FACTORY_DEFAULTS_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_FACTORY_DEFAULTS)
@@ -256,7 +256,7 @@ OP_DEBUG_LOG_SUBSCRIBE = opcode(SUBSCRIBE, CAT_DEBUG, RES_DEBUG_LOG)
 OP_DEBUG_LOG_UNSUBSCRIBE = opcode(UNSUBSCRIBE, CAT_DEBUG, RES_DEBUG_LOG)
 OP_DIAGNOSTICS_ADC_GET = opcode(GET, CAT_DIAGNOSTICS, RES_DIAGNOSTICS_ADC)
 OP_DIAGNOSTICS_POWER_GET = opcode(GET, CAT_DIAGNOSTICS, RES_DIAGNOSTICS_POWER)
-OP_DIAGNOSTICS_DISPLACEMENT_GET = opcode(GET, CAT_DIAGNOSTICS, RES_DIAGNOSTICS_DISPLACEMENT)
+OP_DIAGNOSTICS_TILT_DEMOD_GET = opcode(GET, CAT_DIAGNOSTICS, RES_DIAGNOSTICS_TILT_DEMOD)
 OP_BULK_RAW_ADC_START_BULK = opcode(START_BULK, CAT_BULK, RES_BULK_RAW_ADC)
 OP_BULK_RAW_ADC_CANCEL_BULK = opcode(CANCEL_BULK, CAT_BULK, RES_BULK_RAW_ADC)
 OP_PROCEDURES_ZERO_CAL_GET = opcode(GET, CAT_PROCEDURES, RES_PROCEDURES_ZERO_CAL)
@@ -282,7 +282,7 @@ def decode_system_identity_response(data):
 
 FMT_SYSTEM_STATE_RESPONSE = '<BBHBBBBBBBBBBB'
 SIZE_SYSTEM_STATE_RESPONSE = struct.calcsize(FMT_SYSTEM_STATE_RESPONSE)
-FIELDS_SYSTEM_STATE_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'displacement_running', 'phasor_stream_active', 'bulk_active', 'service_mode', )
+FIELDS_SYSTEM_STATE_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'demod_running', 'phasor_stream_active', 'bulk_active', 'service_mode', )
 def decode_system_state_response(data):
     if len(data) < SIZE_SYSTEM_STATE_RESPONSE:
         return None
@@ -351,21 +351,21 @@ def decode_commands_charge_inhibit_request(data):
 def encode_commands_charge_inhibit_request(inhibit):
     return struct.pack(FMT_COMMANDS_CHARGE_INHIBIT_REQUEST, inhibit)
 
-FMT_COMMANDS_DISPLACEMENT_REQUEST = '<B'
-SIZE_COMMANDS_DISPLACEMENT_REQUEST = struct.calcsize(FMT_COMMANDS_DISPLACEMENT_REQUEST)
-FIELDS_COMMANDS_DISPLACEMENT_REQUEST = ('run', )
-def decode_commands_displacement_request(data):
-    if len(data) < SIZE_COMMANDS_DISPLACEMENT_REQUEST:
+FMT_COMMANDS_TILT_DEMOD_REQUEST = '<B'
+SIZE_COMMANDS_TILT_DEMOD_REQUEST = struct.calcsize(FMT_COMMANDS_TILT_DEMOD_REQUEST)
+FIELDS_COMMANDS_TILT_DEMOD_REQUEST = ('run', )
+def decode_commands_tilt_demod_request(data):
+    if len(data) < SIZE_COMMANDS_TILT_DEMOD_REQUEST:
         return None
-    v = struct.unpack_from(FMT_COMMANDS_DISPLACEMENT_REQUEST, data)
-    d = dict(zip(FIELDS_COMMANDS_DISPLACEMENT_REQUEST, v))
+    v = struct.unpack_from(FMT_COMMANDS_TILT_DEMOD_REQUEST, data)
+    d = dict(zip(FIELDS_COMMANDS_TILT_DEMOD_REQUEST, v))
     for k, x in d.items():
         if isinstance(x, bytes):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
     return d
 
-def encode_commands_displacement_request(run):
-    return struct.pack(FMT_COMMANDS_DISPLACEMENT_REQUEST, run)
+def encode_commands_tilt_demod_request(run):
+    return struct.pack(FMT_COMMANDS_TILT_DEMOD_REQUEST, run)
 
 FMT_COMMANDS_ZERO_CAL_REQUEST = '<BB'
 SIZE_COMMANDS_ZERO_CAL_REQUEST = struct.calcsize(FMT_COMMANDS_ZERO_CAL_REQUEST)
@@ -1105,7 +1105,7 @@ def decode_topics_env_response(data):
 
 FMT_TOPICS_STATUS_RESPONSE = '<BBHBBBBBBBBBBB'
 SIZE_TOPICS_STATUS_RESPONSE = struct.calcsize(FMT_TOPICS_STATUS_RESPONSE)
-FIELDS_TOPICS_STATUS_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'displacement_running', 'phasor_stream_active', 'bulk_active', 'service_mode', )
+FIELDS_TOPICS_STATUS_RESPONSE = ('battery_state', 'battery_soc_pct', 'battery_mv', 'usb_connected', 'ble_connected', 'charging', 'force_charging', 'charge_inhibited', 'rail_3v3_on', 'rail_5v_on', 'demod_running', 'phasor_stream_active', 'bulk_active', 'service_mode', )
 def decode_topics_status_response(data):
     if len(data) < SIZE_TOPICS_STATUS_RESPONSE:
         return None
@@ -1224,14 +1224,14 @@ def decode_diagnostics_power_response(data):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
     return d
 
-FMT_DIAGNOSTICS_DISPLACEMENT_RESPONSE = '<HHHHHIHB'
-SIZE_DIAGNOSTICS_DISPLACEMENT_RESPONSE = struct.calcsize(FMT_DIAGNOSTICS_DISPLACEMENT_RESPONSE)
-FIELDS_DIAGNOSTICS_DISPLACEMENT_RESPONSE = ('input_drop', 'degenerate', 'clip', 'amplitude_fault', 'max_update_gap_ms', 'max_gap_at_uptime_ms', 'gap_over_threshold', 'running', )
-def decode_diagnostics_displacement_response(data):
-    if len(data) < SIZE_DIAGNOSTICS_DISPLACEMENT_RESPONSE:
+FMT_DIAGNOSTICS_TILT_DEMOD_RESPONSE = '<HHHHHIHB'
+SIZE_DIAGNOSTICS_TILT_DEMOD_RESPONSE = struct.calcsize(FMT_DIAGNOSTICS_TILT_DEMOD_RESPONSE)
+FIELDS_DIAGNOSTICS_TILT_DEMOD_RESPONSE = ('input_drop', 'degenerate', 'clip', 'amplitude_fault', 'max_update_gap_ms', 'max_gap_at_uptime_ms', 'gap_over_threshold', 'running', )
+def decode_diagnostics_tilt_demod_response(data):
+    if len(data) < SIZE_DIAGNOSTICS_TILT_DEMOD_RESPONSE:
         return None
-    v = struct.unpack_from(FMT_DIAGNOSTICS_DISPLACEMENT_RESPONSE, data)
-    d = dict(zip(FIELDS_DIAGNOSTICS_DISPLACEMENT_RESPONSE, v))
+    v = struct.unpack_from(FMT_DIAGNOSTICS_TILT_DEMOD_RESPONSE, data)
+    d = dict(zip(FIELDS_DIAGNOSTICS_TILT_DEMOD_RESPONSE, v))
     for k, x in d.items():
         if isinstance(x, bytes):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')

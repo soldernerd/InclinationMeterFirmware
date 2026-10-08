@@ -54,7 +54,7 @@ static const ApiResource k_res_commands[] = {
     { API2_RES_COMMANDS_FORCE_CHARGE, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 0, 0, api_h_commands_force_charge, 0, 0, 0, 1, 0 },  /* FORCE_CHARGE */
     { API2_RES_COMMANDS_END_CHARGING, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 0, 0, api_h_commands_end_charging, 0, 0, 0, 1, 0 },  /* END_CHARGING */
     { API2_RES_COMMANDS_CHARGE_INHIBIT, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_charge_inhibit, 0, 0, 0, 1, 0 },  /* CHARGE_INHIBIT */
-    { API2_RES_COMMANDS_DISPLACEMENT, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_displacement, 0, 0, 0, 1, 0 },  /* DISPLACEMENT */
+    { API2_RES_COMMANDS_TILT_DEMOD, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_tilt_demod, 0, 0, 0, 1, 0 },  /* TILT_DEMOD */
     { API2_RES_COMMANDS_ZERO_CAL, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 2, api_h_commands_zero_cal, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* ZERO_CAL */
     { API2_RES_COMMANDS_PRECISION, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_precision, 0, 0, 0, 1, 0 },  /* PRECISION */
     { API2_RES_COMMANDS_FACTORY_DEFAULTS, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_factory_defaults, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* FACTORY_DEFAULTS */
@@ -137,7 +137,7 @@ static const ApiResource k_res_debug[] = {
 static const ApiResource k_res_diagnostics[] = {
     { API2_RES_DIAGNOSTICS_ADC, API2_VERB_BIT(API2_VERB_GET), API2_SUB_NONE, 4, 0, 0, api_h_diagnostics_adc, 0, 0, 0, 1, 0 },  /* ADC */
     { API2_RES_DIAGNOSTICS_POWER, API2_VERB_BIT(API2_VERB_GET), API2_SUB_NONE, 4, 0, 0, api_h_diagnostics_power, 0, 0, 0, 1, 0 },  /* POWER */
-    { API2_RES_DIAGNOSTICS_DISPLACEMENT, API2_VERB_BIT(API2_VERB_GET), API2_SUB_NONE, 4, 0, 0, api_h_diagnostics_displacement, 0, 0, 0, 1, 0 },  /* DISPLACEMENT */
+    { API2_RES_DIAGNOSTICS_TILT_DEMOD, API2_VERB_BIT(API2_VERB_GET), API2_SUB_NONE, 4, 0, 0, api_h_diagnostics_tilt_demod, 0, 0, 0, 1, 0 },  /* TILT_DEMOD */
 };
 
 static const ApiResource k_res_bulk[] = {

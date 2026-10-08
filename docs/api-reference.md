@@ -70,7 +70,7 @@ Verbs: `GET` = 0x0001
 | 8 | u8 | `charge_inhibited` |  | charging is inhibited (Commands CHARGE_INHIBIT) |
 | 9 | u8 | `rail_3v3_on` |  | switched 3V3 rail (EEPROM, BME280, battery divider) |
 | 10 | u8 | `rail_5v_on` |  | 5 V rail (display, analog front end, buzzer) |
-| 11 | u8 | `displacement_running` |  | the tilt demodulation is running |
+| 11 | u8 | `demod_running` |  | the tilt demodulation is running |
 | 12 | u8 | `phasor_stream_active` |  | a phasor stream subscription owns the ADC |
 | 13 | u8 | `bulk_active` |  | a bulk transfer is active |
 | 14 | u8 | `service_mode` |  | service mode is active (unlocks the gated commands and calibration writes) |
@@ -149,7 +149,7 @@ One-shot actions. Every command answers with a status byte (plus the payload not
 | 0x43 | FORCE_CHARGE | EXECUTE | Charge regardless of the state of charge while USB power is present, until full or USB removal |
 | 0x44 | END_CHARGING | EXECUTE | Cancel an armed forced charge |
 | 0x45 | CHARGE_INHIBIT | EXECUTE | Hold charging off (also cancels a forced charge) |
-| 0x50 | DISPLACEMENT | EXECUTE | Start or stop the tilt demodulation (runs from boot) |
+| 0x50 | TILT_DEMOD | EXECUTE | Start or stop the tilt demodulation (runs from boot) |
 | 0x51 | ZERO_CAL | EXECUTE | Flip (zero) calibration, the 180-degree reversal test (service mode) |
 | 0x52 | PRECISION | EXECUTE | Triggered precision measurement: one reliable value from the first clean 2 s window within 5 s, else an error |
 | 0x60 | FACTORY_DEFAULTS | EXECUTE | Reset ALL settings and calibrations to the compiled defaults and save them (service mode) |
@@ -213,7 +213,7 @@ Verbs: `EXECUTE` = 0x2145
 |---:|---|---|---|---|
 | 0 | u8 | `inhibit` |  | 1 = inhibit, 0 = allow |
 
-### Commands DISPLACEMENT (0x1/0x50)
+### Commands TILT_DEMOD (0x1/0x50)
 
 Start or stop the tilt demodulation (runs from boot). BUSY_EXCLUSIVE while a bulk capture or the phasor stream owns the ADC.
 
@@ -890,7 +890,7 @@ Verbs: `GET` = 0x0501, `SUBSCRIBE` = 0x3501, `UNSUBSCRIBE` = 0x4501. SUBSCRIBE r
 | 8 | u8 | `charge_inhibited` |  | charging is inhibited (Commands CHARGE_INHIBIT) |
 | 9 | u8 | `rail_3v3_on` |  | switched 3V3 rail (EEPROM, BME280, battery divider) |
 | 10 | u8 | `rail_5v_on` |  | 5 V rail (display, analog front end, buzzer) |
-| 11 | u8 | `displacement_running` |  | the tilt demodulation is running |
+| 11 | u8 | `demod_running` |  | the tilt demodulation is running |
 | 12 | u8 | `phasor_stream_active` |  | a phasor stream subscription owns the ADC |
 | 13 | u8 | `bulk_active` |  | a bulk transfer is active |
 | 14 | u8 | `service_mode` |  | service mode is active (unlocks the gated commands and calibration writes) |
@@ -1014,7 +1014,7 @@ Counters and registers for investigating the acquisition chain. Read-only.
 |---:|---|---|---|
 | 0x00 | ADC | GET | ADS131M04 registers, acquisition integrity counters and the last bulk capture's statistics |
 | 0x01 | POWER | GET | Power-test mask and the switched rails |
-| 0x02 | DISPLACEMENT | GET | Tilt demodulation counters and scheduler timing |
+| 0x02 | TILT_DEMOD | GET | Tilt demodulation counters and scheduler timing |
 
 ### Diagnostics ADC (0x7/0x00)
 
@@ -1069,7 +1069,7 @@ Verbs: `GET` = 0x0701
 | 0 | u32 | `mask` |  |  |
 | 4 | u8 | `rails` |  | bit0 3V3 rail on, bit1 5V rail on |
 
-### Diagnostics DISPLACEMENT (0x7/0x02)
+### Diagnostics TILT_DEMOD (0x7/0x02)
 
 Tilt demodulation counters and scheduler timing.
 
