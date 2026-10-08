@@ -71,3 +71,8 @@ tests/test_math_crc
 tests/test_txframe
 tests/test_transfer
 tests/*.exe
+tests/test_math_phasor
+tests/test_math_window
+tests/test_math_displacement
+tests/test_math_quality
+tests/test_golden_displacement

@@ -2,6 +2,8 @@
 #include "drv_ads131m04.h"
 #include "math_phasor.h"
 #include "math_window.h"
+#include "math_displacement.h"
+#include "math_quality.h"
 #include "svc_log.h"
 #include "hal_systick.h"
 #include "config.h"
@@ -168,23 +170,9 @@ static bool  s_disp_ok       = false;
 /* Batches per second (the batch rate the floor creep is expressed in): carrier
  * cycles per second / cycles per batch. 2604.1667 / 64 = 40.69 Hz. */
 #define BATCH_RATE_HZ  (2604.1667f / (float)DISPLACEMENT_BATCH_CYCLES)
-static MathWindow s_win;
-static float      s_hann_disp[DISPLACEMENT_DISPLAY_TAPS];
-static float      s_hann_disp_sum  = 1.0f;
-static float      s_hann_prec[DISPLACEMENT_PRECISION_WINDOW_BATCHES];
-static float      s_hann_prec_sum  = 1.0f;
-static uint8_t    s_disp_phase     = 0;       /* batches since the last output */
-static float      s_disp_out1      = 0.0f;
-static float      s_disp_out2      = 0.0f;
-static bool       s_disp_doubtful1 = false;
-static bool       s_disp_doubtful2 = false;
-static bool       s_disp_valid     = false;
-static uint16_t   s_disp_seq       = 0;
-/* Contiguity of the batch series: seq of the previous batch (cycle counter of
- * its last cycle), so a dropped batch (seq jump) breaks the windows instead of
- * silently spanning the gap. */
-static uint16_t   s_last_batch_seq = 0;
-static bool       s_have_batch_seq = false;
+/* The window history, the quiet floors, the Hann display stream and its contiguity
+ * tracking live in one pure state machine (Math/math_quality.h, host-tested). */
+static MathDisplay s_ds;
 
 /* Latest completed batch's raw phasors -- same storage/context reasoning
  * as the block above, added 2026-09-25 for the API v2 Topic groups (0x5)
@@ -225,11 +213,7 @@ static float    s_zero_cal_result2_mm = 0.0f;
  * process_one_batch(), the "consumer" is Services/svc_api.c's command
  * handler). */
 static DisplacementPrecisionPhase s_precision_phase     = DISP_PRECISION_IDLE;
-static uint16_t s_precision_fill       = 0;      /* contiguous batches since begin() (capped at the window) */
-static bool     s_precision_disturbed  = false;  /* the newest full window is not clean */
-static bool     s_precision_failed     = false;  /* DONE without a result: no clean window in time */
-static float    s_precision_result1_mm = 0.0f;
-static float    s_precision_result2_mm = 0.0f;
+static MathPrecision s_prec;                     /* fill / disturbed / failed / result (Math/math_quality.h) */
 static uint32_t s_precision_start_ms   = 0;
 
 /* --- Scheduler-gap diagnostic (2026-09-26) --- added specifically to
@@ -289,44 +273,7 @@ static void accum_reset(void)
  * context, demod not running). */
 static void display_reset(void)
 {
-    /* creep per batch so that the floor may double in DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S
-     * if every window is noisier than it: ln2 / (seconds * batches per second) */
-    math_window_reset(&s_win, 0.693147f / ((float)DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S * BATCH_RATE_HZ),
-                      (uint32_t)((float)DISPLACEMENT_QUALITY_RESEED_S * BATCH_RATE_HZ));
-    s_disp_phase = 0;
-    s_disp_out1 = s_disp_out2 = 0.0f;
-    s_disp_doubtful1 = s_disp_doubtful2 = false;
-    s_disp_valid = false;
-    s_have_batch_seq = false;
-    /* s_disp_seq deliberately keeps counting: a consumer sees the change. */
-    s_disp_seq++;
-}
-
-/* Feeds one batch (readings and Im(x) residuals of both sensors) into the
- * history; every DISPLACEMENT_DISPLAY_DECIMATION-th batch, once the display
- * window is full, it publishes the Hann-weighted mean of the newest
- * DISPLACEMENT_DISPLAY_TAPS readings and whether each sensor's window was
- * doubtful (quality indicator above DISPLACEMENT_QUALITY_K x the quiet
- * floor). The reading is shown either way. */
-static void history_feed(float delta1, float residual1, float delta2, float residual2)
-{
-    const float reading[2]  = { delta1, delta2 };
-    const float residual[2] = { residual1, residual2 };
-    math_window_push(&s_win, reading, residual);
-
-    if (++s_disp_phase < DISPLACEMENT_DISPLAY_DECIMATION) {
-        return;
-    }
-    s_disp_phase = 0;
-    if (s_win.count < DISPLACEMENT_DISPLAY_TAPS) {
-        return;   /* window not yet full */
-    }
-    s_disp_out1 = math_window_hann_mean(&s_win, 0, DISPLACEMENT_DISPLAY_TAPS, s_hann_disp, s_hann_disp_sum);
-    s_disp_out2 = math_window_hann_mean(&s_win, 1, DISPLACEMENT_DISPLAY_TAPS, s_hann_disp, s_hann_disp_sum);
-    s_disp_doubtful1 = !math_window_clean_sensor(&s_win, 0, DISPLACEMENT_DISPLAY_TAPS, DISPLACEMENT_QUALITY_K);
-    s_disp_doubtful2 = !math_window_clean_sensor(&s_win, 1, DISPLACEMENT_DISPLAY_TAPS, DISPLACEMENT_QUALITY_K);
-    s_disp_valid = true;
-    s_disp_seq++;
+    math_display_reset(&s_ds);
 }
 
 static void note_saturating(volatile uint16_t *counter)
@@ -422,127 +369,30 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     }
 }
 
-/* Per-sensor calibration, converted from DeviceSettings' EEPROM-backed
- * scaled integers (milli-units / micrometers -- see system_state.h) to
- * float once per cycle. Scaled integers, not raw floats, on the
- * settings side: svc_api.c's SF() field machinery (Services/svc_api.c)
- * is integer-only, matching every other calibration constant in this
- * codebase -- see config.h's DEFAULT_DISP_* comment. */
-typedef struct {
-    float phase_cos, phase_sin;  /* cos/sin of the phase calibration delta (system_state.h) */
-    float inv_pga;           /* 1 / PGA of the sensor channel */
-    float inv_k;             /* 1 / k, k = empirical sensitivity at PGA 1, per mm/m */
-    float zero_ratio;        /* zero of the ratio r (level point), dimensionless */
-} SensorCalF;
-
-/* Tilt calibration (2026-10-06 redesign, system_state.h has the model):
- * delta [mm/m] = (r - zero) / k with r the in-phase ratio. The zero is on
- * r (k-independent), so a k calibration never moves the level point -- the
- * 2026-09-29 cal_mult/d0/sensitivity machinery this replaces existed only
- * to get that property by scaling the stored zero. */
 /* cos/sin of the phase calibration, cached per sensor: the angle changes
  * only when a host SETs it, and sinf/cosf are soft-float library calls on
  * this Cortex-M0+ that must not run every 24.6 ms batch. */
 typedef struct { int16_t cdeg; float c, s; bool valid; } PhaseCache;
 static PhaseCache s_phase_cache[2];
 
-static void load_sensor_cal(SensorCalF *out, int32_t k_micro, uint32_t pga,
-                             int32_t zero_ppm, int16_t phase_cdeg, uint8_t sensor_idx)
+/* Builds one sensor's calibration (DeviceSettings' EEPROM-backed scaled integers
+ * -> floats; the arithmetic itself is Math/math_displacement.c). */
+static void load_sensor_cal(MathSensorCal *out, int32_t k_micro, uint32_t pga,
+                            int32_t zero_ppm, int16_t phase_cdeg, uint8_t sensor_idx)
 {
     PhaseCache *pc = &s_phase_cache[sensor_idx];
     if (!pc->valid || pc->cdeg != phase_cdeg) {
-        float delta_rad = (float)phase_cdeg * (3.14159265f / 18000.0f);
-        pc->c = cosf(delta_rad);
-        pc->s = sinf(delta_rad);
+        math_phase_sincos(phase_cdeg, &pc->c, &pc->s);
         pc->cdeg  = phase_cdeg;
         pc->valid = true;
     }
-    out->phase_cos  = pc->c;
-    out->phase_sin  = pc->s;
-    /* k is stored for PGA = 1; the sensor channel's codes are PGA times
-     * larger, so S is divided by the PGA first. k_micro is guarded > 0 by
-     * svc_storage_validate_settings(). */
-    out->inv_pga    = 1.0f / (float)pga;
-    out->inv_k      = 1.0e6f / (float)k_micro;
-    out->zero_ratio = (float)zero_ppm * 1.0e-6f;
+    math_sensor_cal_make(out, k_micro, pga, zero_ppm, pc->c, pc->s);
 }
 
-/* The values every sensor's computation needs but that don't vary
- * between sensors within one batch -- bundled so process_one_batch()'s
- * two compute_sensor_delta() calls below can't have same-typed adjacent
- * float arguments transposed by a future edit to one call site but not
- * the other.
- *
- * inv_den_re/inv_den_im is 1/(A-B), already inverted -- both sensors
- * divide by the identical (A-B) denominator, so process_one_batch()
- * computes that one reciprocal once via math_complex_reciprocal() and
- * both calls below multiply by it instead of each dividing separately
- * (division is the most expensive op available on this FPU-less
- * Cortex-M0+; multiplication is much cheaper). */
-typedef struct {
-    float inv_den_re, inv_den_im;   /* 1 / (A - B) */
-} SharedCycleTerms;
-
-/* One sensor's x/delta/residual, given the shared (A-B) reciprocal --
- * factored out so process_one_batch() below computes S1 and S2 the same
- * way instead of two hand-duplicated copies. Cannot fail -- the only
- * degenerate case (A-B exactly zero) is checked once in
- * process_one_batch() before this is called, since it's identical for
- * both sensors.
- *
- * The B subtraction dropped 2026-09-30 (docs/signal_processing.tex
- * Section 12, "drop the B term") -- x used to be (S/k - B)/(A-B), which
- * expands to S/(k(A-B)) + z, z = -(A+B)/(2(A-B)) being an "imbalance
- * term" meant to auto-cancel a real A/B excitation imbalance AT THE
- * SENSOR, assuming the sensor's own output carries the excitation
- * midpoint. The 24h granite-plate run's natural charging-start heating
- * event showed the sensor does NOT carry that midpoint (S barely moved
- * while z jumped sharply) -- so z was never cancelling a real imbalance,
- * it was injecting A/B MEASUREMENT-PATH drift (temperature-dependent
- * channel mismatch) straight into the reading. Removing it cut S1's
- * drift ~4x and S2's ~8x on that dataset, with S1-S2 unchanged (z is
- * common-mode, already cancelled there). d0/sensitivity stay valid (the
- * tilt term x=S/(k(A-B)) is unchanged); zero-cal has to be redone since
- * the static Re(z) baseline was folded into the old zero offset. */
-static void compute_sensor_delta(float iS, float qS, const SensorCalF *cal,
-                                  const SharedCycleTerms *shared,
-                                  float *delta_out, float *residual_out)
-{
-    /* S / PGA -- k is stored for PGA = 1. */
-    float num_re = iS * cal->inv_pga;
-    float num_im = qS * cal->inv_pga;
-
-    /* u = num * (1/D) -- complex multiply by the precomputed shared
-     * reciprocal of D = A - B, equivalent to num/D without a division. */
-    float u_re = num_re * shared->inv_den_re - num_im * shared->inv_den_im;
-    float u_im = num_re * shared->inv_den_im + num_im * shared->inv_den_re;
-
-    /* Phase calibration (2026-10-06, docs/signal_processing.tex Sec. 9.1,
-     * approach 2): u lies along e^{j delta} for a real tilt, delta being the
-     * sensor's delay relative to the run-time reference D (measured in every
-     * batch, so the sample-grid phase drops out). Rotate by -delta so the
-     * tilt is exactly in-phase: x = u * e^{-j delta}; the quadrature part is
-     * then a clean diagnostic. */
-    float x_re =  u_re * cal->phase_cos + u_im * cal->phase_sin;
-    float x_im = -u_re * cal->phase_sin + u_im * cal->phase_cos;
-
-    /* tilt [mm/m] = (r - zero) / k (2026-10-06 redesign). No "- 0.5": that
-     * belonged to the old (S/k - B)/(A - B) form, dropped 2026-09-30. */
-    *delta_out    = (x_re - cal->zero_ratio) * cal->inv_k;
-    *residual_out = x_im;
-}
-
-/* DISPLACEMENT_BATCH_CYCLES consecutive cycles' raw I/Q, coherently
- * summed (config.h's ROOT-CAUSED comment on DISPLACEMENT_BATCH_CYCLES
- * has the full story on why this exists: single-cycle division-heavy
- * math couldn't sustain the 2.6 kHz production rate once its result was
- * stored anywhere). A plain int64 struct instead of loose same-typed
- * parameters, for the same reason SharedCycleTerms above is a struct --
- * eight adjacent int64_t arguments would be a silent-transposition
- * hazard on a future edit. */
-typedef struct {
-    int64_t iB, qB, iA, qA, iS1, qS1, iS2, qS2;
-} BatchSums;
+/* One batch's phasors: DISPLACEMENT_BATCH_CYCLES consecutive cycles' raw I/Q,
+ * coherently summed (config.h / docs/decisions.md have the story on why the
+ * division-heavy math runs once per batch). */
+typedef MathBatchSums BatchSums;
 
 /* Feeds one batch's delta1_mm/delta2_mm into an in-progress zero-cal
  * step, if one is armed -- called unconditionally from process_one_batch()
@@ -585,67 +435,43 @@ static void zero_cal_accumulate(float delta1, float delta2)
          * domain on disk. */
         /* zero_ppm / k_micro = the stored zero expressed in mm/m (both are
          * x1e-6); the averaged delta already has it subtracted. */
-        s_zero_cal_result1_mm = (float)g_device_settings.disp_s1_zero_ppm
-                               / (float)g_device_settings.disp_s1_k_micro
-                               + (s_zero_cal_step1_avg1 + avg1) / 2.0f;
-        s_zero_cal_result2_mm = (float)g_device_settings.disp_s2_zero_ppm
-                               / (float)g_device_settings.disp_s2_k_micro
-                               + (s_zero_cal_step1_avg2 + avg2) / 2.0f;
+        s_zero_cal_result1_mm = math_zero_cal_new_zero(g_device_settings.disp_s1_zero_ppm,
+                                                       g_device_settings.disp_s1_k_micro,
+                                                       s_zero_cal_step1_avg1, avg1);
+        s_zero_cal_result2_mm = math_zero_cal_new_zero(g_device_settings.disp_s2_zero_ppm,
+                                                       g_device_settings.disp_s2_k_micro,
+                                                       s_zero_cal_step1_avg2, avg2);
         s_zero_cal_phase = DISP_ZERO_CAL_RESULT_READY;
     }
 }
 
-/* Ends the precision measurement with a result: the Hann-weighted means of
- * the 81-batch window (S1, S2, and S1-S2 = the difference of the two means,
- * identical to the mean of the per-batch differences because the weights are
- * the same). */
+/* Ends the precision measurement with a result (the Hann-weighted means of the
+ * accepted 81-batch window, computed by math_precision_batch()). */
 static void precision_succeed(void)
 {
-    s_precision_result1_mm = math_window_hann_mean(&s_win, 0, DISPLACEMENT_PRECISION_WINDOW_BATCHES,
-                                                   s_hann_prec, s_hann_prec_sum);
-    s_precision_result2_mm = math_window_hann_mean(&s_win, 1, DISPLACEMENT_PRECISION_WINDOW_BATCHES,
-                                                   s_hann_prec, s_hann_prec_sum);
-    s_precision_failed = false;
-    s_precision_phase  = DISP_PRECISION_DONE;
+    s_precision_phase = DISP_PRECISION_DONE;
 }
 
 /* Ends the precision measurement with an error: no clean window within
  * DISPLACEMENT_PRECISION_TIMEOUT_MS. No value is reported. */
 static void precision_fail(void)
 {
-    s_precision_result1_mm = s_precision_result2_mm = 0.0f;
-    s_precision_failed = true;
-    s_precision_phase  = DISP_PRECISION_DONE;
+    s_prec.result[0] = s_prec.result[1] = 0.0f;
+    s_prec.failed = true;
+    s_precision_phase = DISP_PRECISION_DONE;
 }
 
-/* Called once per batch, after the history was updated. While a precision
- * measurement runs: once DISPLACEMENT_PRECISION_WINDOW_BATCHES contiguous
- * batches have arrived since the trigger, every new batch makes a new
- * 81-batch window (sliding by one); the first one that is clean for both
- * sensors is the result ("accept as soon as the last 2 s are clean"). */
+/* Called once per batch, after the display stream was fed. */
 static void precision_batch(void)
 {
     if (s_precision_phase != DISP_PRECISION_RUNNING) {
         return;
     }
-    if (s_precision_fill < DISPLACEMENT_PRECISION_WINDOW_BATCHES) {
-        s_precision_fill++;
-    }
-    /* A verdict needs the quiet floor (two independent windows after a start,
-     * ~4 s): until then the measurement just waits -- it must not accept a
-     * window that nothing can be compared with. */
-    if (s_precision_fill >= DISPLACEMENT_PRECISION_WINDOW_BATCHES
-        && s_win.count >= DISPLACEMENT_PRECISION_WINDOW_BATCHES
-        && math_window_floor_ready(&s_win)) {
-        if (math_window_clean(&s_win, DISPLACEMENT_PRECISION_WINDOW_BATCHES, DISPLACEMENT_QUALITY_K)) {
-            s_precision_disturbed = false;
-            precision_succeed();
-            return;
-        }
-        s_precision_disturbed = true;
-    }
-    if ((uint32_t)(hal_systick_get_ms() - s_precision_start_ms) >= DISPLACEMENT_PRECISION_TIMEOUT_MS) {
-        precision_fail();
+    bool timed_out = (uint32_t)(hal_systick_get_ms() - s_precision_start_ms) >= DISPLACEMENT_PRECISION_TIMEOUT_MS;
+    switch (math_precision_batch(&s_prec, &s_ds, timed_out)) {
+        case MATH_PRECISION_OK:      precision_succeed(); break;
+        case MATH_PRECISION_TIMEOUT: precision_fail();    break;
+        default:                     break;
     }
 }
 
@@ -668,23 +494,16 @@ static void precision_batch(void)
 
 static bool phasor_exceeds_theoretical_max(int64_t i_sum, int64_t q_sum)
 {
-    double i = (double)i_sum, q = (double)q_sum;
-    double mag2     = i * i + q * q;
-    double max_mag  = DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG;
-    return mag2 > (max_mag * max_mag);
+    return math_phasor_exceeds(i_sum, q_sum, DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG);
 }
 
 static void process_one_batch(const BatchSums *s, uint16_t seq)
 {
-    float iB = (float)s->iB, qB = (float)s->qB;
-    float iA = (float)s->iA, qA = (float)s->qA;
-
-    /* Stash the raw phasors before the degenerate-denominator check below
-     * can return early -- a diagnostic host looking at WHY the excitation
-     * phasors are degenerate needs this snapshot precisely when the delta
-     * math itself can't produce one. */
-    s_phasors.iB = iB;  s_phasors.qB = qB;
-    s_phasors.iA = iA;  s_phasors.qA = qA;
+    /* Stash the raw phasors first -- a diagnostic host looking at WHY the
+     * excitation phasors are degenerate needs this snapshot precisely when the
+     * delta math itself can't produce a reading. */
+    s_phasors.iB = (float)s->iB;  s_phasors.qB = (float)s->qB;
+    s_phasors.iA = (float)s->iA;  s_phasors.qA = (float)s->qA;
     s_phasors.iS1 = (float)s->iS1;  s_phasors.qS1 = (float)s->qS1;
     s_phasors.iS2 = (float)s->iS2;  s_phasors.qS2 = (float)s->qS2;
 
@@ -695,65 +514,49 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
         note_saturating(&s_amplitude_fault_count);
     }
 
-    /* 1/(A - B), the shared denominator's reciprocal -- computed once and
-     * reused by both sensors below. */
-    float inv_den_re, inv_den_im;
-    if (!math_complex_reciprocal(iA - iB, qA - qB, &inv_den_re, &inv_den_im)) {
-        /* A and B phasors exactly identical -- degenerate excitation,
-         * shouldn't happen in practice. Skip rather than divide by
-         * zero. Both sensors share this same (A-B) denominator, so if
-         * it's degenerate it's degenerate for both -- checked once here
-         * instead of once per sensor. */
+    MathSensorCal cal[2];
+    load_sensor_cal(&cal[0], g_device_settings.disp_s1_k_micro, ADS131M04_PGA_S1,
+                    g_device_settings.disp_s1_zero_ppm, g_device_settings.disp_s1_phase_cdeg, 0U);
+    load_sensor_cal(&cal[1], g_device_settings.disp_s2_k_micro, ADS131M04_PGA_S2,
+                    g_device_settings.disp_s2_zero_ppm, g_device_settings.disp_s2_phase_cdeg, 1U);
+
+    MathBatchResult res;
+    if (!math_batch_demod(s, cal, &res)) {
+        /* A and B exactly identical -- degenerate excitation, shouldn't happen in
+         * practice. Skip rather than divide by zero; both sensors share the (A-B)
+         * denominator so it is degenerate for both. */
         note_saturating(&s_degenerate_count);
-        s_have_batch_seq = false;   /* a skipped batch: the next one must not join this window */
+        math_display_skip(&s_ds);   /* the next batch must not join this window */
         s_disp_ok = false;          /* no valid reading from this batch; the next good one sets it again */
-        s_disp_valid = false;
         return;
     }
 
-    /* Contiguity: consecutive batches are exactly DISPLACEMENT_BATCH_CYCLES
-     * cycles apart. A dropped batch (or a restart) forgets the window so no
-     * Hann window or quality window ever spans a gap. */
-    if (!s_have_batch_seq
-        || (uint16_t)(seq - s_last_batch_seq) != (uint16_t)DISPLACEMENT_BATCH_CYCLES) {
-        math_window_break(&s_win);
-        s_disp_phase = 0;
-        s_precision_fill = 0;
+    /* Contiguity: consecutive batches are exactly DISPLACEMENT_BATCH_CYCLES cycles
+     * apart. A dropped batch (or a restart) forgets the windows, and a precision
+     * measurement in progress starts filling again. */
+    if (!math_display_feed(&s_ds, seq, (uint16_t)DISPLACEMENT_BATCH_CYCLES, res.delta, res.residual)) {
+        math_precision_break(&s_prec);
     }
-    s_last_batch_seq = seq;
-    s_have_batch_seq = true;
 
-    SensorCalF s1_cal, s2_cal;
-    load_sensor_cal(&s1_cal, g_device_settings.disp_s1_k_micro, ADS131M04_PGA_S1,
-                     g_device_settings.disp_s1_zero_ppm,
-                     g_device_settings.disp_s1_phase_cdeg, 0U);
-    load_sensor_cal(&s2_cal, g_device_settings.disp_s2_k_micro, ADS131M04_PGA_S2,
-                     g_device_settings.disp_s2_zero_ppm,
-                     g_device_settings.disp_s2_phase_cdeg, 1U);
-
-    SharedCycleTerms shared = {
-        .inv_den_re = inv_den_re,
-        .inv_den_im = inv_den_im,
-    };
-    float delta1, residual1, delta2, residual2;
-    compute_sensor_delta((float)s->iS1, (float)s->qS1, &s1_cal, &shared, &delta1, &residual1);
-    compute_sensor_delta((float)s->iS2, (float)s->qS2, &s2_cal, &shared, &delta2, &residual2);
-
-    s_delta1_mm_raw = delta1;
-    s_delta2_mm_raw = delta2;
-    history_feed(delta1, residual1, delta2, residual2);
-    s_residual1 = residual1;
-    s_residual2 = residual2;
+    s_delta1_mm_raw = res.delta[0];
+    s_delta2_mm_raw = res.delta[1];
+    s_residual1 = res.residual[0];
+    s_residual2 = res.residual[1];
     s_disp_ok   = true;
 
-    zero_cal_accumulate(delta1, delta2);
+    zero_cal_accumulate(res.delta[0], res.delta[1]);
     precision_batch();
 }
 
 DrvStatus svc_displacement_init(void)
 {
-    s_hann_disp_sum = math_hann_weights(s_hann_disp, DISPLACEMENT_DISPLAY_TAPS);
-    s_hann_prec_sum = math_hann_weights(s_hann_prec, DISPLACEMENT_PRECISION_WINDOW_BATCHES);
+    /* creep per batch so that the floor may double in DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S
+     * if every window is noisier than it: ln2 / (seconds * batches per second) */
+    math_display_init(&s_ds, DISPLACEMENT_DISPLAY_TAPS, DISPLACEMENT_DISPLAY_DECIMATION,
+                      DISPLACEMENT_PRECISION_WINDOW_BATCHES, DISPLACEMENT_QUALITY_K,
+                      0.693147f / ((float)DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S * BATCH_RATE_HZ),
+                      (uint32_t)((float)DISPLACEMENT_QUALITY_RESEED_S * BATCH_RATE_HZ));
+    math_precision_start(&s_prec);
     accum_reset();
     s_input_drop_count  = 0;
     s_degenerate_count  = 0;
@@ -832,27 +635,27 @@ static float sensor_sign(uint8_t invert_flag) { return invert_flag ? -1.0f : 1.0
  * it exists (first one ~0.6 s after a start), the raw batch value until then. */
 float svc_displacement_get_delta1_mm(void)
 {
-    return sensor_sign(g_device_settings.disp_s1_invert) * (s_disp_valid ? s_disp_out1 : s_delta1_mm_raw);
+    return sensor_sign(g_device_settings.disp_s1_invert) * (s_ds.valid ? s_ds.out[0] : s_delta1_mm_raw);
 }
 float svc_displacement_get_residual1(void) { return s_residual1; }
 float svc_displacement_get_delta2_mm(void)
 {
-    return sensor_sign(g_device_settings.disp_s2_invert) * (s_disp_valid ? s_disp_out2 : s_delta2_mm_raw);
+    return sensor_sign(g_device_settings.disp_s2_invert) * (s_ds.valid ? s_ds.out[1] : s_delta2_mm_raw);
 }
 float svc_displacement_get_residual2(void) { return s_residual2; }
 bool  svc_displacement_get_ok(void)        { return s_disp_ok; }
 
-float svc_displacement_get_display_delta1_mm(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_disp_out1; }
-float svc_displacement_get_display_delta2_mm(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_disp_out2; }
+float svc_displacement_get_display_delta1_mm(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_ds.out[0]; }
+float svc_displacement_get_display_delta2_mm(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_ds.out[1]; }
 float svc_displacement_get_display_delta_diff_mm(void)
 {
     return svc_displacement_get_display_delta1_mm() - svc_displacement_get_display_delta2_mm();
 }
-bool     svc_displacement_get_display_doubtful1(void) { return s_disp_doubtful1; }
-bool     svc_displacement_get_display_doubtful2(void) { return s_disp_doubtful2; }
-bool     svc_displacement_get_display_doubtful_diff(void) { return s_disp_doubtful1 || s_disp_doubtful2; }
-uint16_t svc_displacement_get_display_seq(void)   { return s_disp_seq; }
-bool     svc_displacement_get_display_valid(void) { return s_disp_ok && s_disp_valid; }
+bool     svc_displacement_get_display_doubtful1(void) { return s_ds.doubtful[0]; }
+bool     svc_displacement_get_display_doubtful2(void) { return s_ds.doubtful[1]; }
+bool     svc_displacement_get_display_doubtful_diff(void) { return s_ds.doubtful[0] || s_ds.doubtful[1]; }
+uint16_t svc_displacement_get_display_seq(void)   { return s_ds.seq; }
+bool     svc_displacement_get_display_valid(void) { return s_disp_ok && s_ds.valid; }
 
 float svc_displacement_get_delta1_mm_raw(void) { return sensor_sign(g_device_settings.disp_s1_invert) * s_delta1_mm_raw; }
 float svc_displacement_get_delta2_mm_raw(void) { return sensor_sign(g_device_settings.disp_s2_invert) * s_delta2_mm_raw; }
@@ -875,9 +678,9 @@ float svc_displacement_get_delta_diff_mm_raw(void)
 /* Window-level verdict of the display stream (the old per-batch residual-step
  * flag was retired 2026-10-07): "ok" = the newest display window was not
  * doubtful. */
-bool svc_displacement_get_quality1_ok(void) { return !s_disp_doubtful1; }
-bool svc_displacement_get_quality2_ok(void) { return !s_disp_doubtful2; }
-bool svc_displacement_get_quality_diff_ok(void) { return !s_disp_doubtful1 && !s_disp_doubtful2; }
+bool svc_displacement_get_quality1_ok(void) { return !s_ds.doubtful[0]; }
+bool svc_displacement_get_quality2_ok(void) { return !s_ds.doubtful[1]; }
+bool svc_displacement_get_quality_diff_ok(void) { return !s_ds.doubtful[0] && !s_ds.doubtful[1]; }
 
 void svc_displacement_get_phasors(DisplacementPhasors *out)
 {
@@ -1327,10 +1130,7 @@ DrvStatus svc_displacement_precision_begin(void)
         && s_zero_cal_phase != DISP_ZERO_CAL_RESULT_READY) {
         return DRV_ERR_NOT_READY;   /* mutually exclusive with an in-progress zero-cal */
     }
-    s_precision_fill       = 0;
-    s_precision_disturbed  = false;
-    s_precision_failed     = false;
-    s_precision_result1_mm = s_precision_result2_mm = 0.0f;
+    math_precision_start(&s_prec);
     s_precision_start_ms   = hal_systick_get_ms();
     s_precision_phase      = DISP_PRECISION_RUNNING;
     return DRV_OK;
@@ -1339,8 +1139,8 @@ DrvStatus svc_displacement_precision_begin(void)
 void svc_displacement_precision_cancel(void)
 {
     s_precision_phase     = DISP_PRECISION_IDLE;
-    s_precision_fill      = 0;
-    s_precision_disturbed = false;
+    s_prec.fill           = 0;
+    s_prec.disturbed      = false;
 }
 
 DisplacementPrecisionPhase svc_displacement_precision_get_phase(void)
@@ -1350,7 +1150,7 @@ DisplacementPrecisionPhase svc_displacement_precision_get_phase(void)
 
 bool svc_displacement_precision_get_disturbed(void)
 {
-    return s_precision_phase == DISP_PRECISION_RUNNING && s_precision_disturbed;
+    return s_precision_phase == DISP_PRECISION_RUNNING && s_prec.disturbed;
 }
 
 void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_out,
@@ -1359,9 +1159,9 @@ void svc_displacement_precision_progress(uint16_t *count1_out, uint16_t *count2_
 {
     /* All three counts report the same thing now (the window fill since the
      * trigger); the three fields are kept for wire compatibility. */
-    if (count1_out)     *count1_out     = s_precision_fill;
-    if (count2_out)     *count2_out     = s_precision_fill;
-    if (count_diff_out) *count_diff_out = s_precision_fill;
+    if (count1_out)     *count1_out     = s_prec.fill;
+    if (count2_out)     *count2_out     = s_prec.fill;
+    if (count_diff_out) *count_diff_out = s_prec.fill;
     if (target_out)     *target_out     = DISPLACEMENT_PRECISION_WINDOW_BATCHES;
     if (elapsed_ms_out) {
         *elapsed_ms_out = (s_precision_phase == DISP_PRECISION_IDLE)
@@ -1377,11 +1177,11 @@ bool svc_displacement_precision_get_result(float *delta1_mm_out, float *delta2_m
     }
     /* Same sign-flip-at-the-output-boundary policy as the getters above --
      * the window means are in the sensors' native sign convention. */
-    float d1 = sensor_sign(g_device_settings.disp_s1_invert) * s_precision_result1_mm;
-    float d2 = sensor_sign(g_device_settings.disp_s2_invert) * s_precision_result2_mm;
+    float d1 = sensor_sign(g_device_settings.disp_s1_invert) * s_prec.result[0];
+    float d2 = sensor_sign(g_device_settings.disp_s2_invert) * s_prec.result[1];
     if (delta1_mm_out)      *delta1_mm_out      = d1;
     if (delta2_mm_out)      *delta2_mm_out      = d2;
     if (delta_diff_mm_out)  *delta_diff_mm_out  = d1 - d2;   /* correct for any combination of invert flags */
-    if (failed_out)         *failed_out         = s_precision_failed;
+    if (failed_out)         *failed_out         = s_prec.failed;
     return true;
 }

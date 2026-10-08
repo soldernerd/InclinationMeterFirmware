@@ -8,6 +8,9 @@ parts that are only otherwise exercised by flashing a board:
 | `test_math_crc.c`  | `Math/math_crc.c` — CRC-16/CCITT-FALSE (spec check value, edge cases, the real API- and ADS131M04-frame uses) |
 | `test_math_phasor.c` | `Math/math_phasor.c` — per-position batch accumulation + `math_phasor_combine()` vs the per-sample reference (exact equality on random and full-scale data, int32 bound) |
 | `test_math_window.c` | `Math/math_window.c` — the LIVE display / precision-measurement window logic: Hann weights, ring wrap, window-level quality flag (burst, recovery, floor creep, break) |
+| `test_math_displacement.c` | `Math/math_displacement.c` — the per-batch demodulation: known tilt/phase/zero/PGA in, tilt out; degenerate excitation; the flip-calibration formula |
+| `test_math_quality.c` | `Math/math_quality.c` — the display stream (cadence, doubtful flag, gaps, wrap) and the sliding-window precision measurement (waits for the floor, rejects disturbed windows, timeout, break) |
+| `test_golden_displacement.c` | replays a recorded 10.6-minute excerpt of the real 19 h phasor stream (`data/`, committed — a clone can run it) through the same pipeline and must reproduce the values the firmware produced before the maths was extracted |
 | `test_txframe.c`   | `Services/svc_txframe.c` — the SPSC frame FIFO: FIFO order, wrap, the 64-byte urgent reserve, oversized-frame refusal, reset |
 | `test_transfer.c`  | the extracted fixed-point transfer / decode functions: `drv_tmp236_mv_to_cdeg` (two-segment fit, boundary continuity, negative °C), `drv_lm35_mv_to_cdeg`, `drv_encoder_quad_step` (all 16 Gray-code transitions) |
 
@@ -21,14 +24,15 @@ Needs a **native** C compiler (`gcc` / `clang`), *not* `arm-none-eabi-gcc`.
 
 ```sh
 cd tests
-make                       # build + run all three
+make                       # build + run all suites
 CC=clang make              # or pick the compiler
+CC="python -m ziglang cc" make   # no compiler installed? pip install ziglang (zig cc)
 ```
 
 Exit code is non-zero if any check fails — drop this into CI as-is.
 
-> The current dev box has no host compiler installed, so these can't be
-> run here yet. `oracle_crc.py` (below) is the piece that runs today.
+The golden test reads `data/` relative to the working directory (run from `tests/`, or from the repo root).
+See `data/README.md` for what the recorded data is and how to change the golden deliberately.
 
 ## `oracle_crc.py`
 
