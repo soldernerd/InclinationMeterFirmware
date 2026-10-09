@@ -70,8 +70,13 @@ def decode_entry(d):
 
 
 # ------------------------------------------------------------------ plans
-def step(name, dur, exc=1, phase=0, mux=NORMAL, chop=0, n=8):
-    return dict(name=name, dur=dur, exc=exc, phase=phase, mux=tuple(mux), chop=chop, n=n)
+CTL_DIR = "C:/Users/lfaes/drift_ctl"      # flag files that steps with ctl=True obey (set by --ctl-dir)
+
+
+def step(name, dur, exc=1, phase=0, mux=NORMAL, chop=0, n=8, ctl=False):
+    """ctl=True: while the file <ctl-dir>/exc_off.flag exists the excitation is held OFF (used to unplug sensors safely);
+    deleting the file switches it back on. Lets a person (or another process) control a running plan without touching COM5."""
+    return dict(name=name, dur=dur, exc=exc, phase=phase, mux=tuple(mux), chop=chop, n=n, ctl=ctl)
 
 def plan_quick():
     p = [step("baseline", 90)]
@@ -125,7 +130,11 @@ def plan_freq_alt(hours=4.0, block_s=600, n_alt=10):
     p.append(step("n08_end", 300, n=8))
     return p
 
-PLANS = {"freq": plan_freq_static, "freqalt": plan_freq_alt, "freqalt12": lambda: plan_freq_alt(4.0, 600, 12), "freqalt16": lambda: plan_freq_alt(4.0, 600, 16),
+def plan_swap(hours=6.5):
+    """One long n = 8 baseline under flag control: create exc_off.flag before unplugging the sensors, delete it afterwards."""
+    return [step("swap_watch", int(hours * 3600), ctl=True)]
+
+PLANS = {"swap": plan_swap, "freq": plan_freq_static, "freqalt": plan_freq_alt, "freqalt12": lambda: plan_freq_alt(4.0, 600, 12), "freqalt16": lambda: plan_freq_alt(4.0, 600, 16),
          "quick": plan_quick, "phase": plan_phase_reversal, "main": plan_main,
          "short": lambda: [step("baseline", 600), step("short_ch0_ch3", 7200, mux=(1, 0, 0, 1)), step("baseline_after", 1200)],
          "off": lambda: [step("baseline", 600), step("excitation_off", 10800, exc=0), step("baseline_after", 3600)],
@@ -135,7 +144,10 @@ def desired(st, tin):
     phase = st["phase"]
     if st["chop"]:
         phase = (phase + (2048 if int(tin // st["chop"]) % 2 else 0)) & 0xFFF
-    return (st["exc"], phase, st["mux"], st["n"])
+    exc = st["exc"]
+    if st.get("ctl") and os.path.exists(os.path.join(CTL_DIR, "exc_off.flag")):
+        exc = 0
+    return (exc, phase, st["mux"], st["n"])
 
 
 # ------------------------------------------------------------------ helpers
@@ -161,6 +173,7 @@ def request(ser, reasm, op, payload=b"", timeout=2.0):
 
 
 def main():
+    global CTL_DIR
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--plan", default="quick", choices=sorted(PLANS))
     ap.add_argument("--port", default="auto")
@@ -168,8 +181,11 @@ def main():
     ap.add_argument("--poll-s", type=float, default=30.0)
     ap.add_argument("--stall-s", type=float, default=10.0)
     ap.add_argument("--abort-soc", type=int, default=12)
+    ap.add_argument("--ctl-dir", default=CTL_DIR, help="directory of the flag files for steps with ctl=True")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    CTL_DIR = args.ctl_dir
+    os.makedirs(CTL_DIR, exist_ok=True)
     plan = PLANS[args.plan]()
     total = sum(s["dur"] for s in plan)
     print(f"plan '{args.plan}': {len(plan)} steps, {total/60:.0f} min ({total/3600:.2f} h)")
