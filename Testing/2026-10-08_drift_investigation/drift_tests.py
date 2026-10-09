@@ -130,11 +130,21 @@ def plan_freq_alt(hours=4.0, block_s=600, n_alt=10):
     p.append(step("n08_end", 300, n=8))
     return p
 
+def plan_freq_odd():
+    """Odd samples per cycle (7, 11, 13) between n = 8 references; 150 s plus a 0/180 reversal (60 s each) at each."""
+    p = [step("n08_ref", 150, n=8)]
+    for n in (7, 11, 13):
+        p.append(step(f"n{n:02d}", 150, n=n))
+        p.append(step(f"n{n:02d}_ph180", 60, phase=2048, n=n))
+        p.append(step(f"n{n:02d}_ph000", 60, phase=0, n=n))
+    p.append(step("n08_end", 150, n=8))
+    return p
+
 def plan_swap(hours=6.5):
     """One long n = 8 baseline under flag control: create exc_off.flag before unplugging the sensors, delete it afterwards."""
     return [step("swap_watch", int(hours * 3600), ctl=True)]
 
-PLANS = {"swap": plan_swap, "freq": plan_freq_static, "freqalt": plan_freq_alt, "freqalt12": lambda: plan_freq_alt(4.0, 600, 12), "freqalt16": lambda: plan_freq_alt(4.0, 600, 16),
+PLANS = {"freqodd": plan_freq_odd, "swap": plan_swap, "freq": plan_freq_static, "freqalt": plan_freq_alt, "freqalt12": lambda: plan_freq_alt(4.0, 600, 12), "freqalt16": lambda: plan_freq_alt(4.0, 600, 16),
          "quick": plan_quick, "phase": plan_phase_reversal, "main": plan_main,
          "short": lambda: [step("baseline", 600), step("short_ch0_ch3", 7200, mux=(1, 0, 0, 1)), step("baseline_after", 1200)],
          "off": lambda: [step("baseline", 600), step("excitation_off", 10800, exc=0), step("baseline_after", 3600)],
