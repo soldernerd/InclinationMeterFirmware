@@ -125,7 +125,7 @@ def plan_freq_alt(hours=4.0, block_s=600, n_alt=10):
     p.append(step("n08_end", 300, n=8))
     return p
 
-PLANS = {"freq": plan_freq_static, "freqalt": plan_freq_alt, "freqalt12": lambda: plan_freq_alt(4.0, 600, 12),
+PLANS = {"freq": plan_freq_static, "freqalt": plan_freq_alt, "freqalt12": lambda: plan_freq_alt(4.0, 600, 12), "freqalt16": lambda: plan_freq_alt(4.0, 600, 16),
          "quick": plan_quick, "phase": plan_phase_reversal, "main": plan_main,
          "short": lambda: [step("baseline", 600), step("short_ch0_ch3", 7200, mux=(1, 0, 0, 1)), step("baseline_after", 1200)],
          "off": lambda: [step("baseline", 600), step("excitation_off", 10800, exc=0), step("baseline_after", 3600)],
