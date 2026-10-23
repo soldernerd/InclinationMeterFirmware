@@ -9,6 +9,7 @@
 #include "../system_state.h"
 #include "../Config/config.h"
 #include "../Drivers_App/drv_ads131m04.h"
+#include "../Drivers_App/drv_ad9833.h"
 #include "../Services/svc_log.h"
 
 /* ---------------- doubles ---------------- */
@@ -27,6 +28,11 @@ void      drv_ads131m04_stop(void) { g_running = false; }
 bool      drv_ads131m04_is_running(void) { return g_running; }
 void      drv_ads131m04_set_on_sample(Ads131m04SampleCb cb) { g_cb = cb; }
 bool      drv_ads131m04_faulted(void) { return false; }
+static uint8_t g_mux[4];
+static unsigned g_mux_calls;
+DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux) { if (ch > 3U) return DRV_ERR_INVALID; g_mux[ch] = mux; g_mux_calls++; return DRV_OK; }
+static uint32_t g_freqreg;
+DrvStatus drv_ad9833_set_freqreg(uint32_t freqreg) { g_freqreg = freqreg; return DRV_OK; }
 const volatile Ads131m04Integrity *drv_ads131m04_get_integrity(void) { return &g_integrity; }
 void svc_log(Api2LogSeverity s, const char *m) { (void)s; (void)m; }
 void svc_logf(Api2LogSeverity s, const char *f, ...) { (void)s; (void)f; }
@@ -336,6 +342,96 @@ TEST(a_stop_cancels_a_running_precision_measurement)
     CHECK_EQ(svc_displacement_precision_get_phase(), DISP_PRECISION_IDLE);
 }
 
+/* ---------------- investigation hooks: excitation frequency fs/n and the ADC input mux ---------------- */
+static int32_t sample_n(double amp, double phi, int k, int n)
+{
+    return (int32_t)lround(amp * cos((double)k * 2.0 * PI_D / (double)n - phi));
+}
+
+static void feed_batch_n(int n, double r1, double r2)
+{
+    for (unsigned c = 0; c < DISPLACEMENT_BATCH_CYCLES; ++c) {
+        for (int k = 0; k < n; ++k) {
+            on_sample(sample_n(sensor_amp(r2), 0.0, k, n), sample_n(-EXC_AMP, 0.0, k, n),
+                      sample_n(EXC_AMP, 0.0, k, n),        sample_n(sensor_amp(r1), 0.0, k, n));
+        }
+    }
+    g_ms += 25;
+    svc_displacement_update();
+}
+
+TEST(the_samples_per_cycle_setting_validates_and_programs_the_dds)
+{
+    fresh();
+    CHECK_EQ(svc_displacement_get_samples_per_cycle(), 8U);
+    CHECK_EQ(svc_displacement_set_samples_per_cycle(3), DRV_ERR_INVALID);
+    CHECK_EQ(svc_displacement_set_samples_per_cycle(17), DRV_ERR_INVALID);
+    CHECK_EQ(svc_displacement_get_samples_per_cycle(), 8U);
+    CHECK_EQ(svc_displacement_set_samples_per_cycle(12), DRV_OK);
+    CHECK_EQ(svc_displacement_get_samples_per_cycle(), 12U);
+    CHECK_EQ(g_freqreg, 87381UL);                                  /* round(2^20 / 12) */
+    CHECK(svc_displacement_is_running());                          /* a running demodulation is restarted */
+    CHECK_EQ(svc_displacement_set_samples_per_cycle(8), DRV_OK);
+    CHECK_EQ(g_freqreg, 131072UL);                                 /* 2^17: the 2604 Hz default */
+}
+
+TEST(the_demodulation_reads_the_same_ratio_at_other_samples_per_cycle)
+{
+    const int ns[] = { 4, 7, 10, 12, 16 };
+    for (unsigned i = 0; i < sizeof ns / sizeof ns[0]; ++i) {
+        fresh();
+        CHECK_EQ(svc_displacement_set_samples_per_cycle((uint8_t)ns[i]), DRV_OK);
+        for (int b = 0; b < 5; ++b) feed_batch_n(ns[i], 0.0125, -0.0300);
+        CHECK(svc_displacement_get_ok());
+        NEAR(s_delta1_mm_raw, 0.0125, 1e-4);
+        NEAR(s_delta2_mm_raw, -0.0300, 1e-4);
+        NEAR(s_residual1, 0.0, 1e-4);
+    }
+}
+
+TEST(the_amplitude_check_scales_with_the_samples_per_cycle)
+{
+    /* a full-scale 16-sample sinusoid has twice the matched-filter gain of the 8-sample one: not a fault */
+    fresh();
+    CHECK_EQ(svc_displacement_set_samples_per_cycle(16), DRV_OK);
+    for (unsigned c = 0; c < DISPLACEMENT_BATCH_CYCLES * 3U; ++c) {
+        for (int k = 0; k < 16; ++k) {
+            int32_t a = sample_n((double)ADS131M04_CODE_MAX * 0.9, 0.0, k, 16);
+            on_sample(a, -a, a, a);
+        }
+    }
+    svc_displacement_update();
+    CHECK_EQ(svc_displacement_get_amplitude_fault_count(), 0U);
+}
+
+TEST(the_adc_mux_is_set_per_channel_and_restarts_a_running_demodulation)
+{
+    fresh();
+    memset(g_mux, 0, sizeof g_mux);
+    g_mux_calls = 0;
+    CHECK_EQ(svc_displacement_adc_mux(0x05, 1), DRV_OK);           /* channels 0 and 2 shorted */
+    CHECK_EQ(g_mux_calls, 2U);
+    CHECK_EQ(g_mux[0], 1U);
+    CHECK_EQ(g_mux[1], 0U);
+    CHECK_EQ(g_mux[2], 1U);
+    CHECK_EQ(g_mux[3], 0U);
+    CHECK(svc_displacement_is_running());
+    g_running = false;                                             /* stopped stays stopped */
+    CHECK_EQ(svc_displacement_adc_mux(0x08, 2), DRV_OK);
+    CHECK(!svc_displacement_is_running());
+    CHECK_EQ(g_mux[3], 2U);
+}
+
+TEST(the_investigation_hooks_refuse_during_a_bulk_capture)
+{
+    fresh();
+    svc_displacement_stop();
+    CHECK_EQ(svc_displacement_capture_begin(), DRV_OK);
+    CHECK_EQ(svc_displacement_adc_mux(0x01, 1), DRV_ERR_NOT_READY);
+    CHECK_EQ(svc_displacement_set_samples_per_cycle(10), DRV_ERR_NOT_READY);
+    svc_displacement_capture_end();
+}
+
 int main(void)
 {
     RUN(the_synthetic_signal_reads_back_as_the_ratio_it_was_built_from);
@@ -353,5 +449,10 @@ int main(void)
     RUN(precision_and_zero_cal_exclude_each_other_in_both_directions);
     RUN(a_finished_precision_run_does_not_block_a_zero_calibration);
     RUN(a_stop_cancels_a_running_precision_measurement);
+    RUN(the_samples_per_cycle_setting_validates_and_programs_the_dds);
+    RUN(the_demodulation_reads_the_same_ratio_at_other_samples_per_cycle);
+    RUN(the_amplitude_check_scales_with_the_samples_per_cycle);
+    RUN(the_adc_mux_is_set_per_channel_and_restarts_a_running_demodulation);
+    RUN(the_investigation_hooks_refuse_during_a_bulk_capture);
     return test_summary();
 }

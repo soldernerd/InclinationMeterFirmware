@@ -90,6 +90,45 @@ DrvStatus drv_ad9833_init(void)
     return (rc2 == DRV_OK) ? DRV_OK : rc1;
 }
 
+static bool s_output_on = true;   /* tracks RESET: true after init / boot */
+
+/* Control and phase words are absolute writes, so each is sent twice (FSYNC on PC13 is a weak pin; see
+ * drv_ad9833_init()'s double register load). */
+DrvStatus drv_ad9833_set_phase(uint16_t phase12)
+{
+    const uint16_t w = (uint16_t)(PHASE0_WRITE | (phase12 & 0x0FFFU));
+    DrvStatus rc = write_word(w);
+    if (rc != DRV_OK) return rc;
+    return write_word(w);
+}
+
+DrvStatus drv_ad9833_set_output(bool on)
+{
+    if (on == s_output_on) return DRV_OK;
+    const uint16_t w = on ? CTRL_B28 : (uint16_t)(CTRL_B28 | CTRL_RESET);
+    DrvStatus rc = write_word(w);
+    if (rc != DRV_OK) return rc;
+    rc = write_word(w);
+    if (rc == DRV_OK) s_output_on = on;
+    return rc;
+}
+
+bool drv_ad9833_output_is_on(void)
+{
+    return s_output_on;
+}
+
+DrvStatus drv_ad9833_set_freqreg(uint32_t freqreg)
+{
+    const uint16_t ctrl = s_output_on ? CTRL_B28 : (uint16_t)(CTRL_B28 | CTRL_RESET);
+    for (uint8_t pass = 0; pass < 2U; ++pass) {
+        if (write_word(ctrl) != DRV_OK) return DRV_ERR_COMM;                         /* also resets the LSB/MSB toggle */
+        if (write_word((uint16_t)(FREQ0_WRITE | (freqreg & 0x3FFFUL))) != DRV_OK) return DRV_ERR_COMM;
+        if (write_word((uint16_t)(FREQ0_WRITE | ((freqreg >> 14) & 0x3FFFUL))) != DRV_OK) return DRV_ERR_COMM;
+    }
+    return DRV_OK;
+}
+
 DrvStatus drv_ad9833_sleep(void)
 {
     /* Control-register write (D15:D14 = 00), RESET + SLEEP1 + SLEEP12. */

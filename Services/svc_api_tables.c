@@ -36,6 +36,7 @@ static const ApiFieldDesc k_fields_settings[] = {
     { API2_RES_SETTINGS_BATTERY_CRITICAL, 2, false, offsetof(DeviceSettings, battery_critical_mv), 2500LL, 3600LL, api_check_battery_order, 0, true },  /* BATTERY_CRITICAL */
     { API2_RES_SETTINGS_BATTERY_LOW, 2, false, offsetof(DeviceSettings, battery_low_mv), 3000LL, 4200LL, api_check_battery_order, 0, true },  /* BATTERY_LOW */
     { API2_RES_SETTINGS_BATTERY_CHARGE_START, 2, false, offsetof(DeviceSettings, battery_charge_start_mv), 3000LL, 4200LL, 0, 0, true },  /* BATTERY_CHARGE_START */
+    { API2_RES_SETTINGS_CHARGE_FULL_TIMEOUT, 2, false, offsetof(DeviceSettings, charge_full_timeout_min), 0LL, 1440LL, 0, 0, true },  /* CHARGE_FULL_TIMEOUT */
     { API2_RES_SETTINGS_AUTO_POWEROFF, 2, false, offsetof(DeviceSettings, auto_poweroff_s), 0LL, 65535LL, 0, 0, true },  /* AUTO_POWEROFF */
     { API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT, 2, false, offsetof(DeviceSettings, encoder_counts_per_detent), 1LL, 100LL, 0, 0, true },  /* ENCODER_COUNTS_PER_DETENT */
 };
@@ -64,7 +65,10 @@ static const ApiResource k_res_commands[] = {
     { API2_RES_COMMANDS_POWER_TEST, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 4, 4, api_h_commands_power_test, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* POWER_TEST */
     { API2_RES_COMMANDS_PIN_TEST, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_pin_test, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* PIN_TEST */
     { API2_RES_COMMANDS_FAULT_TEST, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_fault_test, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* FAULT_TEST */
+    { API2_RES_COMMANDS_EXCITATION, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 3, 3, api_h_commands_excitation, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* EXCITATION */
+    { API2_RES_COMMANDS_ADC_MUX, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 2, 2, api_h_commands_adc_mux, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* ADC_MUX */
     { API2_RES_COMMANDS_RAIL, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 2, 2, api_h_commands_rail, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* RAIL */
+    { API2_RES_COMMANDS_EXC_FREQ, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_exc_freq, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* EXC_FREQ */
 };
 
 static const ApiResource k_res_calibrations[] = {
@@ -100,8 +104,9 @@ static const ApiResource k_res_settings[] = {
     { API2_RES_SETTINGS_BATTERY_CRITICAL, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[5], 0, 1, 0 },  /* BATTERY_CRITICAL */
     { API2_RES_SETTINGS_BATTERY_LOW, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[6], 0, 1, 0 },  /* BATTERY_LOW */
     { API2_RES_SETTINGS_BATTERY_CHARGE_START, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[7], 0, 1, 0 },  /* BATTERY_CHARGE_START */
-    { API2_RES_SETTINGS_AUTO_POWEROFF, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[8], 0, 1, 0 },  /* AUTO_POWEROFF */
-    { API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[9], 0, 1, 0 },  /* ENCODER_COUNTS_PER_DETENT */
+    { API2_RES_SETTINGS_CHARGE_FULL_TIMEOUT, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[8], 0, 1, 0 },  /* CHARGE_FULL_TIMEOUT */
+    { API2_RES_SETTINGS_AUTO_POWEROFF, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[9], 0, 1, 0 },  /* AUTO_POWEROFF */
+    { API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[10], 0, 1, 0 },  /* ENCODER_COUNTS_PER_DETENT */
 };
 
 static const ApiResource k_res_measurements[] = {

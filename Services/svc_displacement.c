@@ -1,5 +1,6 @@
 #include "svc_displacement.h"
 #include "svc_displacement_internal.h"
+#include "drv_ad9833.h"
 #include "drv_ads131m04.h"
 #include "math_phasor.h"
 #include "math_window.h"
@@ -66,7 +67,7 @@ static inline bool code_is_clipped(int32_t code)
  * weights are applied later, once per batch, by math_phasor_combine().
  * seq = the per-cycle sequence number of the batch's LAST cycle. */
 typedef struct {
-    int32_t  pos_sum[4][MATH_PHASOR_SAMPLES_PER_CYCLE];
+    int32_t  pos_sum[4][MATH_PHASOR_MAX_N];
     uint16_t seq;
 } RawBatch;
 
@@ -96,9 +97,12 @@ static volatile uint16_t s_in_tail = 0;
  * always called from the same context (drv_ads131m04.c's SysTick frame
  * drain), so no volatile/locking needed here (same reasoning as WP8's
  * svc_signal_analysis.c). */
-static uint8_t  s_sample_idx   = 0;                 /* position within the cycle, 0..7 */
+static uint8_t  s_sample_idx   = 0;                 /* position within the cycle, 0..s_n_pos-1 */
 static uint8_t  s_batch_cycles = 0;                 /* cycles completed in the batch in progress */
-static int32_t  s_pos_sum[4][MATH_PHASOR_SAMPLES_PER_CYCLE];   /* [ADC channel][position] */
+static int32_t  s_pos_sum[4][MATH_PHASOR_MAX_N];    /* [ADC channel][position] */
+/* Samples per carrier cycle: 8 (MATH_PHASOR_SAMPLES_PER_CYCLE) unless a host chose another excitation frequency
+ * (svc_displacement_set_samples_per_cycle(), investigation only). Changed only with the acquisition stopped. */
+static uint8_t  s_n_pos        = MATH_PHASOR_SAMPLES_PER_CYCLE;
 
 /* s_input_drop_count is written from on_sample() and read from
  * svc_displacement_get_input_drop_count() (task context) -- volatile,
@@ -206,7 +210,7 @@ static void accum_reset(void)
     s_batch_cycles = 0;
     s_cycle_seq    = 0;
     for (uint8_t ch = 0; ch < 4U; ++ch) {
-        for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+        for (uint8_t n = 0; n < MATH_PHASOR_MAX_N; ++n) {
             s_pos_sum[ch][n] = 0;
         }
     }
@@ -259,7 +263,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     s_pos_sum[3][s_sample_idx] += ch3;
 
     s_sample_idx++;
-    if (s_sample_idx < MATH_PHASOR_SAMPLES_PER_CYCLE) {
+    if (s_sample_idx < s_n_pos) {
         return;
     }
     s_sample_idx = 0;
@@ -285,7 +289,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     } else {
         RawBatch *slot = &s_in_ring[head];
         for (uint8_t ch = 0; ch < 4U; ++ch) {
-            for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+            for (uint8_t n = 0; n < MATH_PHASOR_MAX_N; ++n) {
                 slot->pos_sum[ch][n] = s_pos_sum[ch][n];
             }
         }
@@ -294,7 +298,7 @@ static void on_sample(int32_t ch0, int32_t ch1, int32_t ch2, int32_t ch3)
     }
 
     for (uint8_t ch = 0; ch < 4U; ++ch) {
-        for (uint8_t n = 0; n < MATH_PHASOR_SAMPLES_PER_CYCLE; ++n) {
+        for (uint8_t n = 0; n < MATH_PHASOR_MAX_N; ++n) {
             s_pos_sum[ch][n] = 0;
         }
     }
@@ -344,7 +348,9 @@ typedef MathBatchSums BatchSums;
 
 static bool phasor_exceeds_theoretical_max(int64_t i_sum, int64_t q_sum)
 {
-    return math_phasor_exceeds(i_sum, q_sum, DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG);
+    /* the matched-filter gain is proportional to the samples per cycle (investigation builds with n != 8) */
+    return math_phasor_exceeds(i_sum, q_sum, DISPLACEMENT_MAX_THEORETICAL_PHASOR_MAG
+                                              * (double)s_n_pos / (double)MATH_PHASOR_SAMPLES_PER_CYCLE);
 }
 
 static void process_one_batch(const BatchSums *s, uint16_t seq)
@@ -543,7 +549,8 @@ void svc_displacement_get_phasors(DisplacementPhasors *out)
 static float phasor_peak_mv(float i, float q, uint8_t pga)
 {
     float mag       = sqrtf(i * i + q * q);
-    float peak_code = mag / (65536.0f * (float)DISPLACEMENT_BATCH_CYCLES);
+    float peak_code = mag / (65536.0f * (float)DISPLACEMENT_BATCH_CYCLES
+                             * (float)s_n_pos / (float)MATH_PHASOR_SAMPLES_PER_CYCLE);
     return peak_code * (1200.0f / (float)pga) / (float)ADS131M04_CODE_MAX;
 }
 
@@ -607,6 +614,59 @@ bool svc_displacement_is_running(void)
     return drv_ads131m04_is_running();
 }
 
+DrvStatus svc_displacement_set_samples_per_cycle(uint8_t n)
+{
+    if (n < 4U || n > MATH_PHASOR_MAX_N) {
+        return DRV_ERR_INVALID;
+    }
+    if (g_disp_cap_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    const bool was_running = drv_ads131m04_is_running();
+    if (was_running) {
+        svc_displacement_stop();
+    }
+    DrvStatus rc = DRV_OK;
+    if (!math_phasor_set_n(n)) {
+        rc = DRV_ERR_INVALID;
+    } else {
+        s_n_pos = n;
+        rc = drv_ad9833_set_freqreg(((1UL << 20) + (uint32_t)n / 2U) / (uint32_t)n);   /* round(2^20 / n): f0 = fs / n */
+    }
+    accum_reset();
+    if (was_running) {
+        (void)svc_displacement_start();   /* fails only if the ADC was never initialised, impossible once it ran */
+    }
+    return rc;
+}
+
+uint8_t svc_displacement_get_samples_per_cycle(void)
+{
+    return s_n_pos;
+}
+
+DrvStatus svc_displacement_adc_mux(uint8_t ch_mask, uint8_t mux)
+{
+    if (g_disp_cap_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    const bool was_running = drv_ads131m04_is_running();
+    if (was_running) {
+        svc_displacement_stop();
+    }
+    DrvStatus rc = DRV_OK;
+    for (uint8_t ch = 0; ch < 4U; ++ch) {
+        if ((ch_mask & (1U << ch)) != 0U) {
+            DrvStatus r = drv_ads131m04_set_channel_mux(ch, mux);
+            if (r != DRV_OK && rc == DRV_OK) rc = r;
+        }
+    }
+    if (was_running) {
+        (void)svc_displacement_start();   /* fails only if the ADC was never initialised, impossible once it ran */
+    }
+    return rc;
+}
+
 void svc_displacement_update(void)
 {
     /* Scheduler-gap diagnostic -- see s_max_update_gap_ms's comment.
@@ -646,10 +706,10 @@ void svc_displacement_update(void)
     while (s_in_tail != s_in_head && drained < DISPLACEMENT_MAX_BATCHES_PER_TICK) {
         const RawBatch *rb = &s_in_ring[s_in_tail];
         BatchSums sums;
-        math_phasor_combine(rb->pos_sum[1], &sums.iB,  &sums.qB);    /* ch1 = B  */
-        math_phasor_combine(rb->pos_sum[2], &sums.iA,  &sums.qA);    /* ch2 = A  */
-        math_phasor_combine(rb->pos_sum[3], &sums.iS1, &sums.qS1);   /* ch3 = S1 */
-        math_phasor_combine(rb->pos_sum[0], &sums.iS2, &sums.qS2);   /* ch0 = S2 */
+        math_phasor_combine_n(rb->pos_sum[1], &sums.iB,  &sums.qB);    /* ch1 = B  */
+        math_phasor_combine_n(rb->pos_sum[2], &sums.iA,  &sums.qA);    /* ch2 = A  */
+        math_phasor_combine_n(rb->pos_sum[3], &sums.iS1, &sums.qS1);   /* ch3 = S1 */
+        math_phasor_combine_n(rb->pos_sum[0], &sums.iS2, &sums.qS2);   /* ch0 = S2 */
         const uint16_t batch_seq = rb->seq;
         s_in_tail = (uint16_t)((s_in_tail + 1U) & BATCH_RING_MASK);
         drained++;

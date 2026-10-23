@@ -8,6 +8,7 @@
 #include "svc_service.h"
 #include "svc_powertest.h"
 #include "svc_storage.h"
+#include "drv_ad9833.h"
 #include "drv_buzzer.h"
 #include "hal_dfu.h"
 #include "hal_fault.h"
@@ -86,9 +87,10 @@ Api2Status api_h_commands_tilt_demod(const ApiResource *r, ApiCall *c)
     if (on > 1U) {
         return API2_STATUS_INVALID_PARAMETER;
     }
-    /* The ADC serves one consumer: a raw bulk capture and the phasor stream own it while they run. A stop would
-     * leave the capture never finishing; a start would look like it worked while the demod stays bypassed. */
-    if (api_bulk_active() || svc_displacement_phasor_stream_active()) {
+    /* The ADC serves one consumer: a raw bulk capture owns it while it runs. A stop would leave the capture never
+     * finishing; a start would look like it worked while the demod stays bypassed. The phasor stream is only a tap
+     * on the demodulation, so it does not block this (a stop just ends its batches until the next start). */
+    if (api_bulk_active()) {
         return API2_STATUS_BUSY_EXCLUSIVE;
     }
     if (on) {
@@ -251,6 +253,57 @@ Api2Status api_h_commands_rail(const ApiResource *r, ApiCall *c)
     svc_powertest_apply(mask);
     svc_logf(API2_LOG_WARN, "cmd: rail %s %s", rail ? "5V" : "3V3", on ? "on" : "off");
     return reply_mask(c);
+}
+
+Api2Status api_h_commands_excitation(const ApiResource *r, ApiCall *c)
+{
+    (void)r;
+    const uint8_t  on    = c->in[0];
+    const uint16_t phase = (uint16_t)(c->in[1] | ((uint16_t)c->in[2] << 8));
+    if (on > 1U || phase > 4095U) {
+        return API2_STATUS_INVALID_PARAMETER;
+    }
+    if (drv_ad9833_set_phase(phase) != DRV_OK || drv_ad9833_set_output(on != 0U) != DRV_OK) {
+        return API2_STATUS_BUSY_RESOURCE;
+    }
+    svc_logf(API2_LOG_INFO, "cmd: excitation %s, phase %u (%u.%02u deg)", on ? "on" : "OFF", (unsigned)phase,
+             (unsigned)((uint32_t)phase * 360U / 4096U), (unsigned)(((uint32_t)phase * 36000U / 4096U) % 100U));
+    return API2_STATUS_OK;
+}
+
+Api2Status api_h_commands_adc_mux(const ApiResource *r, ApiCall *c)
+{
+    (void)r;
+    const uint8_t mask = c->in[0];
+    const uint8_t mux  = c->in[1];
+    if ((mask & 0xF0U) != 0U || mask == 0U || mux > 3U) {
+        return API2_STATUS_INVALID_PARAMETER;
+    }
+    if (api_bulk_active() || !g_system_state.ads_ok) {
+        return API2_STATUS_BUSY_EXCLUSIVE;
+    }
+    if (svc_displacement_adc_mux(mask, mux) != DRV_OK) {
+        return API2_STATUS_BUSY_RESOURCE;
+    }
+    svc_logf(API2_LOG_INFO, "cmd: adc mux mask 0x%X -> %u", (unsigned)mask, (unsigned)mux);
+    return API2_STATUS_OK;
+}
+
+Api2Status api_h_commands_exc_freq(const ApiResource *r, ApiCall *c)
+{
+    (void)r;
+    const uint8_t n = c->in[0];
+    if (n < 4U || n > 16U) {
+        return API2_STATUS_INVALID_PARAMETER;
+    }
+    if (api_bulk_active() || !g_system_state.ads_ok) {
+        return API2_STATUS_BUSY_EXCLUSIVE;
+    }
+    if (svc_displacement_set_samples_per_cycle(n) != DRV_OK) {
+        return API2_STATUS_BUSY_RESOURCE;
+    }
+    svc_logf(API2_LOG_INFO, "cmd: excitation frequency fs/%u", (unsigned)n);
+    return API2_STATUS_OK;
 }
 
 Api2Status api_h_commands_pin_test(const ApiResource *r, ApiCall *c)

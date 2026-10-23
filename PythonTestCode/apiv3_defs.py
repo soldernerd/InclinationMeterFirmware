@@ -49,7 +49,10 @@ RES_COMMANDS_TEST_BEEP = 0x70
 RES_COMMANDS_POWER_TEST = 0x71
 RES_COMMANDS_PIN_TEST = 0x72
 RES_COMMANDS_FAULT_TEST = 0x76
+RES_COMMANDS_EXCITATION = 0x74
+RES_COMMANDS_ADC_MUX = 0x75
 RES_COMMANDS_RAIL = 0x73
+RES_COMMANDS_EXC_FREQ = 0x77
 RES_CALIBRATIONS_S1_K = 0x40
 RES_CALIBRATIONS_S1_ZERO = 0x41
 RES_CALIBRATIONS_S1_PHASE = 0x42
@@ -79,6 +82,7 @@ RES_SETTINGS_TASK_TEMPERATURE = 0x44
 RES_SETTINGS_BATTERY_CRITICAL = 0x50
 RES_SETTINGS_BATTERY_LOW = 0x51
 RES_SETTINGS_BATTERY_CHARGE_START = 0x52
+RES_SETTINGS_CHARGE_FULL_TIMEOUT = 0x53
 RES_SETTINGS_AUTO_POWEROFF = 0x60
 RES_SETTINGS_ENCODER_COUNTS_PER_DETENT = 0x61
 RES_MEASUREMENTS_ONBOARD_TEMP = 0x00
@@ -130,7 +134,10 @@ OP_COMMANDS_TEST_BEEP_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_TEST_
 OP_COMMANDS_POWER_TEST_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_POWER_TEST)
 OP_COMMANDS_PIN_TEST_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_PIN_TEST)
 OP_COMMANDS_FAULT_TEST_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_FAULT_TEST)
+OP_COMMANDS_EXCITATION_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_EXCITATION)
+OP_COMMANDS_ADC_MUX_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_ADC_MUX)
 OP_COMMANDS_RAIL_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_RAIL)
+OP_COMMANDS_EXC_FREQ_EXECUTE = opcode(EXECUTE, CAT_COMMANDS, RES_COMMANDS_EXC_FREQ)
 OP_CALIBRATIONS_S1_K_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S1_K)
 OP_CALIBRATIONS_S1_K_SET = opcode(SET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S1_K)
 OP_CALIBRATIONS_S1_ZERO_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S1_ZERO)
@@ -189,6 +196,8 @@ OP_SETTINGS_BATTERY_LOW_GET = opcode(GET, CAT_SETTINGS, RES_SETTINGS_BATTERY_LOW
 OP_SETTINGS_BATTERY_LOW_SET = opcode(SET, CAT_SETTINGS, RES_SETTINGS_BATTERY_LOW)
 OP_SETTINGS_BATTERY_CHARGE_START_GET = opcode(GET, CAT_SETTINGS, RES_SETTINGS_BATTERY_CHARGE_START)
 OP_SETTINGS_BATTERY_CHARGE_START_SET = opcode(SET, CAT_SETTINGS, RES_SETTINGS_BATTERY_CHARGE_START)
+OP_SETTINGS_CHARGE_FULL_TIMEOUT_GET = opcode(GET, CAT_SETTINGS, RES_SETTINGS_CHARGE_FULL_TIMEOUT)
+OP_SETTINGS_CHARGE_FULL_TIMEOUT_SET = opcode(SET, CAT_SETTINGS, RES_SETTINGS_CHARGE_FULL_TIMEOUT)
 OP_SETTINGS_AUTO_POWEROFF_GET = opcode(GET, CAT_SETTINGS, RES_SETTINGS_AUTO_POWEROFF)
 OP_SETTINGS_AUTO_POWEROFF_SET = opcode(SET, CAT_SETTINGS, RES_SETTINGS_AUTO_POWEROFF)
 OP_SETTINGS_ENCODER_COUNTS_PER_DETENT_GET = opcode(GET, CAT_SETTINGS, RES_SETTINGS_ENCODER_COUNTS_PER_DETENT)
@@ -476,6 +485,38 @@ def decode_commands_fault_test_request(data):
 def encode_commands_fault_test_request(kind):
     return struct.pack(FMT_COMMANDS_FAULT_TEST_REQUEST, kind)
 
+FMT_COMMANDS_EXCITATION_REQUEST = '<BH'
+SIZE_COMMANDS_EXCITATION_REQUEST = struct.calcsize(FMT_COMMANDS_EXCITATION_REQUEST)
+FIELDS_COMMANDS_EXCITATION_REQUEST = ('on', 'phase', )
+def decode_commands_excitation_request(data):
+    if len(data) < SIZE_COMMANDS_EXCITATION_REQUEST:
+        return None
+    v = struct.unpack_from(FMT_COMMANDS_EXCITATION_REQUEST, data)
+    d = dict(zip(FIELDS_COMMANDS_EXCITATION_REQUEST, v))
+    for k, x in d.items():
+        if isinstance(x, bytes):
+            d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
+    return d
+
+def encode_commands_excitation_request(on, phase):
+    return struct.pack(FMT_COMMANDS_EXCITATION_REQUEST, on, phase)
+
+FMT_COMMANDS_ADC_MUX_REQUEST = '<BB'
+SIZE_COMMANDS_ADC_MUX_REQUEST = struct.calcsize(FMT_COMMANDS_ADC_MUX_REQUEST)
+FIELDS_COMMANDS_ADC_MUX_REQUEST = ('channel_mask', 'mux', )
+def decode_commands_adc_mux_request(data):
+    if len(data) < SIZE_COMMANDS_ADC_MUX_REQUEST:
+        return None
+    v = struct.unpack_from(FMT_COMMANDS_ADC_MUX_REQUEST, data)
+    d = dict(zip(FIELDS_COMMANDS_ADC_MUX_REQUEST, v))
+    for k, x in d.items():
+        if isinstance(x, bytes):
+            d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
+    return d
+
+def encode_commands_adc_mux_request(channel_mask, mux):
+    return struct.pack(FMT_COMMANDS_ADC_MUX_REQUEST, channel_mask, mux)
+
 FMT_COMMANDS_RAIL_RESPONSE = '<I'
 SIZE_COMMANDS_RAIL_RESPONSE = struct.calcsize(FMT_COMMANDS_RAIL_RESPONSE)
 FIELDS_COMMANDS_RAIL_RESPONSE = ('applied_mask', )
@@ -504,6 +545,22 @@ def decode_commands_rail_request(data):
 
 def encode_commands_rail_request(rail, on):
     return struct.pack(FMT_COMMANDS_RAIL_REQUEST, rail, on)
+
+FMT_COMMANDS_EXC_FREQ_REQUEST = '<B'
+SIZE_COMMANDS_EXC_FREQ_REQUEST = struct.calcsize(FMT_COMMANDS_EXC_FREQ_REQUEST)
+FIELDS_COMMANDS_EXC_FREQ_REQUEST = ('n', )
+def decode_commands_exc_freq_request(data):
+    if len(data) < SIZE_COMMANDS_EXC_FREQ_REQUEST:
+        return None
+    v = struct.unpack_from(FMT_COMMANDS_EXC_FREQ_REQUEST, data)
+    d = dict(zip(FIELDS_COMMANDS_EXC_FREQ_REQUEST, v))
+    for k, x in d.items():
+        if isinstance(x, bytes):
+            d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
+    return d
+
+def encode_commands_exc_freq_request(n):
+    return struct.pack(FMT_COMMANDS_EXC_FREQ_REQUEST, n)
 
 FMT_CALIBRATIONS_S1_K_VALUE = '<i'
 SIZE_CALIBRATIONS_S1_K_VALUE = struct.calcsize(FMT_CALIBRATIONS_S1_K_VALUE)
@@ -877,6 +934,19 @@ def decode_settings_battery_charge_start_value(data):
         return None
     v = struct.unpack_from(FMT_SETTINGS_BATTERY_CHARGE_START_VALUE, data)
     d = dict(zip(FIELDS_SETTINGS_BATTERY_CHARGE_START_VALUE, v))
+    for k, x in d.items():
+        if isinstance(x, bytes):
+            d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
+    return d
+
+FMT_SETTINGS_CHARGE_FULL_TIMEOUT_VALUE = '<H'
+SIZE_SETTINGS_CHARGE_FULL_TIMEOUT_VALUE = struct.calcsize(FMT_SETTINGS_CHARGE_FULL_TIMEOUT_VALUE)
+FIELDS_SETTINGS_CHARGE_FULL_TIMEOUT_VALUE = ('value', )
+def decode_settings_charge_full_timeout_value(data):
+    if len(data) < SIZE_SETTINGS_CHARGE_FULL_TIMEOUT_VALUE:
+        return None
+    v = struct.unpack_from(FMT_SETTINGS_CHARGE_FULL_TIMEOUT_VALUE, data)
+    d = dict(zip(FIELDS_SETTINGS_CHARGE_FULL_TIMEOUT_VALUE, v))
     for k, x in d.items():
         if isinstance(x, bytes):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
@@ -1309,6 +1379,7 @@ SETTINGS = {  # name -> (resource id, struct format, lo, hi, unit)
     'BATTERY_CRITICAL': (RES_SETTINGS_BATTERY_CRITICAL, '<H', 2500, 3600, 'mV'),
     'BATTERY_LOW': (RES_SETTINGS_BATTERY_LOW, '<H', 3000, 4200, 'mV'),
     'BATTERY_CHARGE_START': (RES_SETTINGS_BATTERY_CHARGE_START, '<H', 3000, 4200, 'mV'),
+    'CHARGE_FULL_TIMEOUT': (RES_SETTINGS_CHARGE_FULL_TIMEOUT, '<H', 0, 1440, 'min'),
     'AUTO_POWEROFF': (RES_SETTINGS_AUTO_POWEROFF, '<H', 0, 65535, 's'),
     'ENCODER_COUNTS_PER_DETENT': (RES_SETTINGS_ENCODER_COUNTS_PER_DETENT, '<H', 1, 100, ''),
 }

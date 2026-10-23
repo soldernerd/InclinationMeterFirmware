@@ -5,6 +5,19 @@ of the wire protocol or the stored settings; the patch number with every build h
 newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a line says so; the acceptance list for 1.0.0 is
 `docs/release-checklist.md`.
 
+## 0.11.2 - 2026-10-24
+Ported from the `drift-probe` branch (probe builds 0.10.90 / 0.10.91, API v2) to API v3. Build- and host-test-verified only.
+- Settings `CHARGE_FULL_TIMEOUT` (0x53, minutes, default 60, 0 = off; SETTINGS screen row "Charge stop @100%"): charging stops
+  after that long at a 100 % state-of-charge reading or at the charger's STANDBY signal, whichever comes first (the TP4056
+  cannot end a charge while the instrument draws its own current). EEPROM battery page version 0x0006 reseeds that page
+  (thresholds, ADC scale / offset, auto power-off): save the settings with `Testing/2026-10-08_drift_investigation/settings_backup.py`
+  before flashing and restore them afterwards.
+- Commands `EXCITATION` (0x74: AD9833 on/off and PHASE0), `ADC_MUX` (0x75: ADS131M04 input mux per channel), `EXC_FREQ`
+  (0x77: excitation frequency fs/n, n = 4..16 samples per carrier cycle, demodulation follows). All three need service mode and
+  are not persistent. The amplitude-fault check and the signal diagnostics scale with n; calibrations are valid at n = 8 only.
+- Commands `TILT_DEMOD` start / stop is no longer refused while the phasor stream is active (the stream is only a tap).
+- Drift-investigation tooling restored under `Testing/2026-10-08_drift_investigation/`, ported to `apiv3.py`.
+
 ## Unreleased
 - `svc_displacement.c` (1200 lines) split into the acquisition / demodulation core, `svc_disp_capture.c` (bulk raw capture),
   `svc_disp_phasor_stream.c` and `svc_disp_procedures.c` (flip calibration, precision measurement); no behaviour change.

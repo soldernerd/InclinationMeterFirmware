@@ -343,6 +343,20 @@ typedef struct {
 DrvStatus svc_displacement_phasor_stream_begin(void);   /* DRV_ERR_NOT_READY if a stream / bulk capture is already active */
 void      svc_displacement_phasor_stream_end(void);
 bool      svc_displacement_phasor_stream_active(void);
+
+/* Investigation hook: set the input multiplexer of the ADC channels in `ch_mask` (bit n = ADC channel n; ch0 = S2,
+ * ch1 = B, ch2 = A, ch3 = S1) to `mux` (0 normal, 1 shorted, 2/3 DC test signals), see drv_ads131m04_set_channel_mux().
+ * A running demodulation is stopped around the register write and restarted (the demod state restarts, so the
+ * readings are invalid for ~2 s afterwards). DRV_ERR_NOT_READY during a bulk capture. Not persistent across a reboot. */
+DrvStatus svc_displacement_adc_mux(uint8_t ch_mask, uint8_t mux);
+
+/* Investigation hook: choose the excitation frequency as fs / n (n = samples per carrier cycle, 4..16; 8 = 2604 Hz is
+ * the default and every boot's value): sets the AD9833 frequency word to round(2^20 / n), switches the demod to n
+ * positions per cycle and restarts a running demodulation. Not persistent. The batch stays 64 cycles, so the batch
+ * period is 64 n / 20833.33 s and the cycle counter in the stream counts cycles of 1/f0. The calibrations are valid at
+ * n = 8 only. */
+DrvStatus svc_displacement_set_samples_per_cycle(uint8_t n);
+uint8_t   svc_displacement_get_samples_per_cycle(void);
 /* Oldest queued entry without removing it (false if empty); consume()
  * drops it once it has been handed to the transport. */
 bool      svc_displacement_phasor_stream_peek(DisplacementPhasorEntry *out);

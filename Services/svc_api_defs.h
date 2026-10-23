@@ -42,7 +42,10 @@
 #define API2_RES_COMMANDS_POWER_TEST                 0x71U
 #define API2_RES_COMMANDS_PIN_TEST                   0x72U
 #define API2_RES_COMMANDS_FAULT_TEST                 0x76U
+#define API2_RES_COMMANDS_EXCITATION                 0x74U
+#define API2_RES_COMMANDS_ADC_MUX                    0x75U
 #define API2_RES_COMMANDS_RAIL                       0x73U
+#define API2_RES_COMMANDS_EXC_FREQ                   0x77U
 #define API2_RES_CALIBRATIONS_S1_K                   0x40U
 #define API2_RES_CALIBRATIONS_S1_ZERO                0x41U
 #define API2_RES_CALIBRATIONS_S1_PHASE               0x42U
@@ -72,6 +75,7 @@
 #define API2_RES_SETTINGS_BATTERY_CRITICAL           0x50U
 #define API2_RES_SETTINGS_BATTERY_LOW                0x51U
 #define API2_RES_SETTINGS_BATTERY_CHARGE_START       0x52U
+#define API2_RES_SETTINGS_CHARGE_FULL_TIMEOUT        0x53U
 #define API2_RES_SETTINGS_AUTO_POWEROFF              0x60U
 #define API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT  0x61U
 #define API2_RES_MEASUREMENTS_ONBOARD_TEMP           0x00U
@@ -124,7 +128,10 @@
 #define API2_OP_COMMANDS_POWER_TEST_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_POWER_TEST)
 #define API2_OP_COMMANDS_PIN_TEST_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_PIN_TEST)
 #define API2_OP_COMMANDS_FAULT_TEST_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_FAULT_TEST)
+#define API2_OP_COMMANDS_EXCITATION_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_EXCITATION)
+#define API2_OP_COMMANDS_ADC_MUX_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_ADC_MUX)
 #define API2_OP_COMMANDS_RAIL_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_RAIL)
+#define API2_OP_COMMANDS_EXC_FREQ_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_EXC_FREQ)
 #define API2_OP_CALIBRATIONS_S1_K_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S1_K)
 #define API2_OP_CALIBRATIONS_S1_K_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S1_K)
 #define API2_OP_CALIBRATIONS_S1_ZERO_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S1_ZERO)
@@ -183,6 +190,8 @@
 #define API2_OP_SETTINGS_BATTERY_LOW_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_SETTINGS, API2_RES_SETTINGS_BATTERY_LOW)
 #define API2_OP_SETTINGS_BATTERY_CHARGE_START_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_SETTINGS, API2_RES_SETTINGS_BATTERY_CHARGE_START)
 #define API2_OP_SETTINGS_BATTERY_CHARGE_START_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_SETTINGS, API2_RES_SETTINGS_BATTERY_CHARGE_START)
+#define API2_OP_SETTINGS_CHARGE_FULL_TIMEOUT_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_SETTINGS, API2_RES_SETTINGS_CHARGE_FULL_TIMEOUT)
+#define API2_OP_SETTINGS_CHARGE_FULL_TIMEOUT_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_SETTINGS, API2_RES_SETTINGS_CHARGE_FULL_TIMEOUT)
 #define API2_OP_SETTINGS_AUTO_POWEROFF_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_SETTINGS, API2_RES_SETTINGS_AUTO_POWEROFF)
 #define API2_OP_SETTINGS_AUTO_POWEROFF_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_SETTINGS, API2_RES_SETTINGS_AUTO_POWEROFF)
 #define API2_OP_SETTINGS_ENCODER_COUNTS_PER_DETENT_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_SETTINGS, API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT)
@@ -369,6 +378,16 @@ typedef struct {
 } __attribute__((packed)) Api2CommandsFaultTestRequest;
 _Static_assert(sizeof(Api2CommandsFaultTestRequest) == 1U, "Api2CommandsFaultTestRequest layout");
 typedef struct {
+    uint8_t  on;
+    uint16_t phase;
+} __attribute__((packed)) Api2CommandsExcitationRequest;
+_Static_assert(sizeof(Api2CommandsExcitationRequest) == 3U, "Api2CommandsExcitationRequest layout");
+typedef struct {
+    uint8_t  channel_mask;
+    uint8_t  mux;
+} __attribute__((packed)) Api2CommandsAdcMuxRequest;
+_Static_assert(sizeof(Api2CommandsAdcMuxRequest) == 2U, "Api2CommandsAdcMuxRequest layout");
+typedef struct {
     uint32_t applied_mask;
 } __attribute__((packed)) Api2CommandsRailResponse;
 _Static_assert(sizeof(Api2CommandsRailResponse) == 4U, "Api2CommandsRailResponse layout");
@@ -377,6 +396,10 @@ typedef struct {
     uint8_t  on;
 } __attribute__((packed)) Api2CommandsRailRequest;
 _Static_assert(sizeof(Api2CommandsRailRequest) == 2U, "Api2CommandsRailRequest layout");
+typedef struct {
+    uint8_t  n;
+} __attribute__((packed)) Api2CommandsExcFreqRequest;
+_Static_assert(sizeof(Api2CommandsExcFreqRequest) == 1U, "Api2CommandsExcFreqRequest layout");
 typedef struct {
     int32_t  value;
 } __attribute__((packed)) Api2CalibrationsS1KValue;
@@ -493,6 +516,10 @@ typedef struct {
     uint16_t value;
 } __attribute__((packed)) Api2SettingsBatteryChargeStartValue;
 _Static_assert(sizeof(Api2SettingsBatteryChargeStartValue) == 2U, "Api2SettingsBatteryChargeStartValue layout");
+typedef struct {
+    uint16_t value;
+} __attribute__((packed)) Api2SettingsChargeFullTimeoutValue;
+_Static_assert(sizeof(Api2SettingsChargeFullTimeoutValue) == 2U, "Api2SettingsChargeFullTimeoutValue layout");
 typedef struct {
     uint16_t value;
 } __attribute__((packed)) Api2SettingsAutoPoweroffValue;
@@ -729,7 +756,10 @@ Api2Status api_h_commands_test_beep(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_power_test(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_pin_test(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_fault_test(const ApiResource *r, ApiCall *c);
+Api2Status api_h_commands_excitation(const ApiResource *r, ApiCall *c);
+Api2Status api_h_commands_adc_mux(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_rail(const ApiResource *r, ApiCall *c);
+Api2Status api_h_commands_exc_freq(const ApiResource *r, ApiCall *c);
 Api2Status api_h_measurements_onboard_temp(const ApiResource *r, ApiCall *c);
 Api2Status api_h_measurements_battery_mv(const ApiResource *r, ApiCall *c);
 Api2Status api_h_measurements_battery_soc(const ApiResource *r, ApiCall *c);

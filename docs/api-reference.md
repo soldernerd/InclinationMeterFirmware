@@ -159,7 +159,10 @@ One-shot actions. Every command answers with a status byte (plus the payload not
 | 0x71 | POWER_TEST | EXECUTE | Power investigation: each bit of the mask keeps one subsystem on, cleared bits cut it immediately (service mode) |
 | 0x72 | PIN_TEST | EXECUTE | Drive the six MCU-to-level-converter lines as static outputs (service mode) |
 | 0x76 | FAULT_TEST | EXECUTE | Provoke a failure on purpose, to prove the fault capture and the watchdog on a bench (answers first, then misbehaves) (service mode) |
+| 0x74 | EXCITATION | EXECUTE | Investigation: switch the AD9833 excitation on or off and set its PHASE0 register (phase reversal) (service mode) |
+| 0x75 | ADC_MUX | EXECUTE | Investigation: set the ADS131M04 input multiplexer of the selected channels (service mode) |
 | 0x73 | RAIL | EXECUTE | Switch one supply rail (shortcut for POWER_TEST bits 0 and 1) (service mode) |
+| 0x77 | EXC_FREQ | EXECUTE | Investigation: choose the excitation frequency f0 = 20833.33 Hz / n (n = samples per carrier cycle; n = 8, 2604 Hz, is the default and every boot's value) (service mode) |
 
 ### Commands POWER_OFF (0x1/0x40)
 
@@ -215,7 +218,7 @@ Verbs: `EXECUTE` = 0x2145
 
 ### Commands TILT_DEMOD (0x1/0x50)
 
-Start or stop the tilt demodulation (runs from boot). BUSY_EXCLUSIVE while a bulk capture or the phasor stream owns the ADC.
+Start or stop the tilt demodulation (runs from boot). BUSY_EXCLUSIVE while a bulk capture owns the ADC. The phasor stream is only a tap on the demodulation, so a stop ends its batches until the next start.
 
 Verbs: `EXECUTE` = 0x2150
 
@@ -330,6 +333,32 @@ Verbs: `EXECUTE` = 0x2176. **Needs service mode** (`SERVICE_MODE_REQUIRED` other
 |---:|---|---|---|---|
 | 0 | u8 | `kind` |  | 1 HardFault, 2 main-loop hang, 3 hang with interrupts off |
 
+### Commands EXCITATION (0x1/0x74)
+
+Investigation: switch the AD9833 excitation on or off and set its PHASE0 register (phase reversal). Not persistent: every boot starts with the excitation on, phase 0.
+
+Verbs: `EXECUTE` = 0x2174. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
+
+**Request** (3 bytes)
+
+| Offset | Type | Field | Unit | Meaning |
+|---:|---|---|---|---|
+| 0 | u8 | `on` |  | 1 = output on, 0 = output off (the DDS is held in reset) |
+| 1 | u16 | `phase` | 360/4096 deg | PHASE0 register, 0..4095 = 0..360 degrees |
+
+### Commands ADC_MUX (0x1/0x75)
+
+Investigation: set the ADS131M04 input multiplexer of the selected channels. A running demodulation is restarted around the change (readings are invalid for about 2 s afterwards). BUSY_EXCLUSIVE during a bulk capture. Not persistent: every boot starts with all channels normal.
+
+Verbs: `EXECUTE` = 0x2175. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
+
+**Request** (2 bytes)
+
+| Offset | Type | Field | Unit | Meaning |
+|---:|---|---|---|---|
+| 0 | u8 | `channel_mask` |  | bit n = ADC channel n (0..3), at least one bit |
+| 1 | u8 | `mux` |  | 0 normal (input pins), 1 inputs shorted, 2 positive DC test signal, 3 negative DC test signal |
+
 ### Commands RAIL (0x1/0x73)
 
 Switch one supply rail (shortcut for POWER_TEST bits 0 and 1).
@@ -348,6 +377,18 @@ Verbs: `EXECUTE` = 0x2173. **Needs service mode** (`SERVICE_MODE_REQUIRED` other
 | Offset | Type | Field | Unit | Meaning |
 |---:|---|---|---|---|
 | 0 | u32 | `applied_mask` |  | the resulting POWER_TEST mask |
+
+### Commands EXC_FREQ (0x1/0x77)
+
+Investigation: choose the excitation frequency f0 = 20833.33 Hz / n (n = samples per carrier cycle; n = 8, 2604 Hz, is the default and every boot's value). Sets the AD9833 frequency word to round(2^20 / n), switches the demodulation to n positions per cycle and restarts a running demodulation (readings are invalid for about 2 s). The batch stays 64 cycles, so its period is 64 n / 20833.33 s and the cycle counter in the phasor stream counts cycles of 1/f0. The calibrations (k, zero, phase) are valid at n = 8 only. BUSY_EXCLUSIVE during a bulk capture. Not persistent.
+
+Verbs: `EXECUTE` = 0x2177. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
+
+**Request** (1 bytes)
+
+| Offset | Type | Field | Unit | Meaning |
+|---:|---|---|---|---|
+| 0 | u8 | `n` |  | samples per carrier cycle, 4..16 |
 
 ## Calibrations
 
@@ -563,6 +604,7 @@ Behaviour: how often tasks run, thresholds, timeouts. Stored in EEPROM; every SE
 | 0x50 | BATTERY_CRITICAL | GET, SET | Below this the instrument powers off (must stay below BATTERY_LOW) [2500 .. 3600 mV] |
 | 0x51 | BATTERY_LOW | GET, SET | Below this the low-battery warning shows (must stay above BATTERY_CRITICAL) [3000 .. 4200 mV] |
 | 0x52 | BATTERY_CHARGE_START | GET, SET | Below this, with USB power present, charging starts [3000 .. 4200 mV] |
+| 0x53 | CHARGE_FULL_TIMEOUT | GET, SET | Stop charging after this long at a 100 % state-of-charge reading, or as soon as the charger reports STANDBY, whichever comes first (0 = never) [0 .. 1440 min] |
 | 0x60 | AUTO_POWEROFF | GET, SET | Idle time with no encoder input before the instrument powers off (0 = never) [0 .. 65535 s] |
 | 0x61 | ENCODER_COUNTS_PER_DETENT | GET, SET | Raw quadrature transitions per mechanical detent of the rotary encoders [1 .. 100] |
 
@@ -629,6 +671,14 @@ Below this, with USB power present, charging starts
 Verbs: `GET` = 0x0352, `SET` = 0x1352
 
 Value: `u16` in mV, range 3000 .. 4200. SET answers status only.
+
+### Settings CHARGE_FULL_TIMEOUT (0x3/0x53)
+
+Stop charging after this long at a 100 % state-of-charge reading, or as soon as the charger reports STANDBY, whichever comes first (0 = never). The charger cannot end a charge by itself while the instrument runs from the battery. Charging restarts below BATTERY_CHARGE_START.
+
+Verbs: `GET` = 0x0353, `SET` = 0x1353
+
+Value: `u16` in min, range 0 .. 1440. SET answers status only.
 
 ### Settings AUTO_POWEROFF (0x3/0x60)
 

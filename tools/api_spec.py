@@ -156,7 +156,8 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
   Res("CHARGE_INHIBIT", 0x45, (EXECUTE,), "Hold charging off (also cancels a forced charge). Stays in effect until "
       "cleared; not cleared by a USB replug.", req=[F(U8, "inhibit", "1 = inhibit, 0 = allow")]),
   Res("TILT_DEMOD", 0x50, (EXECUTE,), "Start or stop the tilt demodulation (runs from boot). BUSY_EXCLUSIVE while "
-      "a bulk capture or the phasor stream owns the ADC.", req=[F(U8, "run", "1 = run, 0 = stop")]),
+      "a bulk capture owns the ADC. The phasor stream is only a tap on the demodulation, so a stop ends its batches "
+      "until the next start.", req=[F(U8, "run", "1 = run, 0 = stop")]),
   Res("ZERO_CAL", 0x51, (EXECUTE,), service=True, doc="Flip (zero) calibration, the 180-degree reversal test. Step 1 averages the "
       "reading in the current orientation (optionally only the selected sensors), step 2 after turning the "
       "instrument 180 degrees averages again and stores the new zero of those sensors (Calibrations S1_ZERO / "
@@ -189,9 +190,25 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
       "resets after about 3 s; reset_cause shows a WWDG reset). 3: a hang with interrupts disabled (the hardware watchdog "
       "resets within about half a second).",
       req=[F(U8, "kind", "1 HardFault, 2 main-loop hang, 3 hang with interrupts off")]),
+  Res("EXCITATION", 0x74, (EXECUTE,), service=True, doc="Investigation: switch the AD9833 excitation on or off and set "
+      "its PHASE0 register (phase reversal). Not persistent: every boot starts with the excitation on, phase 0.",
+      req=[F(U8, "on", "1 = output on, 0 = output off (the DDS is held in reset)"),
+           F(U16, "phase", "PHASE0 register, 0..4095 = 0..360 degrees", "360/4096 deg")]),
+  Res("ADC_MUX", 0x75, (EXECUTE,), service=True, doc="Investigation: set the ADS131M04 input multiplexer of the selected "
+      "channels. A running demodulation is restarted around the change (readings are invalid for about 2 s afterwards). "
+      "BUSY_EXCLUSIVE during a bulk capture. Not persistent: every boot starts with all channels normal.",
+      req=[F(U8, "channel_mask", "bit n = ADC channel n (0..3), at least one bit"),
+           F(U8, "mux", "0 normal (input pins), 1 inputs shorted, 2 positive DC test signal, 3 negative DC test signal")]),
   Res("RAIL", 0x73, (EXECUTE,), service=True, doc="Switch one supply rail (shortcut for POWER_TEST bits 0 and 1).",
       req=[F(U8, "rail", "0 = 3V3 rail, 1 = 5V rail"), F(U8, "on", "1 on, 0 off")],
       rsp=[F(U32, "applied_mask", "the resulting POWER_TEST mask")]),
+  Res("EXC_FREQ", 0x77, (EXECUTE,), service=True, doc="Investigation: choose the excitation frequency f0 = 20833.33 Hz / n "
+      "(n = samples per carrier cycle; n = 8, 2604 Hz, is the default and every boot's value). Sets the AD9833 frequency "
+      "word to round(2^20 / n), switches the demodulation to n positions per cycle and restarts a running demodulation "
+      "(readings are invalid for about 2 s). The batch stays 64 cycles, so its period is 64 n / 20833.33 s and the cycle "
+      "counter in the phasor stream counts cycles of 1/f0. The calibrations (k, zero, phase) are valid at n = 8 only. "
+      "BUSY_EXCLUSIVE during a bulk capture. Not persistent.",
+      req=[F(U8, "n", "samples per carrier cycle, 4..16")]),
 ])
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -253,6 +270,10 @@ SETTINGS = Cat(0x3, "SETTINGS", "Settings", (GET, SET),
            check="battery_order"),
   FieldRes("BATTERY_CHARGE_START", 0x52, U16, "battery_charge_start_mv", 3000, 4200,
            "Below this, with USB power present, charging starts", "mV"),
+  FieldRes("CHARGE_FULL_TIMEOUT", 0x53, U16, "charge_full_timeout_min", 0, 1440,
+           "Stop charging after this long at a 100 % state-of-charge reading, or as soon as the charger reports "
+           "STANDBY, whichever comes first (0 = never). The charger cannot end a charge by itself while the "
+           "instrument runs from the battery. Charging restarts below BATTERY_CHARGE_START.", "min"),
   FieldRes("AUTO_POWEROFF", 0x60, U16, "auto_poweroff_s", 0, 65535,
            "Idle time with no encoder input before the instrument powers off (0 = never)", "s"),
   FieldRes("ENCODER_COUNTS_PER_DETENT", 0x61, U16, "encoder_counts_per_detent", 1, 100,

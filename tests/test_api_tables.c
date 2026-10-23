@@ -353,7 +353,8 @@ static bool expected_gated(uint8_t cat, uint8_t res)
     return res == API2_RES_COMMANDS_REBOOT_DFU || res == API2_RES_COMMANDS_FACTORY_DEFAULTS
         || res == API2_RES_COMMANDS_ZERO_CAL   || res == API2_RES_COMMANDS_POWER_TEST
         || res == API2_RES_COMMANDS_PIN_TEST   || res == API2_RES_COMMANDS_RAIL
-        || res == API2_RES_COMMANDS_FAULT_TEST;
+        || res == API2_RES_COMMANDS_FAULT_TEST || res == API2_RES_COMMANDS_EXCITATION
+        || res == API2_RES_COMMANDS_ADC_MUX    || res == API2_RES_COMMANDS_EXC_FREQ;
 }
 
 TEST(exactly_the_documented_resources_need_service_mode)

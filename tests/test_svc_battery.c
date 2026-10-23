@@ -207,6 +207,60 @@ TEST(once_started_charging_stays_on_as_the_voltage_rises_until_complete)
     CHECK(!charge_enabled());                                 /* 4150 mV is above the start threshold: no restart */
 }
 
+TEST(charging_stops_after_the_full_timeout_at_100_percent_and_restarts_below_the_start_threshold)
+{
+    fresh();
+    g_device_settings.charge_full_timeout_min = 2;
+    set_vbus(1);
+    set_vbat(3600);
+    tick(4);
+    CHECK(charge_enabled());
+    set_vbat(4200);                                           /* 100 % */
+    tick(100);                                                /* 100 s: the 2 min timer has not run out */
+    CHECK(charge_enabled());
+    tick(30);                                                 /* past 2 min at 100 % */
+    CHECK(!charge_enabled());
+    tick(10);
+    CHECK(!charge_enabled());                                 /* stays off while the pack is above the start threshold */
+    set_vbat(3600);
+    tick(3);
+    CHECK(charge_enabled());                                  /* restarts through the normal policy */
+}
+
+TEST(a_full_timeout_of_zero_never_stops_charging_and_the_timer_needs_100_percent)
+{
+    fresh();
+    g_device_settings.charge_full_timeout_min = 0;
+    set_vbus(1);
+    set_vbat(3600);
+    tick(4);
+    set_vbat(4200);
+    tick(400);
+    CHECK(charge_enabled());                                  /* 0 = disabled */
+
+    fresh();
+    g_device_settings.charge_full_timeout_min = 2;
+    set_vbus(1);
+    set_vbat(3600);
+    tick(4);
+    set_vbat(4000);                                           /* below 100 %: the timer does not run */
+    tick(400);
+    CHECK(charge_enabled());
+}
+
+TEST(a_full_timeout_also_ends_a_forced_charge)
+{
+    fresh();
+    g_device_settings.charge_full_timeout_min = 1;
+    set_vbus(1);
+    set_vbat(4200);
+    svc_battery_force_charge();
+    tick(5);
+    CHECK(charge_enabled());
+    tick(80);
+    CHECK(!charge_enabled());
+}
+
 TEST(force_charge_bypasses_the_threshold_but_not_the_usb_guard)
 {
     fresh();
@@ -341,6 +395,9 @@ int main(void)
     RUN(charging_starts_below_the_start_threshold_only_with_usb_after_two_samples);
     RUN(a_full_enough_pack_is_left_alone);
     RUN(once_started_charging_stays_on_as_the_voltage_rises_until_complete);
+    RUN(charging_stops_after_the_full_timeout_at_100_percent_and_restarts_below_the_start_threshold);
+    RUN(a_full_timeout_of_zero_never_stops_charging_and_the_timer_needs_100_percent);
+    RUN(a_full_timeout_also_ends_a_forced_charge);
     RUN(force_charge_bypasses_the_threshold_but_not_the_usb_guard);
     RUN(inhibit_beats_everything_and_stays_until_cleared);
     RUN(usb_arrival_registers_at_once_but_removal_needs_ten_seconds);
