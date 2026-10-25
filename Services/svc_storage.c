@@ -159,6 +159,9 @@ typedef struct {
 
 static PendingWrite s_pending = {0};
 
+/* Set when svc_storage_init() could not read the chip at all (as opposed to reading garbage): see there. */
+static bool s_eeprom_unreachable = false;
+
 /* ---------------- defaults ---------------- */
 
 static void fill_default_settings(DeviceSettings *s)
@@ -420,6 +423,7 @@ static void run_eeprom_selftest(void)
 DrvStatus svc_storage_save_settings(const DeviceSettings *settings)
 {
     if (settings == 0)     return DRV_ERR_INVALID;
+    if (s_eeprom_unreachable) return DRV_ERR_COMM;     /* booted without being able to read the chip: never overwrite it */
     if (s_pending.active)  return DRV_ERR_NOT_READY;
 
     s_pending.is_settings_save = true;
@@ -529,6 +533,7 @@ void svc_storage_update(void)
 void svc_storage_init(void)
 {
     drv_24lc256_init();
+    s_eeprom_unreachable = false;
 
     /* Prove the EEPROM write path end-to-end before relying on it below. */
     run_eeprom_selftest();
@@ -543,6 +548,18 @@ void svc_storage_init(void)
         const SettingsSection *sec = &s_sections[i];
         uint8_t *dest = (uint8_t *)&g_device_settings + sec->offset;
         DrvStatus rc = load_section(sec, dest);
+        if (rc == DRV_ERR_COMM) {
+            /* The chip could not be READ (stuck bus, loose connector): that says nothing about what is stored
+             * on it, so it must not be reseeded -- writing defaults here would overwrite real calibrations the
+             * moment the write side happens to work. Run this boot on the in-RAM defaults, keep the chip
+             * untouched, refuse every later save, and make it loud (settings_save_failed is latched and shown
+             * on the SETTINGS screen). A reset retries. */
+            s_eeprom_unreachable = true;
+            g_system_state.settings_save_failed = true;
+            svc_logf(API2_LOG_ERROR, "storage: EEPROM unreadable (page %u), running on defaults, saves refused",
+                     (unsigned)i);
+            continue;
+        }
         if (rc != DRV_OK) {
             /* Never silent: a reseed throws the stored calibration of this page away. */
             svc_logf(API2_LOG_WARN, "storage: settings page %u reseeded to defaults (%s)",

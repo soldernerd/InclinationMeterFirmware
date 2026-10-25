@@ -5,6 +5,18 @@ of the wire protocol or the stored settings; the patch number with every build h
 newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a line says so; the acceptance list for 1.0.0 is
 `docs/release-checklist.md`.
 
+## 0.11.3 - 2026-10-25
+Incremental robustness fixes (no API, wire, EEPROM-layout or measurement change). Host-test- and build-verified; not yet bench-tested.
+- I2C1 bus clear at boot (`HAL_App/hal_i2c.c`): if SCL or SDA is low when `hal_i2c_init` runs (a reset in the middle of an EEPROM /
+  BME280 transaction leaves the slave holding SDA), the bus is released with up to nine SCL clocks and a STOP before the peripheral is
+  re-initialised. A healthy bus is not touched.
+- `svc_storage_init` no longer reseeds a settings page it could not READ (`DRV_ERR_COMM`). Before, an unreadable chip was treated like
+  a corrupt page: defaults were generated and written back, which overwrote the real calibrations whenever the write side still
+  worked. Now the boot runs on the in-RAM defaults, the chip is left untouched, `settings_save_failed` is latched (SETTINGS screen
+  marker, System HEALTH), an ERROR line goes to the debug log, and `svc_storage_save_settings` / `restore_defaults` refuse until the
+  next reset. New host test `an_unreadable_chip_is_never_reseeded_overwritten_or_saved_to` (fails on the old code).
+  Found on 2026-10-25 when an ST-Link reset left board 6DA98059 with a stuck I2C bus: it booted on defaults (see COORDINATION.md).
+
 ## 0.11.2 - 2026-10-24
 Ported from the `drift-probe` branch (probe builds 0.10.90 / 0.10.91, API v2) to API v3. Build- and host-test-verified only.
 - Settings `CHARGE_FULL_TIMEOUT` (0x53, minutes, default 60, 0 = off; SETTINGS screen row "Charge stop @100%"): charging stops

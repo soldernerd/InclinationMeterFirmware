@@ -28,6 +28,7 @@ static uint8_t g_mem[EEPROM_TOTAL_BYTES];
 static bool    g_busy, g_last_ok;
 static int     g_delay_updates = 0, g_left;
 static int     g_fail_writes;               /* the next N writes fail (NAK) */
+static bool    g_reads_fail;                /* every read fails (stuck bus: the chip cannot be read at all) */
 static int     g_stuck_ops;                 /* the next N operations never finish by themselves */
 static bool    g_stuck_now;
 static int     g_writes, g_aborts;
@@ -56,7 +57,7 @@ DrvStatus drv_24lc256_start_read(uint16_t addr, uint8_t *buf, uint16_t len)
     if (g_busy) return DRV_ERR_NOT_READY;
     if ((uint32_t)addr + len > EEPROM_TOTAL_BYTES) return DRV_ERR_INVALID;
     memcpy(buf, &g_mem[addr], len);
-    g_last_ok = true;
+    g_last_ok = !g_reads_fail;
     begin_op();
     return DRV_OK;
 }
@@ -84,7 +85,7 @@ DrvStatus drv_24lc256_start_write_page(uint16_t addr, const uint8_t *buf, uint16
 static void chip_blank(void)
 {
     memset(g_mem, 0xFF, sizeof g_mem);
-    g_busy = false; g_delay_updates = 0; g_fail_writes = 0; g_stuck_ops = 0; g_stuck_now = false;
+    g_busy = false; g_delay_updates = 0; g_fail_writes = 0; g_reads_fail = false; g_stuck_ops = 0; g_stuck_now = false;
     g_writes = g_aborts = 0; g_warns = 0; g_ms = 5000;
     memset(&g_device_settings, 0x5A, sizeof g_device_settings);   /* garbage: init must overwrite it */
     memset(&g_system_state, 0, sizeof g_system_state);
@@ -365,6 +366,39 @@ TEST(every_page_has_its_own_address_and_fits_its_slot)
     }
 }
 
+TEST(an_unreadable_chip_is_never_reseeded_overwritten_or_saved_to)
+{
+    chip_blank();
+    svc_storage_init();
+    g_device_settings.disp_s1_k_micro = 12612;                /* real calibration, saved */
+    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);
+    pump_until_idle(2000);
+    CHECK_EQ(g_system_state.settings_save_failed, 0);
+    uint8_t before[EEPROM_TOTAL_BYTES];
+    memcpy(before, g_mem, sizeof before);
+
+    ram_reboot();                                             /* reset in the middle of a transaction: the bus is stuck */
+    g_reads_fail = true;
+    g_writes = 0;
+    svc_storage_init();
+    DeviceSettings d = defaults();
+    CHECK(memcmp(&g_device_settings, &d, sizeof d) == 0);     /* runs on the defaults ... */
+    CHECK_EQ(g_system_state.settings_save_failed, 1);         /* ... and says so */
+    CHECK(svc_storage_save_settings(&g_device_settings) != DRV_OK);   /* nothing may be saved this boot */
+    CHECK(svc_storage_restore_defaults() != DRV_OK);
+    CHECK(!svc_storage_is_busy());
+    for (uint8_t i = 0; i < SETTINGS_SECTION_COUNT; ++i) {    /* the stored pages were not touched */
+        CHECK(memcmp(&g_mem[s_sections[i].eeprom_addr], &before[s_sections[i].eeprom_addr], HDR_SIZE + s_sections[i].size) == 0);
+    }
+
+    ram_reboot();                                             /* the next boot reads fine */
+    g_reads_fail = false;
+    svc_storage_init();
+    CHECK_EQ(g_device_settings.disp_s1_k_micro, 12612);
+    CHECK_EQ(g_system_state.settings_save_failed, 0);
+    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);   /* saving works again */
+}
+
 int main(void)
 {
     RUN(a_blank_chip_is_seeded_with_defaults_and_every_page_gets_a_valid_header);
@@ -379,5 +413,6 @@ int main(void)
     RUN(divisors_and_ranges_are_guarded);
     RUN(a_corrupt_page_with_a_zero_divisor_cannot_reach_a_consumer);
     RUN(every_page_has_its_own_address_and_fits_its_slot);
+RUN(an_unreadable_chip_is_never_reseeded_overwritten_or_saved_to);
     return test_summary();
 }

@@ -62,3 +62,4 @@ RAIL, PIN_TEST, FAULT_TEST. The SETTINGS row shows `[ON m:ss]` with the time lef
 6. **No false trips under load**: a 24 h run with the display, USB / BLE / UART traffic, a bulk capture and the phasor stream
    active must show no WWDG reset (`reset_cause`, uptime keeps growing) and unchanged `input_drop` figures.
 7. **Debugger**: with a debugger halted at a breakpoint for a minute the instrument must not reset.
+- **Reset mid I2C transaction.** Reset the MCU from the debugger (connect under reset) while the main loop polls the BME280 / EEPROM, repeatedly. Expect: every boot reads its settings and calibrations (HEALTH `eeprom_selftest` 0, `settings_save_failed` 0); if a boot ever finds the bus stuck, `hal_i2c_init` clears it (fw 0.11.3). If the chip still cannot be read the boot must run on defaults with `settings_save_failed` latched and refuse saves, never reseed the chip.
