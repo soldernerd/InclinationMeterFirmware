@@ -1,5 +1,6 @@
 #include "hal_i2c.h"
 #include "stm32g0xx_hal.h"
+#include "pin_config.h"
 
 extern I2C_HandleTypeDef hi2c1;
 
@@ -28,10 +29,66 @@ static I2C_HandleTypeDef *handle_for(HalI2cInstance instance)
     }
 }
 
+/* Short busy-wait for the bit-banged bus clear: ~5 us at 64 MHz (about 4 CPU
+ * cycles per iteration), i.e. a ~100 kHz clock. Only used on the stuck-bus path. */
+static void bus_clear_delay(void)
+{
+    for (volatile uint32_t i = 0; i < 80U; ++i) { }
+}
+
+/* I2C bus clear (NXP UM10204 3.1.16). A reset in the middle of a transaction (a debugger
+ * reset, the watchdog, a brown-out) can leave a slave -- the 24LC256 or the BME280 on this
+ * shared bus -- holding SDA low half-way through a byte, and it stays there until the master
+ * clocks the byte out. Without this the next boot cannot talk to the EEPROM, runs on default
+ * settings and calibrations, and (before svc_storage was changed to refuse that) could write
+ * the defaults over the real ones. A healthy bus (both lines high) is left completely alone. */
+static void bus_clear(void)
+{
+    if ((I2C1_SCL_PORT->IDR & I2C1_SCL_PIN) != 0U && (I2C1_SDA_PORT->IDR & I2C1_SDA_PIN) != 0U) {
+        return;
+    }
+
+    (void)HAL_I2C_DeInit(&hi2c1);   /* releases both pins; MX_I2C1_Init's configuration is restored below */
+
+    GPIO_InitTypeDef gpio = {0};
+    gpio.Mode  = GPIO_MODE_OUTPUT_OD;
+    gpio.Pull  = GPIO_PULLUP;
+    gpio.Speed = GPIO_SPEED_FREQ_LOW;
+    gpio.Pin   = I2C1_SCL_PIN;
+    HAL_GPIO_Init(I2C1_SCL_PORT, &gpio);
+    gpio.Pin   = I2C1_SDA_PIN;
+    HAL_GPIO_Init(I2C1_SDA_PORT, &gpio);
+    HAL_GPIO_WritePin(I2C1_SCL_PORT, I2C1_SCL_PIN, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(I2C1_SDA_PORT, I2C1_SDA_PIN, GPIO_PIN_SET);
+    bus_clear_delay();
+
+    /* Up to nine clocks: the slave releases SDA once the byte it was sending is complete. */
+    for (uint8_t i = 0; i < 9U && HAL_GPIO_ReadPin(I2C1_SDA_PORT, I2C1_SDA_PIN) == GPIO_PIN_RESET; ++i) {
+        HAL_GPIO_WritePin(I2C1_SCL_PORT, I2C1_SCL_PIN, GPIO_PIN_RESET);
+        bus_clear_delay();
+        HAL_GPIO_WritePin(I2C1_SCL_PORT, I2C1_SCL_PIN, GPIO_PIN_SET);
+        bus_clear_delay();
+    }
+
+    /* STOP condition: SDA rises while SCL is high, so every slave goes back to idle. */
+    HAL_GPIO_WritePin(I2C1_SDA_PORT, I2C1_SDA_PIN, GPIO_PIN_RESET);
+    bus_clear_delay();
+    HAL_GPIO_WritePin(I2C1_SCL_PORT, I2C1_SCL_PIN, GPIO_PIN_SET);
+    bus_clear_delay();
+    HAL_GPIO_WritePin(I2C1_SDA_PORT, I2C1_SDA_PIN, GPIO_PIN_SET);
+    bus_clear_delay();
+
+    HAL_GPIO_DeInit(I2C1_SCL_PORT, I2C1_SCL_PIN);
+    HAL_GPIO_DeInit(I2C1_SDA_PORT, I2C1_SDA_PIN);
+    (void)HAL_I2C_Init(&hi2c1);     /* MspInit puts the pins back on AF6 and re-arms the DMA channels */
+}
+
 void hal_i2c_init(HalI2cInstance instance)
 {
-    /* hi2c1 is initialised by MX_I2C1_Init (CubeMX). Nothing else to do
-     * for HAL_I2C_MAIN. HAL_I2C_AUX is a WP2 stub. */
+    /* hi2c1 is initialised by MX_I2C1_Init (CubeMX). HAL_I2C_AUX is a WP2 stub. */
+    if (instance == HAL_I2C_MAIN) {
+        bus_clear();
+    }
     if (instance < HAL_I2C_COUNT) {
         s_busy[instance] = false;
         s_cb[instance]   = 0;
