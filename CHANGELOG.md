@@ -5,6 +5,9 @@ of the wire protocol or the stored settings; the patch number with every build h
 newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a line says so; the acceptance list for 1.0.0 is
 `docs/release-checklist.md`.
 
+## 0.11.5 - 2026-10-26
+Service mode is now a compile-time option, **off for now**: `SERVICE_MODE_REQUIRED` in `Config/config.h` (0 = the resources flagged `service=True` -- calibration writes, zero calibration, factory defaults, DFU, power / pin tests, the investigation commands -- are always open; 1 = they answer `SERVICE_MODE_REQUIRED` unless service mode was switched on at the instrument, as in 0.11.1..0.11.4). The menu row, the state flag, the idle timeout and the host tests of the mode itself are unchanged. Set it back to 1 before an instrument leaves the bench. No API, wire or EEPROM-layout change; build- and host-test-verified, not bench-tested.
+
 ## 0.11.4 - 2026-10-26
 Charging now stops after `charge_full_timeout_min` minutes (default 60) at a SoC reading of **97 % or more** (new `CHARGE_FULL_SOC_PCT` in `Config/config.h`; was 100 %). With the instrument running from the battery the voltage-based SoC often tops out at 97..99 %, so the 100 % condition never fired. 97 % is about 4.13 V; the TP4056 STANDBY rule and the restart below `BATTERY_CHARGE_START` are unchanged. Settings row renamed "Charge stop @97%". No API opcode, payload or EEPROM-layout change. Host test added; build-verified, not bench-tested.
 

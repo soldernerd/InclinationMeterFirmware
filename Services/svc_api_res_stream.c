@@ -216,7 +216,11 @@ void api_res_request_seen(void)
 
 bool api_service_unlocked(void)
 {
+#if SERVICE_MODE_REQUIRED
     return svc_service_active();
+#else
+    return true;       /* gate disabled at compile time (config.h): every service-mode resource is open */
+#endif
 }
 
 void api_res_transport_disconnected(ApiTransport t)

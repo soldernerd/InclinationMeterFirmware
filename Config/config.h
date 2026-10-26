@@ -47,6 +47,12 @@
  * Ends by itself after this long without any API request (and on sleep). */
 #define SERVICE_MODE_IDLE_TIMEOUT_MS   600000U      /* 10 minutes */
 
+/* 1 = the API resources flagged service=True in tools/api_spec.py (calibration writes, zero calibration, factory defaults,
+ * DFU, power / pin tests, the investigation commands) answer SERVICE_MODE_REQUIRED unless service mode was switched on at the
+ * instrument; 0 = they are always open. Set to 0 on 2026-10-26 while the instrument is still being tested and calibrated
+ * over the API; set it back to 1 for anything that leaves the bench. The service-mode menu row and the state flag stay. */
+#define SERVICE_MODE_REQUIRED          0
+
 /* --- Watchdog (2026-10-08, HAL_App/hal_wdt.h) ---
  * The window watchdog is refreshed from SysTick while the main loop keeps making progress; a main loop that makes no
  * progress for this long stops the refreshes and the instrument resets. Longer than any legitimate pause of the
