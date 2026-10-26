@@ -5,6 +5,9 @@ of the wire protocol or the stored settings; the patch number with every build h
 newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a line says so; the acceptance list for 1.0.0 is
 `docs/release-checklist.md`.
 
+## 0.11.4 - 2026-10-26
+Charging now stops after `charge_full_timeout_min` minutes (default 60) at a SoC reading of **97 % or more** (new `CHARGE_FULL_SOC_PCT` in `Config/config.h`; was 100 %). With the instrument running from the battery the voltage-based SoC often tops out at 97..99 %, so the 100 % condition never fired. 97 % is about 4.13 V; the TP4056 STANDBY rule and the restart below `BATTERY_CHARGE_START` are unchanged. Settings row renamed "Charge stop @97%". No API opcode, payload or EEPROM-layout change. Host test added; build-verified, not bench-tested.
+
 ## 0.11.3 - 2026-10-25
 Incremental robustness fixes (no API, wire, EEPROM-layout or measurement change). Host-test- and build-verified; not yet bench-tested.
 - I2C1 bus clear at boot (`HAL_App/hal_i2c.c`): if SCL or SDA is low when `hal_i2c_init` runs (a reset in the middle of an EEPROM /

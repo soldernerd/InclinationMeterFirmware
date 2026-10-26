@@ -271,7 +271,7 @@ SETTINGS = Cat(0x3, "SETTINGS", "Settings", (GET, SET),
   FieldRes("BATTERY_CHARGE_START", 0x52, U16, "battery_charge_start_mv", 3000, 4200,
            "Below this, with USB power present, charging starts", "mV"),
   FieldRes("CHARGE_FULL_TIMEOUT", 0x53, U16, "charge_full_timeout_min", 0, 1440,
-           "Stop charging after this long at a 100 % state-of-charge reading, or as soon as the charger reports "
+           "Stop charging after this long at a state-of-charge reading of 97 % or more, or as soon as the charger reports "
            "STANDBY, whichever comes first (0 = never). The charger cannot end a charge by itself while the "
            "instrument runs from the battery. Charging restarts below BATTERY_CHARGE_START.", "min"),
   FieldRes("AUTO_POWEROFF", 0x60, U16, "auto_poweroff_s", 0, 65535,

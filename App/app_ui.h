@@ -25,7 +25,7 @@ typedef enum {
                                      * "battery cutoff"; see config.h */
     UI_SETTING_AUTO_POWEROFF,       /* auto_poweroff_s (WP6); 0 = disabled */
     UI_SETTING_CHARGE_FULL_TIMEOUT, /* charge_full_timeout_min: stop charging after this
-                                     * many minutes at 100 % SoC; 0 = disabled */
+                                     * many minutes at 97 % SoC or more; 0 = disabled */
     UI_SETTING_FORCE_CHARGE,        /* action — svc_battery_force_charge():
                                      * charge regardless of SOC while USB
                                      * present (one-shot overnight top-off) */

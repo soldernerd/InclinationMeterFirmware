@@ -30,7 +30,7 @@ static int32_t s_enc2_pos;
 static const UiSettingMeta s_setting_meta[UI_SETTING_COUNT] = {
     [UI_SETTING_BATTERY_CRITICAL] = { "Battery critical",  "mV",   10,  3000,   3700 },
     [UI_SETTING_AUTO_POWEROFF]    = { "Auto power-off",   "s",    30,     0,   3600 },
-    [UI_SETTING_CHARGE_FULL_TIMEOUT] = { "Charge stop @100%", "min", 15,    0,   1440 },
+    [UI_SETTING_CHARGE_FULL_TIMEOUT] = { "Charge stop @97%", "min", 15,    0,   1440 },
     /* step 0 marks these action rows — see UiSettingMeta's comment. */
     [UI_SETTING_FORCE_CHARGE]     = { "Force charge",     "",      0,     0,      0 },
     [UI_SETTING_ZERO_CAL]         = { "Zero cal both",    "",      0,     0,      0 },

@@ -60,7 +60,7 @@
  * down into Standby. 0 disables it. EEPROM-backed (battery page), get/set
  * over the API (Settings resource 0x1B) and on the SETTINGS screen. */
 #define DEFAULT_AUTO_POWEROFF_S        300     /* 5 minutes */
-/* Stop charging after this many minutes at a 100 % SoC reading, or as soon as the TP4056
+/* Stop charging after this many minutes at a SoC reading of at least CHARGE_FULL_SOC_PCT, or as soon as the TP4056
  * reports STANDBY, whichever comes first (0 = disabled). Added 2026-10-08: with the instrument
  * running from the battery the TP4056 never terminates by itself (its end-of-charge detection
  * sees the board's own load current), so it sat in constant-voltage at ~4.2 V for 20 hours.
@@ -68,6 +68,11 @@
  * current inflates it), so 60 min at 100 % ends a charge roughly 2.5 h after it began. After a
  * stop, charging restarts when Vbat falls below DEFAULT_BATTERY_CHARGE_START_MV. */
 #define DEFAULT_CHARGE_FULL_TIMEOUT_MIN 60
+
+/* SoC (percent, voltage based) from which the above timer runs. 100 % is reached only late in a charge, and with the
+ * instrument running from the battery the reading often tops out at 97..99 %, so a 100 % threshold never fired
+ * (2026-10-26). 97 % is about 4.13 V. */
+#define CHARGE_FULL_SOC_PCT             97U
 
 /* --- ADC/sensor scaling calibration (2026-08-17) ---
  * General project rule: no numeric calibration constant lives only in

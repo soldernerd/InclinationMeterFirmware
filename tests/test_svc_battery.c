@@ -227,6 +227,23 @@ TEST(charging_stops_after_the_full_timeout_at_100_percent_and_restarts_below_the
     CHECK(charge_enabled());                                  /* restarts through the normal policy */
 }
 
+TEST(the_full_timer_runs_from_97_percent_not_only_at_100)
+{
+    /* the SoC reading often tops out at 97..99 % while the instrument runs (4134 mV = 97 %, 4133 mV = 96 %) */
+    fresh();
+    g_device_settings.charge_full_timeout_min = 2;
+    set_vbus(1);
+    set_vbat(3600);
+    tick(4);
+    set_vbat(4133);                                           /* 96 %: below the threshold */
+    tick(400);
+    CHECK(charge_enabled());
+    set_vbat(4134);                                           /* 97 %: the timer starts */
+    tick(100);
+    CHECK(charge_enabled());
+    tick(30);
+    CHECK(!charge_enabled());                                 /* 2 min at >= 97 % */
+}
 TEST(a_full_timeout_of_zero_never_stops_charging_and_the_timer_needs_100_percent)
 {
     fresh();
@@ -396,7 +413,8 @@ int main(void)
     RUN(a_full_enough_pack_is_left_alone);
     RUN(once_started_charging_stays_on_as_the_voltage_rises_until_complete);
     RUN(charging_stops_after_the_full_timeout_at_100_percent_and_restarts_below_the_start_threshold);
-    RUN(a_full_timeout_of_zero_never_stops_charging_and_the_timer_needs_100_percent);
+    RUN(the_full_timer_runs_from_97_percent_not_only_at_100);
+RUN(a_full_timeout_of_zero_never_stops_charging_and_the_timer_needs_100_percent);
     RUN(a_full_timeout_also_ends_a_forced_charge);
     RUN(force_charge_bypasses_the_threshold_but_not_the_usb_guard);
     RUN(inhibit_beats_everything_and_stays_until_cleared);
