@@ -400,11 +400,11 @@ Constants that correct a sensor or a measurement. Stored in EEPROM; every SET pe
 |---:|---|---|---|
 | 0x40 | S1_K | GET, SET | Sensor 1 sensitivity k at PGA 1: tilt [mm/m] = (ratio - zero) / k [100 .. 1000000 1e-6 per mm/m] (service mode) |
 | 0x41 | S1_ZERO | GET, SET | Sensor 1 zero (level point) as a ratio, independent of k [-500000 .. 500000 ppm of the ratio] (service mode) |
-| 0x42 | S1_PHASE | GET, SET | Sensor 1 phase of the tilt signal relative to the excitation reference [-4500 .. 4500 0.01 deg] (service mode) |
+| 0x42 | S1_PHASE | GET, SET | Sensor 1 phase of the tilt signal relative to the excitation reference [-18000 .. 18000 0.01 deg] (service mode) |
 | 0x43 | S1_INVERT | GET, SET | Sensor 1 sign of the reported reading (1 = inverted) [0 .. 1] (service mode) |
 | 0x44 | S2_K | GET, SET | Sensor 2 k at PGA 1 [100 .. 1000000 1e-6 per mm/m] (service mode) |
 | 0x45 | S2_ZERO | GET, SET | Sensor 2 zero [-500000 .. 500000 ppm of the ratio] (service mode) |
-| 0x46 | S2_PHASE | GET, SET | Sensor 2 phase [-4500 .. 4500 0.01 deg] (service mode) |
+| 0x46 | S2_PHASE | GET, SET | Sensor 2 phase [-18000 .. 18000 0.01 deg] (service mode) |
 | 0x47 | S2_INVERT | GET, SET | Sensor 2 sign of the reported reading [0 .. 1] (service mode) |
 | 0x50 | VBAT_SCALE_NUM | GET, SET | Battery divider scale numerator (Vbat = Vadc * num / den + offset) [1 .. 10000] (service mode) |
 | 0x51 | VBAT_SCALE_DEN | GET, SET | Battery divider scale denominator [1 .. 10000] (service mode) |
@@ -442,7 +442,7 @@ Sensor 1 phase of the tilt signal relative to the excitation reference
 
 Verbs: `GET` = 0x0242, `SET` = 0x1242. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
-Value: `i16` in 0.01 deg, range -4500 .. 4500. SET answers status only.
+Value: `i16` in 0.01 deg, range -18000 .. 18000. SET answers status only.
 
 ### Calibrations S1_INVERT (0x2/0x43)
 
@@ -474,7 +474,7 @@ Sensor 2 phase
 
 Verbs: `GET` = 0x0246, `SET` = 0x1246. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
-Value: `i16` in 0.01 deg, range -4500 .. 4500. SET answers status only.
+Value: `i16` in 0.01 deg, range -18000 .. 18000. SET answers status only.
 
 ### Calibrations S2_INVERT (0x2/0x47)
 

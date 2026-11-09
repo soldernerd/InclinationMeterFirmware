@@ -870,8 +870,8 @@ relative to $\underline{D}$ at $\SI{90}{\degree}$, in the range 0 to
 Item & Value \\
 \midrule
 Constants & \texttt{disp\_s1\_phase\_cdeg}, \texttt{disp\_s2\_phase\_cdeg} (int16,
-  centidegrees, $\pm\SI{45}{\degree}$), EEPROM displacement page, version 0x0009 \\
-API & Calibrations (0x2), resources 0x0D ($S_1$) and 0x0E ($S_2$), GET/SET \\
+  centidegrees, $\pm\SI{180}{\degree}$; beyond $\pm90^{\circ}$ equals the other sign with the invert flag toggled), EEPROM displacement page \\
+API & Calibrations, resources 0x42 ($S_1$) and 0x46 ($S_2$) since API v3 (0x0D/0x0E before), GET/SET \\
 Defaults & $-\SI{6.00}{\degree}$ ($S_1$), $-\SI{9.15}{\degree}$ ($S_2$) \\
 \bottomrule
 \end{tabular}

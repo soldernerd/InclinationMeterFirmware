@@ -1349,11 +1349,11 @@ def decode_procedures_precision_response(data):
 CALIBRATIONS = {  # name -> (resource id, struct format, lo, hi, unit)
     'S1_K': (RES_CALIBRATIONS_S1_K, '<i', 100, 1000000, '1e-6 per mm/m'),
     'S1_ZERO': (RES_CALIBRATIONS_S1_ZERO, '<i', -500000, 500000, 'ppm of the ratio'),
-    'S1_PHASE': (RES_CALIBRATIONS_S1_PHASE, '<h', -4500, 4500, '0.01 deg'),
+    'S1_PHASE': (RES_CALIBRATIONS_S1_PHASE, '<h', -18000, 18000, '0.01 deg'),
     'S1_INVERT': (RES_CALIBRATIONS_S1_INVERT, '<B', 0, 1, ''),
     'S2_K': (RES_CALIBRATIONS_S2_K, '<i', 100, 1000000, '1e-6 per mm/m'),
     'S2_ZERO': (RES_CALIBRATIONS_S2_ZERO, '<i', -500000, 500000, 'ppm of the ratio'),
-    'S2_PHASE': (RES_CALIBRATIONS_S2_PHASE, '<h', -4500, 4500, '0.01 deg'),
+    'S2_PHASE': (RES_CALIBRATIONS_S2_PHASE, '<h', -18000, 18000, '0.01 deg'),
     'S2_INVERT': (RES_CALIBRATIONS_S2_INVERT, '<B', 0, 1, ''),
     'VBAT_SCALE_NUM': (RES_CALIBRATIONS_VBAT_SCALE_NUM, '<H', 1, 10000, ''),
     'VBAT_SCALE_DEN': (RES_CALIBRATIONS_VBAT_SCALE_DEN, '<H', 1, 10000, ''),

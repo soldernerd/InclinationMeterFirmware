@@ -6,11 +6,11 @@
 static const ApiFieldDesc k_fields_calibrations[] = {
     { API2_RES_CALIBRATIONS_S1_K, 4, true, offsetof(DeviceSettings, disp_s1_k_micro), 100LL, 1000000LL, 0, 0, false },  /* S1_K */
     { API2_RES_CALIBRATIONS_S1_ZERO, 4, true, offsetof(DeviceSettings, disp_s1_zero_ppm), -500000LL, 500000LL, 0, 0, false },  /* S1_ZERO */
-    { API2_RES_CALIBRATIONS_S1_PHASE, 2, true, offsetof(DeviceSettings, disp_s1_phase_cdeg), -4500LL, 4500LL, 0, 0, false },  /* S1_PHASE */
+    { API2_RES_CALIBRATIONS_S1_PHASE, 2, true, offsetof(DeviceSettings, disp_s1_phase_cdeg), -18000LL, 18000LL, 0, 0, false },  /* S1_PHASE */
     { API2_RES_CALIBRATIONS_S1_INVERT, 1, false, offsetof(DeviceSettings, disp_s1_invert), 0LL, 1LL, 0, 0, false },  /* S1_INVERT */
     { API2_RES_CALIBRATIONS_S2_K, 4, true, offsetof(DeviceSettings, disp_s2_k_micro), 100LL, 1000000LL, 0, 0, false },  /* S2_K */
     { API2_RES_CALIBRATIONS_S2_ZERO, 4, true, offsetof(DeviceSettings, disp_s2_zero_ppm), -500000LL, 500000LL, 0, 0, false },  /* S2_ZERO */
-    { API2_RES_CALIBRATIONS_S2_PHASE, 2, true, offsetof(DeviceSettings, disp_s2_phase_cdeg), -4500LL, 4500LL, 0, 0, false },  /* S2_PHASE */
+    { API2_RES_CALIBRATIONS_S2_PHASE, 2, true, offsetof(DeviceSettings, disp_s2_phase_cdeg), -18000LL, 18000LL, 0, 0, false },  /* S2_PHASE */
     { API2_RES_CALIBRATIONS_S2_INVERT, 1, false, offsetof(DeviceSettings, disp_s2_invert), 0LL, 1LL, 0, 0, false },  /* S2_INVERT */
     { API2_RES_CALIBRATIONS_VBAT_SCALE_NUM, 2, false, offsetof(DeviceSettings, vbat_scale_num), 1LL, 10000LL, 0, 0, false },  /* VBAT_SCALE_NUM */
     { API2_RES_CALIBRATIONS_VBAT_SCALE_DEN, 2, false, offsetof(DeviceSettings, vbat_scale_den), 1LL, 10000LL, 0, 0, false },  /* VBAT_SCALE_DEN */
