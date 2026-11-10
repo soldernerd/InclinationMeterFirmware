@@ -31,7 +31,7 @@ bool      drv_ads131m04_faulted(void) { return false; }
 static uint8_t g_mux[4];
 static unsigned g_mux_calls;
 static uint8_t g_pga_s1, g_pga_s2;
-DrvStatus drv_ads131m04_set_pga(uint8_t s1, uint8_t s2) { g_pga_s1 = s1; g_pga_s2 = s2; return DRV_OK; }
+DrvStatus drv_ads131m04_set_pga(uint8_t a, uint8_t b, uint8_t s1, uint8_t s2) { (void)a; (void)b; g_pga_s1 = s1; g_pga_s2 = s2; return DRV_OK; }
 DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux) { if (ch > 3U) return DRV_ERR_INVALID; g_mux[ch] = mux; g_mux_calls++; return DRV_OK; }
 static uint32_t g_freqreg;
 DrvStatus drv_ad9833_set_freqreg(uint32_t freqreg) { g_freqreg = freqreg; return DRV_OK; }
@@ -112,6 +112,37 @@ TEST(the_synthetic_signal_reads_back_as_the_ratio_it_was_built_from)
     NEAR(s_delta1_mm_raw, 0.0125, 1e-5);
     NEAR(s_delta2_mm_raw, -0.0300, 1e-5);
     NEAR(s_residual1, 0.0, 1e-5);
+}
+
+/* ---------------- the four channel gains ---------------- */
+/* The same physical signals, digitised with different PGA gains per channel (a gain multiplies that channel's codes), must
+ * read back the same ratio: the gains of A and B cancel in D = A - B (even when they differ) and each sensor's own gain is divided out. */
+TEST(the_reading_does_not_depend_on_the_four_channel_gains)
+{
+    const unsigned gains[][4] = { {1, 1, 1, 1}, {2, 2, 4, 4}, {1, 4, 8, 2}, {4, 1, 2, 16}, {8, 8, 1, 1} };   /* A, B, S1, S2 */
+    for (unsigned g = 0; g < sizeof gains / sizeof gains[0]; ++g) {
+        fresh();
+        g_device_settings.disp_a_pga  = (uint8_t)gains[g][0];
+        g_device_settings.disp_b_pga  = (uint8_t)gains[g][1];
+        g_device_settings.disp_s1_pga = (uint8_t)gains[g][2];
+        g_device_settings.disp_s2_pga = (uint8_t)gains[g][3];
+        const double r1 = 0.0125, r2 = -0.0300;
+        for (unsigned b = 0; b < 5; ++b) {
+            for (unsigned c = 0; c < DISPLACEMENT_BATCH_CYCLES; ++c) {
+                for (int n = 0; n < 8; ++n) {
+                    on_sample(sample(r2 * 2.0 * EXC_AMP * (double)gains[g][3], 0.0, n),   /* ch0 = S2 */
+                              sample(-EXC_AMP * (double)gains[g][1], 0.0, n),             /* ch1 = B  */
+                              sample( EXC_AMP * (double)gains[g][0], 0.0, n),             /* ch2 = A  */
+                              sample(r1 * 2.0 * EXC_AMP * (double)gains[g][2], 0.0, n));  /* ch3 = S1 */
+                }
+            }
+            g_ms += 25;
+            svc_displacement_update();
+        }
+        CHECK(svc_displacement_get_ok());
+        NEAR(s_delta1_mm_raw, r1, 1e-5);
+        NEAR(s_delta2_mm_raw, r2, 1e-5);
+    }
 }
 
 /* ---------------- zero calibration ---------------- */
@@ -437,6 +468,7 @@ TEST(the_investigation_hooks_refuse_during_a_bulk_capture)
 int main(void)
 {
     RUN(the_synthetic_signal_reads_back_as_the_ratio_it_was_built_from);
+    RUN(the_reading_does_not_depend_on_the_four_channel_gains);
     RUN(zero_cal_refuses_bad_calls);
     RUN(zero_cal_two_orientations_give_the_instrument_zero);
     RUN(zero_cal_can_be_cancelled_and_restarted);

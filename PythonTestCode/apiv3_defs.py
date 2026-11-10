@@ -63,6 +63,8 @@ RES_CALIBRATIONS_S2_PHASE = 0x46
 RES_CALIBRATIONS_S2_INVERT = 0x47
 RES_CALIBRATIONS_S1_PGA = 0x48
 RES_CALIBRATIONS_S2_PGA = 0x49
+RES_CALIBRATIONS_A_PGA = 0x4A
+RES_CALIBRATIONS_B_PGA = 0x4B
 RES_CALIBRATIONS_VBAT_SCALE_NUM = 0x50
 RES_CALIBRATIONS_VBAT_SCALE_DEN = 0x51
 RES_CALIBRATIONS_VBAT_OFFSET = 0x52
@@ -160,6 +162,10 @@ OP_CALIBRATIONS_S1_PGA_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S1_P
 OP_CALIBRATIONS_S1_PGA_SET = opcode(SET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S1_PGA)
 OP_CALIBRATIONS_S2_PGA_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S2_PGA)
 OP_CALIBRATIONS_S2_PGA_SET = opcode(SET, CAT_CALIBRATIONS, RES_CALIBRATIONS_S2_PGA)
+OP_CALIBRATIONS_A_PGA_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_A_PGA)
+OP_CALIBRATIONS_A_PGA_SET = opcode(SET, CAT_CALIBRATIONS, RES_CALIBRATIONS_A_PGA)
+OP_CALIBRATIONS_B_PGA_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_B_PGA)
+OP_CALIBRATIONS_B_PGA_SET = opcode(SET, CAT_CALIBRATIONS, RES_CALIBRATIONS_B_PGA)
 OP_CALIBRATIONS_VBAT_SCALE_NUM_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_VBAT_SCALE_NUM)
 OP_CALIBRATIONS_VBAT_SCALE_NUM_SET = opcode(SET, CAT_CALIBRATIONS, RES_CALIBRATIONS_VBAT_SCALE_NUM)
 OP_CALIBRATIONS_VBAT_SCALE_DEN_GET = opcode(GET, CAT_CALIBRATIONS, RES_CALIBRATIONS_VBAT_SCALE_DEN)
@@ -693,6 +699,32 @@ def decode_calibrations_s2_pga_value(data):
         return None
     v = struct.unpack_from(FMT_CALIBRATIONS_S2_PGA_VALUE, data)
     d = dict(zip(FIELDS_CALIBRATIONS_S2_PGA_VALUE, v))
+    for k, x in d.items():
+        if isinstance(x, bytes):
+            d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
+    return d
+
+FMT_CALIBRATIONS_A_PGA_VALUE = '<B'
+SIZE_CALIBRATIONS_A_PGA_VALUE = struct.calcsize(FMT_CALIBRATIONS_A_PGA_VALUE)
+FIELDS_CALIBRATIONS_A_PGA_VALUE = ('value', )
+def decode_calibrations_a_pga_value(data):
+    if len(data) < SIZE_CALIBRATIONS_A_PGA_VALUE:
+        return None
+    v = struct.unpack_from(FMT_CALIBRATIONS_A_PGA_VALUE, data)
+    d = dict(zip(FIELDS_CALIBRATIONS_A_PGA_VALUE, v))
+    for k, x in d.items():
+        if isinstance(x, bytes):
+            d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
+    return d
+
+FMT_CALIBRATIONS_B_PGA_VALUE = '<B'
+SIZE_CALIBRATIONS_B_PGA_VALUE = struct.calcsize(FMT_CALIBRATIONS_B_PGA_VALUE)
+FIELDS_CALIBRATIONS_B_PGA_VALUE = ('value', )
+def decode_calibrations_b_pga_value(data):
+    if len(data) < SIZE_CALIBRATIONS_B_PGA_VALUE:
+        return None
+    v = struct.unpack_from(FMT_CALIBRATIONS_B_PGA_VALUE, data)
+    d = dict(zip(FIELDS_CALIBRATIONS_B_PGA_VALUE, v))
     for k, x in d.items():
         if isinstance(x, bytes):
             d[k] = x.split(b'\0', 1)[0].decode('ascii', 'replace')
@@ -1389,6 +1421,8 @@ CALIBRATIONS = {  # name -> (resource id, struct format, lo, hi, unit)
     'S2_INVERT': (RES_CALIBRATIONS_S2_INVERT, '<B', 0, 1, ''),
     'S1_PGA': (RES_CALIBRATIONS_S1_PGA, '<B', 1, 128, ''),
     'S2_PGA': (RES_CALIBRATIONS_S2_PGA, '<B', 1, 128, ''),
+    'A_PGA': (RES_CALIBRATIONS_A_PGA, '<B', 1, 128, ''),
+    'B_PGA': (RES_CALIBRATIONS_B_PGA, '<B', 1, 128, ''),
     'VBAT_SCALE_NUM': (RES_CALIBRATIONS_VBAT_SCALE_NUM, '<H', 1, 10000, ''),
     'VBAT_SCALE_DEN': (RES_CALIBRATIONS_VBAT_SCALE_DEN, '<H', 1, 10000, ''),
     'VBAT_OFFSET': (RES_CALIBRATIONS_VBAT_OFFSET, '<i', -500, 500, 'mV'),

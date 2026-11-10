@@ -14,6 +14,8 @@ static const ApiFieldDesc k_fields_calibrations[] = {
     { API2_RES_CALIBRATIONS_S2_INVERT, 1, false, offsetof(DeviceSettings, disp_s2_invert), 0LL, 1LL, 0, 0, false },  /* S2_INVERT */
     { API2_RES_CALIBRATIONS_S1_PGA, 1, false, offsetof(DeviceSettings, disp_s1_pga), 1LL, 128LL, api_check_pga, api_after_adc_pga, false },  /* S1_PGA */
     { API2_RES_CALIBRATIONS_S2_PGA, 1, false, offsetof(DeviceSettings, disp_s2_pga), 1LL, 128LL, api_check_pga, api_after_adc_pga, false },  /* S2_PGA */
+    { API2_RES_CALIBRATIONS_A_PGA, 1, false, offsetof(DeviceSettings, disp_a_pga), 1LL, 128LL, api_check_pga, api_after_adc_pga, false },  /* A_PGA */
+    { API2_RES_CALIBRATIONS_B_PGA, 1, false, offsetof(DeviceSettings, disp_b_pga), 1LL, 128LL, api_check_pga, api_after_adc_pga, false },  /* B_PGA */
     { API2_RES_CALIBRATIONS_VBAT_SCALE_NUM, 2, false, offsetof(DeviceSettings, vbat_scale_num), 1LL, 10000LL, 0, 0, false },  /* VBAT_SCALE_NUM */
     { API2_RES_CALIBRATIONS_VBAT_SCALE_DEN, 2, false, offsetof(DeviceSettings, vbat_scale_den), 1LL, 10000LL, 0, 0, false },  /* VBAT_SCALE_DEN */
     { API2_RES_CALIBRATIONS_VBAT_OFFSET, 4, true, offsetof(DeviceSettings, vbat_offset_mv), -500LL, 500LL, 0, 0, false },  /* VBAT_OFFSET */
@@ -84,19 +86,21 @@ static const ApiResource k_res_calibrations[] = {
     { API2_RES_CALIBRATIONS_S2_INVERT, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 1, 1, api_field_handler, 0, &k_fields_calibrations[7], 0, 1, API2_RES_F_SERVICE },  /* S2_INVERT */
     { API2_RES_CALIBRATIONS_S1_PGA, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 1, 1, api_field_handler, 0, &k_fields_calibrations[8], 0, 1, API2_RES_F_SERVICE },  /* S1_PGA */
     { API2_RES_CALIBRATIONS_S2_PGA, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 1, 1, api_field_handler, 0, &k_fields_calibrations[9], 0, 1, API2_RES_F_SERVICE },  /* S2_PGA */
-    { API2_RES_CALIBRATIONS_VBAT_SCALE_NUM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[10], 0, 1, API2_RES_F_SERVICE },  /* VBAT_SCALE_NUM */
-    { API2_RES_CALIBRATIONS_VBAT_SCALE_DEN, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[11], 0, 1, API2_RES_F_SERVICE },  /* VBAT_SCALE_DEN */
-    { API2_RES_CALIBRATIONS_VBAT_OFFSET, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 4, 4, api_field_handler, 0, &k_fields_calibrations[12], 0, 1, API2_RES_F_SERVICE },  /* VBAT_OFFSET */
-    { API2_RES_CALIBRATIONS_TMP236_SEG1_VOFFS, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[13], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG1_VOFFS */
-    { API2_RES_CALIBRATIONS_TMP236_SEG1_NUM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[14], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG1_NUM */
-    { API2_RES_CALIBRATIONS_TMP236_SEG1_DEN, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[15], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG1_DEN */
-    { API2_RES_CALIBRATIONS_TMP236_SEG_BOUNDARY, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[16], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG_BOUNDARY */
-    { API2_RES_CALIBRATIONS_TMP236_SEG2_VOFFS, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[17], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_VOFFS */
-    { API2_RES_CALIBRATIONS_TMP236_SEG2_NUM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[18], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_NUM */
-    { API2_RES_CALIBRATIONS_TMP236_SEG2_DEN, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[19], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_DEN */
-    { API2_RES_CALIBRATIONS_TMP236_SEG2_TINFL, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[20], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_TINFL */
-    { API2_RES_CALIBRATIONS_LM35_SCALE, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[21], 0, 1, API2_RES_F_SERVICE },  /* LM35_SCALE */
-    { API2_RES_CALIBRATIONS_RTC_TRIM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[22], 0, 1, API2_RES_F_SERVICE },  /* RTC_TRIM */
+    { API2_RES_CALIBRATIONS_A_PGA, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 1, 1, api_field_handler, 0, &k_fields_calibrations[10], 0, 1, API2_RES_F_SERVICE },  /* A_PGA */
+    { API2_RES_CALIBRATIONS_B_PGA, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 1, 1, api_field_handler, 0, &k_fields_calibrations[11], 0, 1, API2_RES_F_SERVICE },  /* B_PGA */
+    { API2_RES_CALIBRATIONS_VBAT_SCALE_NUM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[12], 0, 1, API2_RES_F_SERVICE },  /* VBAT_SCALE_NUM */
+    { API2_RES_CALIBRATIONS_VBAT_SCALE_DEN, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[13], 0, 1, API2_RES_F_SERVICE },  /* VBAT_SCALE_DEN */
+    { API2_RES_CALIBRATIONS_VBAT_OFFSET, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 4, 4, api_field_handler, 0, &k_fields_calibrations[14], 0, 1, API2_RES_F_SERVICE },  /* VBAT_OFFSET */
+    { API2_RES_CALIBRATIONS_TMP236_SEG1_VOFFS, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[15], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG1_VOFFS */
+    { API2_RES_CALIBRATIONS_TMP236_SEG1_NUM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[16], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG1_NUM */
+    { API2_RES_CALIBRATIONS_TMP236_SEG1_DEN, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[17], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG1_DEN */
+    { API2_RES_CALIBRATIONS_TMP236_SEG_BOUNDARY, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[18], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG_BOUNDARY */
+    { API2_RES_CALIBRATIONS_TMP236_SEG2_VOFFS, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[19], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_VOFFS */
+    { API2_RES_CALIBRATIONS_TMP236_SEG2_NUM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[20], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_NUM */
+    { API2_RES_CALIBRATIONS_TMP236_SEG2_DEN, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[21], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_DEN */
+    { API2_RES_CALIBRATIONS_TMP236_SEG2_TINFL, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[22], 0, 1, API2_RES_F_SERVICE },  /* TMP236_SEG2_TINFL */
+    { API2_RES_CALIBRATIONS_LM35_SCALE, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[23], 0, 1, API2_RES_F_SERVICE },  /* LM35_SCALE */
+    { API2_RES_CALIBRATIONS_RTC_TRIM, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_calibrations[24], 0, 1, API2_RES_F_SERVICE },  /* RTC_TRIM */
 };
 
 static const ApiResource k_res_settings[] = {

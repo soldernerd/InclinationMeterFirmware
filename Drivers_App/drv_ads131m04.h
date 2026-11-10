@@ -13,11 +13,18 @@
  * amplitude checks. */
 #define ADS131M04_CODE_MAX  8388607L   /* 2^23 - 1 */
 
-/* Per-channel PGA gain. B and A are fixed here; S1 / S2 are the power-on defaults only -- the live values come from
- * DeviceSettings (disp_s1_pga / disp_s2_pga, API Calibrations 0x48 / 0x49) via drv_ads131m04_set_pga().
+/* Per-channel PGA gain. These four are the power-on defaults only -- the live values are settings (DeviceSettings
+ * disp_{s1,s2,a,b}_pga, API Calibrations 0x48 / 0x49 / 0x4A / 0x4B), applied through drv_ads131m04_set_pga().
  * Services/svc_displacement.c divides each sensor's k by its PGA (|k| is stored for PGA = 1, so changing a gain needs
  * no recalibration of k) and uses them for the diagnostic volts. Allowed values 1, 2, 4, ... 128.
  * Channel map: CH0 = S2, CH1 = B, CH2 = A, CH3 = S1. */
+/* ADC channel indices of the four signals (the physical ADS131M04 inputs; confirmed against the schematic 2026-11-10).
+ * docs/channel-map.md is the one place that explains them and the two orders (ADC channel vs signal) in use. */
+#define ADS131M04_CH_S2     0U   /* sensor 2 */
+#define ADS131M04_CH_B      1U   /* excitation B (negative drive) */
+#define ADS131M04_CH_A      2U   /* excitation A (positive drive) */
+#define ADS131M04_CH_S1     3U   /* sensor 1 */
+
 #define ADS131M04_PGA_S2    1U
 #define ADS131M04_PGA_B     1U
 #define ADS131M04_PGA_A     1U
@@ -52,10 +59,10 @@ bool      drv_ads131m04_is_running(void);
  * back. Not persistent: every boot re-initialises the chip with the normal input. */
 DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux);
 
-/* Sets the PGA gain of the S1 / S2 channels (each 1,2,4,...,128; else DRV_ERR_INVALID). Before init() it only stores
- * the values (init() writes them); after init() it also writes GAIN1 and verifies it, and refuses with
- * DRV_ERR_NOT_READY while the acquisition runs. */
-DrvStatus drv_ads131m04_set_pga(uint8_t s1, uint8_t s2);
+/* Sets the PGA gain of the four channels (each 1,2,4,...,128; else DRV_ERR_INVALID). Before init() it only stores the
+ * values (init() writes them); after init() it also writes GAIN1 and verifies it, and refuses with DRV_ERR_NOT_READY
+ * while the acquisition runs. */
+DrvStatus drv_ads131m04_set_pga(uint8_t a, uint8_t b, uint8_t s1, uint8_t s2);
 
 /* Fired once per sample. As of the ADC_Optimization work this runs in the
  * SysTick drain, not the TIM7 ISR: the SPI RX DMA writes each frame

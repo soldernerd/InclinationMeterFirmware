@@ -233,9 +233,15 @@ CALIBRATIONS = Cat(0x2, "CALIBRATIONS", "Calibrations", (GET, SET),
   _cal("S2_ZERO", 0x45, I32, "disp_s2_zero_ppm", -500000, 500000, "Sensor 2 zero", "ppm of the ratio"),
   _cal("S2_PHASE", 0x46, I16, "disp_s2_phase_cdeg", -18000, 18000, "Sensor 2 phase", "0.01 deg"),
   _cal("S2_INVERT", 0x47, U8, "disp_s2_invert", 0, 1, "Sensor 2 sign of the reported reading"),
-  _cal("S1_PGA", 0x48, U8, "disp_s1_pga", 1, 128, "Sensor 1 ADC PGA gain, a power of two (1, 2, 4 ... 128); applied "
-           "immediately, k stays stated for PGA 1", check="pga", after="adc_pga"),
-  _cal("S2_PGA", 0x49, U8, "disp_s2_pga", 1, 128, "Sensor 2 ADC PGA gain, a power of two", check="pga", after="adc_pga"),
+  _cal("S1_PGA", 0x48, U8, "disp_s1_pga", 1, 128, "ADC PGA gain of sensor 1 (S1, ADC ch3), a power of two (1, 2, 4 ... 128); "
+           "applied immediately, k stays stated for PGA 1", check="pga", after="adc_pga"),
+  _cal("S2_PGA", 0x49, U8, "disp_s2_pga", 1, 128, "ADC PGA gain of sensor 2 (S2, ADC ch0), a power of two", check="pga",
+           after="adc_pga"),
+  _cal("A_PGA", 0x4A, U8, "disp_a_pga", 1, 128, "ADC PGA gain of excitation A (ADC ch2), a power of two; applied "
+           "immediately. The input range is +-1.2 V / PGA and A is already about 0.6 V peak at PGA 1: a higher gain clips",
+           check="pga", after="adc_pga"),
+  _cal("B_PGA", 0x4B, U8, "disp_b_pga", 1, 128, "ADC PGA gain of excitation B (ADC ch1), a power of two; same remark as A_PGA",
+           check="pga", after="adc_pga"),
   _cal("VBAT_SCALE_NUM", 0x50, U16, "vbat_scale_num", 1, 10000, "Battery divider scale numerator "
            "(Vbat = Vadc * num / den + offset)"),
   _cal("VBAT_SCALE_DEN", 0x51, U16, "vbat_scale_den", 1, 10000, "Battery divider scale denominator"),

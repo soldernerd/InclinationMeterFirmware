@@ -283,6 +283,36 @@ TEST(a_set_is_never_refused_because_a_save_is_running_but_a_failed_save_is_repor
     CHECK(g_system_state.settings_save_failed);
 }
 
+TEST(the_four_channel_gains_are_powers_of_two_and_apply_at_once)
+{
+    fresh();
+    const ApiCategory *cal = cat_by_id(API2_CAT_CALIBRATIONS);
+    const uint8_t ids[4] = { API2_RES_CALIBRATIONS_S1_PGA, API2_RES_CALIBRATIONS_S2_PGA,
+                             API2_RES_CALIBRATIONS_A_PGA, API2_RES_CALIBRATIONS_B_PGA };
+    const uint8_t *field[4] = { &g_device_settings.disp_s1_pga, &g_device_settings.disp_s2_pga,
+                                &g_device_settings.disp_a_pga, &g_device_settings.disp_b_pga };
+    for (int k = 0; k < 4; ++k) {
+        const ApiResource *r = 0;
+        for (uint8_t i = 0; i < cal->count; ++i) if (cal->res[i].id == ids[k]) r = &cal->res[i];
+        CHECK(r != 0);
+        if (!r) continue;
+        const ApiFieldDesc *d = (const ApiFieldDesc *)r->ctx;
+        for (int v = 1; v <= 128; v *= 2) {
+            int before = g_pga_calls;
+            CHECK_EQ(set_field(r, cal->id, v), API2_STATUS_OK);
+            CHECK_EQ(read_field(d), v);                              /* GET returns it */
+            CHECK_EQ(*field[k], v);
+            CHECK_EQ(g_pga_calls, before + 1);                       /* and the ADC is told at once */
+        }
+        for (int bad = 0; bad <= 129; ++bad) {
+            if (bad >= 1 && bad <= 128 && (bad & (bad - 1)) == 0) continue;
+            int before = g_pga_calls;
+            CHECK_EQ(set_field(r, cal->id, bad), API2_STATUS_INVALID_PARAMETER);
+            CHECK_EQ(g_pga_calls, before);                           /* a refused value changes nothing */
+        }
+    }
+}
+
 TEST(the_battery_thresholds_keep_critical_below_low)
 {
     fresh();
@@ -424,6 +454,7 @@ int main(void)
     RUN(every_field_accepts_both_bounds_and_refuses_one_step_outside);
     RUN(a_set_is_validated_saved_and_only_settings_notify_the_app);
     RUN(a_set_is_never_refused_because_a_save_is_running_but_a_failed_save_is_reported_and_latched);
+    RUN(the_four_channel_gains_are_powers_of_two_and_apply_at_once);
     RUN(the_battery_thresholds_keep_critical_below_low);
     RUN(a_new_rtc_trim_is_applied_at_once_but_only_when_it_was_stored);
     RUN(selected_resources_have_the_documented_verbs_and_lengths);

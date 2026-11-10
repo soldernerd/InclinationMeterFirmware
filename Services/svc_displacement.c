@@ -371,14 +371,31 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
         note_saturating(&s_amplitude_fault_count);
     }
 
+    /* A and B may have different gains. Bring both to the larger of the two (exact: powers of two) so D = A - B is a true
+     * difference, and let each sensor's inverse gain absorb that common factor: the reading is then
+     * (S / PGA_s) / (D / G) = the pin-referred ratio, whatever the four gains are. With the defaults (all 1) this is a no-op. */
+    const uint8_t pga_a = eff_pga(g_device_settings.disp_a_pga, DEFAULT_DISP_A_PGA);
+    const uint8_t pga_b = eff_pga(g_device_settings.disp_b_pga, DEFAULT_DISP_B_PGA);
+    const uint8_t pga_ab = pga_a > pga_b ? pga_a : pga_b;
+    BatchSums scaled = *s;
+    if (pga_a != pga_ab) {
+        scaled.iA *= (int64_t)(pga_ab / pga_a);  scaled.qA *= (int64_t)(pga_ab / pga_a);
+    }
+    if (pga_b != pga_ab) {
+        scaled.iB *= (int64_t)(pga_ab / pga_b);  scaled.qB *= (int64_t)(pga_ab / pga_b);
+    }
+
     MathSensorCal cal[2];
     load_sensor_cal(&cal[0], g_device_settings.disp_s1_k_micro, eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
                     g_device_settings.disp_s1_zero_ppm, g_device_settings.disp_s1_phase_cdeg, 0U);
     load_sensor_cal(&cal[1], g_device_settings.disp_s2_k_micro, eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA),
                     g_device_settings.disp_s2_zero_ppm, g_device_settings.disp_s2_phase_cdeg, 1U);
 
+    cal[0].inv_pga *= (float)pga_ab;
+    cal[1].inv_pga *= (float)pga_ab;
+
     MathBatchResult res;
-    if (!math_batch_demod(s, cal, &res)) {
+    if (!math_batch_demod(&scaled, cal, &res)) {
         /* A and B exactly identical -- degenerate excitation, shouldn't happen in
          * practice. Skip rather than divide by zero; both sensors share the (A-B)
          * denominator so it is degenerate for both. */
@@ -438,7 +455,9 @@ DrvStatus svc_displacement_init(void)
      * feeding the input ring). The never-merged wp10 branch this was
      * ported from called these in the opposite order; that driver
      * revision apparently didn't reset the callback in init(). */
-    (void)drv_ads131m04_set_pga(eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
+    (void)drv_ads131m04_set_pga(eff_pga(g_device_settings.disp_a_pga, DEFAULT_DISP_A_PGA),
+                                eff_pga(g_device_settings.disp_b_pga, DEFAULT_DISP_B_PGA),
+                                eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
                                 eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA));   /* eff_pga always yields a valid gain */
     DrvStatus rc = drv_ads131m04_init();
     drv_ads131m04_set_on_sample(on_sample);
@@ -455,7 +474,9 @@ DrvStatus svc_displacement_apply_pga(void)
     if (was_running) {
         svc_displacement_stop();
     }
-    DrvStatus rc = drv_ads131m04_set_pga(eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
+    DrvStatus rc = drv_ads131m04_set_pga(eff_pga(g_device_settings.disp_a_pga, DEFAULT_DISP_A_PGA),
+                                         eff_pga(g_device_settings.disp_b_pga, DEFAULT_DISP_B_PGA),
+                                         eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
                                          eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA));
     accum_reset();
     if (was_running) {
@@ -589,8 +610,10 @@ void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
     }
     const float i[4] = { s_phasors.iB, s_phasors.iA, s_phasors.iS1, s_phasors.iS2 };
     const float q[4] = { s_phasors.qB, s_phasors.qA, s_phasors.qS1, s_phasors.qS2 };
-    /* B, A, S1, S2 -- single source of truth: drv_ads131m04.h. */
-    const uint8_t pga[4] = { ADS131M04_PGA_B, ADS131M04_PGA_A, eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
+    /* SIGNAL order B, A, S1, S2 (not the ADC channel order, docs/channel-map.md); the gains are the live settings. */
+    const uint8_t pga[4] = { eff_pga(g_device_settings.disp_b_pga, DEFAULT_DISP_B_PGA),
+                             eff_pga(g_device_settings.disp_a_pga, DEFAULT_DISP_A_PGA),
+                             eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
                              eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA) };
 
     /* Phase reference: D = A - B at 90 deg (Sec. 9.1) -- subtract D's own
@@ -735,10 +758,10 @@ void svc_displacement_update(void)
     while (s_in_tail != s_in_head && drained < DISPLACEMENT_MAX_BATCHES_PER_TICK) {
         const RawBatch *rb = &s_in_ring[s_in_tail];
         BatchSums sums;
-        math_phasor_combine_n(rb->pos_sum[1], &sums.iB,  &sums.qB);    /* ch1 = B  */
-        math_phasor_combine_n(rb->pos_sum[2], &sums.iA,  &sums.qA);    /* ch2 = A  */
-        math_phasor_combine_n(rb->pos_sum[3], &sums.iS1, &sums.qS1);   /* ch3 = S1 */
-        math_phasor_combine_n(rb->pos_sum[0], &sums.iS2, &sums.qS2);   /* ch0 = S2 */
+        math_phasor_combine_n(rb->pos_sum[ADS131M04_CH_B],  &sums.iB,  &sums.qB);
+        math_phasor_combine_n(rb->pos_sum[ADS131M04_CH_A],  &sums.iA,  &sums.qA);
+        math_phasor_combine_n(rb->pos_sum[ADS131M04_CH_S1], &sums.iS1, &sums.qS1);
+        math_phasor_combine_n(rb->pos_sum[ADS131M04_CH_S2], &sums.iS2, &sums.qS2);
         const uint16_t batch_seq = rb->seq;
         s_in_tail = (uint16_t)((s_in_tail + 1U) & BATCH_RING_MASK);
         drained++;

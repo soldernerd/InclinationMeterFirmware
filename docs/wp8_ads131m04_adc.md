@@ -283,18 +283,21 @@ rock-stable **20827–20898 Hz, 0 drops** every run.
 - **Code review** — the WP7-style 3-angle pass hasn't been run on the
   final state.
 
-### PGA gain (runtime, fw 0.11.8)
-The PGA of the two sensor channels (**S1 = ch3, S2 = ch0**; A = ch2 and B = ch1 stay at 1) used to be a compile-time constant
-(`ADS131M04_PGA_S1/S2`, 16 for the original sensor). It is now a setting, **default 1**:
+### PGA gain (runtime, fw 0.11.8; all four channels from 0.12.0)
+Channel map: **A = ch2, B = ch1, S1 = ch3, S2 = ch0** (see `docs/channel-map.md`, which also lists the two orders in use).
+The PGA of the sensor channels used to be a compile-time constant (`ADS131M04_PGA_S1/S2`, 16 for the original sensor) and
+A / B were fixed at 1. All four are now settings, **default 1**:
 
 | API | Resource | Value | Notes |
 |---|---|---|---|
 | Calibrations GET/SET | `S1_PGA` (0x2/0x48) | u8: 1, 2, 4, 8, 16, 32, 64 or 128 | any other value answers `INVALID_PARAMETER` |
 | Calibrations GET/SET | `S2_PGA` (0x2/0x49) | same | |
+| Calibrations GET/SET | `A_PGA` (0x2/0x4A) | same | excitation A is already about 0.6 V peak at PGA 1: a higher gain clips |
+| Calibrations GET/SET | `B_PGA` (0x2/0x4B) | same | as A |
 
 A SET persists to EEPROM and is applied at once: the demod is stopped, `GAIN1` is written and read back, the demod restarts
 clean (a `NOT_READY` is logged as a WARN if a bulk capture owns the ADC). A stored value of 0 (an EEPROM page written before
-the field existed) counts as the default. `k` is stated for PGA 1 and the demod divides by the gain, so changing it needs no
-recalibration; the diagnostic millivolts are referred to the ADC pin. The ADC input range is +-1.2 V / PGA, so a gain that is
+the field existed) counts as the default. `k` is stated for PGA 1 and the demod divides by the gain (A and B may differ: both are brought to the larger gain before
+D = A - B, exact because the gains are powers of two), so changing any gain needs no recalibration; the diagnostic millivolts are referred to the ADC pin. The ADC input range is +-1.2 V / PGA, so a gain that is
 too high clips S (the signal then reads as full-scale; the phasors are invalid): found on 2026-11-09 with the high-sensitivity
 home-made sensor, whose S inputs clipped at PGA 16 and fit at PGA 1.

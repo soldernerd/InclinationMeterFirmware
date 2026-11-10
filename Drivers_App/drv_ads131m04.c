@@ -83,15 +83,18 @@
  * 16/1/1/16 -> 0x4004. */
 #define PGA_FIELD(g) ((g) == 1U ? 0U : (g) == 2U ? 1U : (g) == 4U ? 2U : (g) == 8U ? 3U : \
                       (g) == 16U ? 4U : (g) == 32U ? 5U : (g) == 64U ? 6U : 7U)
+static uint8_t s_pga_a  = ADS131M04_PGA_A;
+static uint8_t s_pga_b  = ADS131M04_PGA_B;
 static uint8_t s_pga_s1 = ADS131M04_PGA_S1;
 static uint8_t s_pga_s2 = ADS131M04_PGA_S2;
 
+/* One 3-bit field per ADC channel, channel n at bits [4n+2 : 4n] (ADS131M04_CH_* in the header). */
 static uint16_t gain1_reg_value(void)
 {
-    return (uint16_t)(PGA_FIELD(s_pga_s2)
-                    | (PGA_FIELD(ADS131M04_PGA_B) << 4)
-                    | (PGA_FIELD(ADS131M04_PGA_A) << 8)
-                    | (PGA_FIELD(s_pga_s1) << 12));
+    return (uint16_t)((PGA_FIELD(s_pga_s2) << (4U * ADS131M04_CH_S2))
+                    | (PGA_FIELD(s_pga_b)  << (4U * ADS131M04_CH_B))
+                    | (PGA_FIELD(s_pga_a)  << (4U * ADS131M04_CH_A))
+                    | (PGA_FIELD(s_pga_s1) << (4U * ADS131M04_CH_S1)));
 }
 
 static bool pga_valid(uint8_t g)
@@ -541,14 +544,16 @@ DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux)
     return DRV_OK;
 }
 
-DrvStatus drv_ads131m04_set_pga(uint8_t s1, uint8_t s2)
+DrvStatus drv_ads131m04_set_pga(uint8_t a, uint8_t b, uint8_t s1, uint8_t s2)
 {
-    if (!pga_valid(s1) || !pga_valid(s2)) {
+    if (!pga_valid(a) || !pga_valid(b) || !pga_valid(s1) || !pga_valid(s2)) {
         return DRV_ERR_INVALID;
     }
     if (s_inited && s_running) {
         return DRV_ERR_NOT_READY;
     }
+    s_pga_a  = a;
+    s_pga_b  = b;
     s_pga_s1 = s1;
     s_pga_s2 = s2;
     if (!s_inited) {
