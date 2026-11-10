@@ -110,6 +110,15 @@ static void send_via_usb(const uint8_t *data, uint16_t len, bool urgent)
     usb_tx_pump();
 }
 
+/* Bulk-transfer back-pressure (same rule as svc_ble.c / svc_uart.c): true when the ring can take a full-size
+ * non-urgent frame and still keep the reserve free. Without it a bulk capture floods the ring and the
+ * drop-newest policy discards ~96 % of the chunks. */
+static bool usb_tx_ready(void)
+{
+    return svc_txframe_free_bytes(&s_tx) >=
+           (uint16_t)(API2_PACKET_MAX_SIZE + SVC_TXFRAME_LEN_PREFIX + SVC_TXFRAME_RESERVE_BYTES);
+}
+
 void svc_usb_init(void)
 {
     s_rx_pending    = false;
@@ -122,6 +131,7 @@ void svc_usb_init(void)
 
     svc_txframe_init(&s_tx, s_tx_buf, sizeof s_tx_buf);
     svc_api_register_transport(API_TRANSPORT_USB, send_via_usb);
+    svc_api_register_transport_ready(API_TRANSPORT_USB, usb_tx_ready);
     hal_usb_register_rx_callback(rx_handler);
     hal_usb_init();
 }

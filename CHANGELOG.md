@@ -5,6 +5,10 @@ of the wire protocol or the stored settings; the patch number with every build h
 newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a line says so; the acceptance list for 1.0.0 is
 `docs/release-checklist.md`.
 
+## 0.11.6 - 2026-11-09
+USB bulk captures work. `Services/svc_usb.c` now registers a TX-ready gate (`usb_tx_ready`, the same rule as BLE and UART), so the bulk sender no longer floods the 1 KiB TX ring: with no gate the drop-newest policy discarded about 96 % of the chunks (a 6144-sample capture ran 30 s and delivered ~270 samples). Bench: the full 6144 samples in 5.6 s over USB.
+**Known limit, not changed:** the USB TX pump runs once per `task_usb_ms` (default 100 ms) and a report still in flight blocks the next one, so the stream is capped at ~10..16 reports/s (the phasor stream lost two thirds of its batches). With Settings `TASK_USB` (0x42) = 1 ms the phasor stream runs gapless at 40.9 batches/s. Pumping from the IN-complete callback would remove the dependence on that setting. No API, wire or EEPROM-layout change.
+
 ## 0.11.5 - 2026-10-26
 Service mode is now a compile-time option, **off for now**: `SERVICE_MODE_REQUIRED` in `Config/config.h` (0 = the resources flagged `service=True` -- calibration writes, zero calibration, factory defaults, DFU, power / pin tests, the investigation commands -- are always open; 1 = they answer `SERVICE_MODE_REQUIRED` unless service mode was switched on at the instrument, as in 0.11.1..0.11.4). The menu row, the state flag, the idle timeout and the host tests of the mode itself are unchanged. Set it back to 1 before an instrument leaves the bench. No API, wire or EEPROM-layout change; build- and host-test-verified, not bench-tested.
 
