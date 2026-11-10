@@ -155,7 +155,7 @@ float svc_displacement_get_delta_diff_mm_raw(void);
 
 /* Display stream (2026-10-05, Hann window 2026-10-07): the same delta
  * readings condensed to about 4 Hz by a Hann window over the newest
- * DISPLACEMENT_DISPLAY_TAPS (25) contiguous batches, published every
+ * contiguous batches (a blend of a fast 17-tap and a slow 65-tap Hann window, config.h), published every
  * DISPLACEMENT_DISPLAY_DECIMATION-th batch (config.h has the reasoning).
  * Meant for the local display, not the API. display_seq() increments with
  * every new value (and wraps), so a consumer can redraw exactly when there is

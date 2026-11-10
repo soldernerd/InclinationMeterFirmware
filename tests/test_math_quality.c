@@ -8,7 +8,10 @@
 #include "../Math/math_quality.c"
 
 #define STEP   64U       /* cycles per batch */
-#define TAPS   25U
+#define TAPS   25U       /* the quality window */
+#define FAST   17U
+#define SLOW   65U
+#define BMIN   0.25f     /* blend threshold, in the (arbitrary) units of the test readings */
 #define DECIM  10U
 #define PREC   81U
 #define K      6.0f
@@ -21,7 +24,8 @@ static uint16_t g_seq;
 
 static void fresh(void)
 {
-    math_display_init(&ds, TAPS, DECIM, PREC, K, CREEP, RESEED);
+    math_display_init(&ds, FAST, SLOW, TAPS, DECIM, PREC, K, CREEP, RESEED);
+    math_display_set_blend(&ds, BMIN, 6.0f, 1.0f / 240.0f, 0.78f);
     math_precision_start(&pr);
     g_seq = 1000;
 }
@@ -69,15 +73,115 @@ TEST(the_first_value_appears_at_the_first_decimation_point_after_the_window_fill
     CHECK_EQ(ds.seq, seq0 + 2);
 }
 
-TEST(the_hann_window_weights_the_newest_readings_symmetrically)
+/* ---------------- variable-bandwidth blend ---------------- */
+
+static float slow_mean(int s)
+{
+    return math_window_hann_mean(&ds.win, (uint8_t)s, SLOW, ds.hann_slow, ds.hann_slow_sum);
+}
+
+TEST(a_still_instrument_shows_the_slow_window)
 {
     fresh();
-    feed_n(40, 0.0f, 0.0f, 1e-4f);
-    /* a step 12 batches ago sits at tap 12 of 25 -- the window centre carries the largest weight */
-    feed_n(1, 1.0f, 1.0f, 1e-4f);
-    feed_n(12, 0.0f, 0.0f, 1e-4f);
-    feed_n(7, 0.0f, 0.0f, 1e-4f);        /* 60 batches in total: a publish happens at 60 */
-    CHECK(ds.out[0] > 0.0f && ds.out[0] < 0.15f);     /* a single unit impulse: weight w/sum, < 1/12 or so */
+    /* tiny alternating noise, far below the blend threshold */
+    for (int i = 0; i < 400; ++i) feed(0.5f + ((i & 1) ? 0.01f : -0.01f), 0.5f, 1e-4f);
+    CHECK(fabsf(ds.out[0] - slow_mean(0)) < 1e-6f);
+    CHECK(ds.blend_w[0] < 0.01f);
+}
+
+TEST(a_real_move_is_followed_by_the_fast_window_within_about_0_3_s)
+{
+    fresh();
+    feed_n(300, 0.0f, 0.0f, 1e-4f);
+    /* a step of 2 units (8x the threshold): the fast window (17 taps, 8 batches latency) shows ~all of it after 2 publishes,
+     * the slow one (65 taps) would show a few percent */
+    feed_n(20, 2.0f, 2.0f, 1e-4f);
+    CHECK(ds.out[0] > 1.8f && ds.out[1] > 1.8f);
+    CHECK(slow_mean(0) < 0.6f);
+}
+
+TEST(after_a_move_the_output_hands_back_to_the_slow_window_without_sliding_back)
+{
+    fresh();
+    feed_n(300, 0.0f, 0.0f, 1e-4f);
+    float lowest = 1e9f; bool reached = false;
+    uint16_t last = ds.seq;
+    for (int i = 0; i < 400; ++i) {
+        feed(2.0f, 2.0f, 1e-4f);
+        if (ds.seq != last) {
+            last = ds.seq;
+            if (ds.out[0] > 1.8f) reached = true;
+            if (reached && ds.out[0] < lowest) lowest = ds.out[0];
+        }
+    }
+    CHECK(reached);
+    CHECK(lowest > 1.7f);                                       /* never back down to the slow window's lag */
+    CHECK(fabsf(ds.out[0] - 2.0f) < 1e-4f);                     /* and at rest it is the slow window = the level */
+    CHECK(ds.blend_w[0] < 0.01f);
+}
+
+TEST(a_move_below_the_threshold_shows_the_slow_window)
+{
+    fresh();
+    feed_n(300, 0.0f, 0.0f, 1e-4f);
+    feed_n(20, 0.1f, 0.1f, 1e-4f);                              /* a step of 0.4 x the threshold */
+    CHECK(fabsf(ds.out[0] - slow_mean(0)) < 1e-3f);                  /* (the fast weight has faded to ~0, not exactly 0) */
+}
+
+TEST(a_noisy_site_raises_the_threshold)
+{
+    /* noise with a fast-slow difference of ~0.2 rms (sigma): the threshold becomes 6 x that, well above BMIN */
+    fresh();
+    uint32_t r = 12345u;
+    for (int i = 0; i < 6000; ++i) {
+        r = r * 1664525u + 1013904223u;
+        float n = ((float)(r >> 8) / 16777216.0f - 0.5f) * 3.5f;      /* uniform +-1.75, rms 1.0 */
+        feed(n, n, 1e-4f);
+    }
+    float thr = 6.0f * sqrtf(ds.blend_sigma2[0]);
+    CHECK(thr > 2.0f * BMIN);
+    /* a quiet site keeps it at the minimum: sigma stays tiny */
+    fresh();
+    feed_n(2000, 0.0f, 0.0f, 1e-4f);
+    CHECK(6.0f * sqrtf(ds.blend_sigma2[0]) <= BMIN * 1.001f);
+}
+
+TEST(before_the_slow_window_is_full_the_fast_window_is_shown)
+{
+    fresh();
+    feed_n(35, 0.0f, 0.0f, 1e-4f);
+    feed_n(15, 3.0f, 3.0f, 1e-4f);                              /* 50 batches < 65: slow not ready, published at 50 */
+    CHECK(ds.valid);
+    CHECK(ds.out[0] > 2.0f);                                    /* the fast window has taken most of the step */
+    CHECK_EQ(ds.blend_w[0], 1.0f);
+}
+
+TEST(a_gap_restarts_the_blend_with_the_fast_window)
+{
+    fresh();
+    feed_n(300, 0.0f, 0.0f, 1e-4f);
+    CHECK(ds.blend_w[0] < 0.01f);
+    g_seq = (uint16_t)(g_seq + STEP);
+    feed(0.0f, 0.0f, 1e-4f);
+    CHECK_EQ(ds.blend_w[0], 1.0f);
+}
+
+TEST(the_fast_and_slow_hann_windows_are_symmetric_and_normalised)
+{
+    fresh();
+    float *w[2]   = { ds.hann_fast, ds.hann_slow };
+    uint16_t n[2] = { FAST, SLOW };
+    float sum[2]  = { ds.hann_fast_sum, ds.hann_slow_sum };
+    for (int k = 0; k < 2; ++k) {
+        float s = 0.0f;
+        for (uint16_t i = 0; i < n[k]; ++i) {
+            CHECK(fabsf(w[k][i] - w[k][n[k] - 1U - i]) < 1e-6f);        /* symmetric */
+            s += w[k][i];
+        }
+        CHECK(fabsf(s - sum[k]) < 1e-4f);
+        CHECK(fabsf(sum[k] - (float)(n[k] + 1U) / 2.0f) < 1e-4f);        /* (n+1)/2 exactly, as documented */
+        CHECK(w[k][n[k] / 2U] > w[k][0] && w[k][n[k] / 2U] > w[k][n[k] - 1U]);   /* centre carries the most weight */
+    }
 }
 
 TEST(quiet_data_is_not_doubtful_after_the_floor_is_established)
@@ -264,7 +368,14 @@ int main(void)
 {
     RUN(nothing_is_published_until_the_display_window_is_full);
     RUN(the_first_value_appears_at_the_first_decimation_point_after_the_window_fills);
-    RUN(the_hann_window_weights_the_newest_readings_symmetrically);
+    RUN(a_still_instrument_shows_the_slow_window);
+    RUN(a_real_move_is_followed_by_the_fast_window_within_about_0_3_s);
+    RUN(after_a_move_the_output_hands_back_to_the_slow_window_without_sliding_back);
+    RUN(a_move_below_the_threshold_shows_the_slow_window);
+    RUN(a_noisy_site_raises_the_threshold);
+    RUN(before_the_slow_window_is_full_the_fast_window_is_shown);
+    RUN(a_gap_restarts_the_blend_with_the_fast_window);
+    RUN(the_fast_and_slow_hann_windows_are_symmetric_and_normalised);
     RUN(quiet_data_is_not_doubtful_after_the_floor_is_established);
     RUN(a_burst_is_flagged_doubtful_and_recovers);
     RUN(the_value_is_published_even_when_doubtful);

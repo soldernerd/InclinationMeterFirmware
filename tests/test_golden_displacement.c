@@ -34,7 +34,13 @@
 
 /* config.h values (the firmware's own, restated so this test does not pull in the HAL headers). */
 #define BATCH_CYCLES       64U
-#define DISPLAY_TAPS       25U
+#define QUALITY_TAPS       25U
+#define DISPLAY_FAST_TAPS  17U
+#define DISPLAY_SLOW_TAPS  65U
+#define BLEND_MIN_MM       0.0003f
+#define BLEND_K            6.0f
+#define BLEND_ALPHA        (1.0f / 240.0f)
+#define BLEND_HOLD         0.78f
 #define DISPLAY_DECIMATION 10U
 #define PREC_WINDOW        81U
 #define QUALITY_K          6.0f
@@ -139,10 +145,13 @@ TEST(replay_reproduces_the_golden_reference)
 
     static MathDisplay ds;
     static MathPrecision prec;
-    math_display_init(&ds, DISPLAY_TAPS, DISPLAY_DECIMATION, PREC_WINDOW, QUALITY_K,
+    math_display_init(&ds, DISPLAY_FAST_TAPS, DISPLAY_SLOW_TAPS, QUALITY_TAPS, DISPLAY_DECIMATION, PREC_WINDOW, QUALITY_K,
                       0.693147f / (FLOOR_DOUBLING_S * BATCH_RATE_HZ),
                       (uint32_t)(RESEED_S * BATCH_RATE_HZ));
+    math_display_set_blend(&ds, BLEND_MIN_MM, BLEND_K, BLEND_ALPHA, BLEND_HOLD);
     math_display_reset(&ds);   /* a start */
+    const char *dump = getenv("GOLDEN_DUMP_DISP");   /* regenerate the disp lines after an intended change (README) */
+    FILE *dumpf = dump ? fopen(dump, "w") : NULL;
 
     uint16_t last_dseq = ds.seq;
     int prec_active = 0; long prec_start = 0; uint32_t prec_start_ms = 0;
@@ -211,6 +220,8 @@ TEST(replay_reproduces_the_golden_reference)
         if (ds.seq != last_dseq) {                                 /* golden: disp,batch,out1,out2,dbt1,dbt2,valid,seq */
             last_dseq = ds.seq;
             n_disp++;
+            if (dumpf) fprintf(dumpf, "disp,%ld,%.9g,%.9g,%d,%d,%d,%u\n", i, (double)ds.out[0], (double)ds.out[1],
+                               (int)ds.doubtful[0], (int)ds.doubtful[1], (int)ds.valid, (unsigned)ds.seq);
             const GoldenLine *e = find(g, ng, "disp", i);
             if (!e || !near(ds.out[0], e->v[0]) || !near(ds.out[1], e->v[1])
                 || (int)ds.doubtful[0] != (int)e->v[2] || (int)ds.doubtful[1] != (int)e->v[3]
@@ -221,6 +232,7 @@ TEST(replay_reproduces_the_golden_reference)
         }
     }
 
+    if (dumpf) fclose(dumpf);
     /* every golden line must have been matched by a replayed event, and vice versa */
     long g_disp = 0, g_prec = 0, g_raw = 0;
     for (long k = 0; k < ng; ++k) {

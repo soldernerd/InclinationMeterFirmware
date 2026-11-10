@@ -1247,3 +1247,30 @@ Removed: the output ring (`svc_displacement_pop`), the 8-batch moving average
   bulk capture or the phasor stream runs. Batch ring is 16 deep.
 * Frames > 64 B are not sent over USB HID (dropped, counted, WARN logged) -- use UART/BLE for the
   diagnostics topic and bulk transfers.
+
+## LIVE display value: variable bandwidth (2026-11-10, fw 0.14.1)
+
+Request: low latency while the tilt moves, quiet when it sits still -- about 200 ms for the fast value and 800 ms for the
+stable one. The display value is a blend of two Hann windows over the newest contiguous batches (`Math/math_quality.c`):
+fast 17 taps (8 batches = 197 ms latency), slow 65 taps (32 batches = 786 ms). Threshold on `d = fast - slow`:
+`T = max(0.3 um/m, 6 sigma)` with `sigma^2` a running mean square of `d` (weight 1/240 per publish, about one minute)
+in which each sample is clipped at `T`. Weight of the fast window `w = clamp((|d| - T) / T, 0, 1)`, kept as
+`w = max(w_new, 0.78 w_old)` per publish so the output hands back to the slow window as it catches up (no jump, no
+slide back); output `slow + w (fast - slow)`. Gap, start: `w = 1`, and the slow window is skipped until it is full.
+
+Why this and not a better fixed filter: on a 90 s recording of the home-made sensor the error against a 10 s reference
+is 0.043 (fast), 0.038 (Hann-25), 0.028 um/m (slow), and the fast-slow difference of a still instrument is
+0.045 um/m rms, so a threshold of a few tenths of a um/m separates real movement from noise. Hann is close to optimal
+for the latency; the gain is in switching, not in the shape.
+
+Findings that fixed the parameters (offline, same arithmetic as the firmware):
+
+* The first version (threshold 0.25 um/m, 4 sigma, noise estimated only from samples below the threshold) was *worse*
+  than Hann-25 on the busy `tests/data` excerpt (0.32 against 0.23 um/m between consecutive values): heavy-tailed noise
+  kept it in the fast window. Clipping instead of censoring the noise estimate and 6 sigma fixed it (0.19).
+* Quiet sensor: 0.014 um/m between consecutive published values (Hann-25: 0.032, slow alone 0.014); a 1 um/m step is 80 % shown
+  after 0.34 s (publish granularity 0.25 s included), a 0.5 um/m step, below the threshold, after about 1 s.
+* Slow drift (0.3 um/m per minute) stays in the slow window: the delay difference of 0.59 s times the slope is 0.003 um/m.
+
+The "doubtful" indicator is unchanged: it still looks at the 25 newest batches. The golden file's display lines were
+regenerated (`GOLDEN_DUMP_DISP=<file>` makes `test_golden_displacement` write them); flags, validity and cadence are identical.

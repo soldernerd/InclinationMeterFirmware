@@ -143,10 +143,10 @@ static bool  s_disp_ok       = false;
 static uint8_t eff_pga(uint8_t raw, uint8_t dflt);   /* defined with svc_displacement_init() */
 
 /* --- Contiguous batch history + display stream (2026-10-07, config.h's
- * DISPLACEMENT_DISPLAY_TAPS and DISPLACEMENT_QUALITY_K comments) ---
+ * DISPLACEMENT_DISPLAY_* and DISPLACEMENT_QUALITY_K comments) ---
  * One MathWindow (Math/math_window.h) holds the newest 81 batches' readings
  * and squared Im(x) steps per sensor plus the quiet floors. The LIVE display
- * stream is a Hann window over the newest DISPLACEMENT_DISPLAY_TAPS readings,
+ * stream is a blend of a fast and a slow Hann window (config.h), 
  * published every DISPLACEMENT_DISPLAY_DECIMATION-th batch, with a per-sensor
  * "doubtful" flag from the window-level quality indicator; the triggered
  * precision measurement uses the whole 81-batch window. Task context only
@@ -431,10 +431,13 @@ DrvStatus svc_displacement_init(void)
 {
     /* creep per batch so that the floor may double in DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S
      * if every window is noisier than it: ln2 / (seconds * batches per second) */
-    math_display_init(&s_ds, DISPLACEMENT_DISPLAY_TAPS, DISPLACEMENT_DISPLAY_DECIMATION,
+    math_display_init(&s_ds, DISPLACEMENT_DISPLAY_FAST_TAPS, DISPLACEMENT_DISPLAY_SLOW_TAPS,
+                      DISPLACEMENT_QUALITY_TAPS, DISPLACEMENT_DISPLAY_DECIMATION,
                       DISPLACEMENT_PRECISION_WINDOW_BATCHES, DISPLACEMENT_QUALITY_K,
                       0.693147f / ((float)DISPLACEMENT_QUALITY_FLOOR_DOUBLING_S * BATCH_RATE_HZ),
                       (uint32_t)((float)DISPLACEMENT_QUALITY_RESEED_S * BATCH_RATE_HZ));
+    math_display_set_blend(&s_ds, DISPLACEMENT_DISPLAY_BLEND_MIN_MM, DISPLACEMENT_DISPLAY_BLEND_K,
+                           DISPLACEMENT_DISPLAY_BLEND_ALPHA, DISPLACEMENT_DISPLAY_BLEND_HOLD);
     disp_procs_init();
     accum_reset();
     s_input_drop_count  = 0;
@@ -522,7 +525,8 @@ DrvStatus svc_displacement_start(void)
 }
 
 /* The polled / subscribed Measurements values are the Hann display value once
- * it exists (first one ~0.6 s after a start), the raw batch value until then. */
+ * it exists (first one ~0.6 s after a start), the raw batch value until then. Since fw 0.14.1 that value is the
+ * fast/slow blend of math_quality.h. */
 float svc_displacement_get_delta1_mm(void)
 {
     return disp_sensor_sign(g_device_settings.disp_s1_invert) * (s_ds.valid ? s_ds.out[0] : s_delta1_mm_raw);

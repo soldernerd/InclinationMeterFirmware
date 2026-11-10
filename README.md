@@ -41,7 +41,7 @@ Firmware for a precision electronic level instrument based on the STM32G0B1RET6.
   `Math/math_phasor.c`, `Math/math_window.c`): the ADS131M04 samples exactly 8 points per period of the
   2604 Hz excitation; the ISR-side hot path only adds samples into per-position int32 sums, and once
   per 64-cycle batch (40.7/s) the Q14 DFT weights, the ratio `S/(PGA*(A-B))` and the phase correction are
-  applied in float. The LIVE value is a Hann-25 window (about 4 Hz) with a "doubtful" flag from a
+  applied in float. The LIVE value (about 4 Hz) blends a fast (17-tap, 0.2 s) and a slow (65-tap, 0.8 s) Hann window, with a "doubtful" flag from a
   window-level Im(x) step-power indicator against a self-tracked quiet floor; the precision measurement
   is a sliding 2 s Hann window accepted as soon as it is clean (error after 5 s). Per-sensor k, zero
   (flip calibration) and phase calibrations are stored in EEPROM. Over the API: Measurements, Topics

@@ -10,7 +10,8 @@ theory is in [signal_processing.pdf](signal_processing.pdf).
 Two tilt sensor heads, S1 and S2, read through an AC bridge. The display shows each head's tilt in **mm per metre** (mm/m,
 i.e. the height difference in mm over a 1 m baseline) and their difference **Diff = S1 - S2**. The difference cancels what
 both heads see alike (most of the electronics' drift), which is why it is the more repeatable number. Readings update about
-four times a second and are smoothed over about 0.6 s.
+four times a second. A still instrument is smoothed over about 1.6 s (quiet); when the tilt really changes the display follows
+within about 0.3 s and then settles back to the quiet value.
 
 ## 2. Controls
 

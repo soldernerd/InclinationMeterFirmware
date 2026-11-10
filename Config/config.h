@@ -381,9 +381,9 @@
  * not show the ~40.7 Hz batch stream but a condensed ~4 Hz reading (the
  * API's polled/subscribed delta values are this same stream since 2026-10-07;
  * the raw batch value is Topic 0x03): a Hann
- * window over the newest DISPLACEMENT_DISPLAY_TAPS contiguous batch readings,
+ * window over the newest contiguous batch readings (since 2026-11-10 a blend of a fast and a slow window, below),
  * published every DISPLACEMENT_DISPLAY_DECIMATION-th batch (40.7 / 10 = 4.07 Hz).
- * 25 taps = 0.61 s, delay ~0.3 s, -3 dB at 1.1 Hz, and at least -42 dB over
+ * History: the single 25-tap window of 2026-10-07 (0.61 s, delay ~0.3 s, -3 dB at 1.1 Hz), at least -42 dB over
  * 5 to 20 Hz (worst case per band: -42 dB at 5-10 Hz, -60 dB at 10-15 Hz,
  * -73 dB at 15-20 Hz), which covers the ~20 Hz sensor resonance wherever it
  * sits (18 - 21.5 Hz seen) -- a plain boxcar or the earlier triangular window
@@ -393,7 +393,27 @@
  * display-filter comparison): the scatter of the 4 Hz output fell 2.6x (night) to 5x (day) against a
  * plain average of 10 and a further 13-30% against triangular-19. */
 #define DISPLACEMENT_DISPLAY_DECIMATION    10U
-#define DISPLACEMENT_DISPLAY_TAPS          25U
+#define DISPLACEMENT_QUALITY_TAPS          25U   /* window of the "doubtful" indicator (unchanged since 2026-10-07) */
+
+/* Variable-bandwidth display value (2026-11-10): two Hann windows over the newest batches --
+ * FAST 17 taps (latency 8 batches = 197 ms) and SLOW 65 taps (32 batches = 786 ms); both have nulls at the 20.35 Hz
+ * batch Nyquist. A still instrument shows the slow window (quiet); when the fast window departs from it by more than the
+ * threshold the output follows the fast one (a real tilt change shows after ~0.2-0.3 s) and fades back to the slow one
+ * over about a second as it catches up. The window sizes and thresholds were chosen on a 90 s recording of the home-made
+ * sensor and on the 10 min 2026-10-04 working-hours excerpt of another one (tests/data; docs/wp10_displacement.md):
+ * scatter between consecutive published values 0.014 um/m against 0.032 with the former Hann-25 on the quiet
+ * sensor, 0.19 against 0.23 on the busy recording (the slow window alone: 0.014 / 0.069); a 1 um/m step shows in
+ * 0.34 s (Hann-25: 0.4 s), a step of 0.5 um/m (below the threshold) in about 1 s.
+ *   DISPLACEMENT_DISPLAY_BLEND_MIN_MM -- smallest |fast - slow| that counts as moving, mm/m (0.3 um/m)
+ *   DISPLACEMENT_DISPLAY_BLEND_K      -- the threshold is also this many standard deviations of the still-noise
+ *   DISPLACEMENT_DISPLAY_BLEND_ALPHA  -- noise estimate weight per publish (1/240: about a minute at 4 Hz)
+ *   DISPLACEMENT_DISPLAY_BLEND_HOLD   -- fast weight decay per publish after a movement (0.78: about 1 s at 4 Hz) */
+#define DISPLACEMENT_DISPLAY_FAST_TAPS     17U
+#define DISPLACEMENT_DISPLAY_SLOW_TAPS     65U
+#define DISPLACEMENT_DISPLAY_BLEND_MIN_MM  0.0003f
+#define DISPLACEMENT_DISPLAY_BLEND_K       6.0f
+#define DISPLACEMENT_DISPLAY_BLEND_ALPHA   (1.0f / 240.0f)
+#define DISPLACEMENT_DISPLAY_BLEND_HOLD    0.78f
 
 /* Window-level quality indicator (2026-10-07), used by the LIVE display
  * ("!" next to a doubtful reading) and by the precision measurement below.

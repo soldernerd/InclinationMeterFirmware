@@ -33,9 +33,10 @@ contraction may differ in the last bits); flags, counts and cadence must match e
 
 The golden pins the *behaviour*, so it only changes when the behaviour is meant to change (a new filter length, a
 different threshold, ...). Replace the expected values with the new, reviewed output and say why in the commit. The
-test prints which batches differ. There is no generator checked in: the file came from the firmware's own service code
-driven on the host; to produce a new one, drive the changed pipeline the way `replay_reproduces_the_golden_reference`
-does and write the same `kind,...` lines.
+test prints which batches differ. The `disp` lines can be regenerated: run `GOLDEN_DUMP_DISP=disp_new.csv ./test_golden_displacement` and substitute them
+(2026-11-10, fw 0.14.1, for the variable-bandwidth display value; flags/validity/cadence must stay identical). The other kinds
+came from the firmware's own service code driven on the host; to produce new ones, drive the changed pipeline the way
+`replay_reproduces_the_golden_reference` does and write the same `kind,...` lines.
 
 ## The full recording
 
