@@ -83,10 +83,21 @@
  * 16/1/1/16 -> 0x4004. */
 #define PGA_FIELD(g) ((g) == 1U ? 0U : (g) == 2U ? 1U : (g) == 4U ? 2U : (g) == 8U ? 3U : \
                       (g) == 16U ? 4U : (g) == 32U ? 5U : (g) == 64U ? 6U : 7U)
-#define GAIN1_REG_VALUE  ((uint16_t)(PGA_FIELD(ADS131M04_PGA_S2)        \
-                                   | (PGA_FIELD(ADS131M04_PGA_B)  << 4) \
-                                   | (PGA_FIELD(ADS131M04_PGA_A)  << 8) \
-                                   | (PGA_FIELD(ADS131M04_PGA_S1) << 12)))
+static uint8_t s_pga_s1 = ADS131M04_PGA_S1;
+static uint8_t s_pga_s2 = ADS131M04_PGA_S2;
+
+static uint16_t gain1_reg_value(void)
+{
+    return (uint16_t)(PGA_FIELD(s_pga_s2)
+                    | (PGA_FIELD(ADS131M04_PGA_B) << 4)
+                    | (PGA_FIELD(ADS131M04_PGA_A) << 8)
+                    | (PGA_FIELD(s_pga_s1) << 12));
+}
+
+static bool pga_valid(uint8_t g)
+{
+    return g >= 1U && g <= 128U && (g & (uint8_t)(g - 1U)) == 0U;
+}
 
 /* MODE register (datasheet Table 8-16): same as the 0510h reset default
  * except RESET (bit 10) cleared to 0 -- our own SYNC_RESET pulse below
@@ -463,7 +474,7 @@ DrvStatus drv_ads131m04_init(void)
     hal_systick_delay_ms(1);
 
     if (write_register(REG_CLOCK, CLOCK_REG_VALUE) != DRV_OK) return DRV_ERR_COMM;
-    if (write_register(REG_GAIN1, GAIN1_REG_VALUE) != DRV_OK) return DRV_ERR_COMM;
+    if (write_register(REG_GAIN1, gain1_reg_value()) != DRV_OK) return DRV_ERR_COMM;
     if (write_register(REG_MODE,  MODE_REG_VALUE)  != DRV_OK) return DRV_ERR_COMM;
 
     /* Read the config back so a host can see whether the WREGs actually
@@ -525,6 +536,27 @@ DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux)
     }
     uint16_t back = 0xFFFFU;
     if (read_register(addr, &back) != DRV_OK || (uint16_t)(back & 0x0003U) != mux) {
+        return DRV_ERR_COMM;
+    }
+    return DRV_OK;
+}
+
+DrvStatus drv_ads131m04_set_pga(uint8_t s1, uint8_t s2)
+{
+    if (!pga_valid(s1) || !pga_valid(s2)) {
+        return DRV_ERR_INVALID;
+    }
+    if (s_inited && s_running) {
+        return DRV_ERR_NOT_READY;
+    }
+    s_pga_s1 = s1;
+    s_pga_s2 = s2;
+    if (!s_inited) {
+        return DRV_OK;
+    }
+    const uint16_t want = gain1_reg_value();
+    uint16_t back = 0xFFFFU;
+    if (write_register(REG_GAIN1, want) != DRV_OK || read_register(REG_GAIN1, &back) != DRV_OK || back != want) {
         return DRV_ERR_COMM;
     }
     return DRV_OK;

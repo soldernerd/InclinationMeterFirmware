@@ -13,16 +13,15 @@
  * amplitude checks. */
 #define ADS131M04_CODE_MAX  8388607L   /* 2^23 - 1 */
 
-/* Per-channel PGA gain -- the ONE place it is set (2026-10-06). The GAIN1
- * register value in drv_ads131m04.c is derived from these, and
- * Services/svc_displacement.c divides each sensor's k by its PGA (|k| is
- * stored for PGA = 1, so changing a gain here needs no recalibration of k)
- * and uses them for the diagnostic volts. Allowed values 1, 2, 4, ... 128.
+/* Per-channel PGA gain. B and A are fixed here; S1 / S2 are the power-on defaults only -- the live values come from
+ * DeviceSettings (disp_s1_pga / disp_s2_pga, API Calibrations 0x48 / 0x49) via drv_ads131m04_set_pga().
+ * Services/svc_displacement.c divides each sensor's k by its PGA (|k| is stored for PGA = 1, so changing a gain needs
+ * no recalibration of k) and uses them for the diagnostic volts. Allowed values 1, 2, 4, ... 128.
  * Channel map: CH0 = S2, CH1 = B, CH2 = A, CH3 = S1. */
-#define ADS131M04_PGA_S2   16U
+#define ADS131M04_PGA_S2    1U
 #define ADS131M04_PGA_B     1U
 #define ADS131M04_PGA_A     1U
-#define ADS131M04_PGA_S1   16U
+#define ADS131M04_PGA_S1    1U
 
 /* Configures the ADS131M04 for continuous 4-channel simultaneous
  * sampling at a fixed ~20833.33 Hz (see Config/config.h's
@@ -52,6 +51,11 @@ bool      drv_ads131m04_is_running(void);
  * DC test signal. Only while the acquisition is stopped (DRV_ERR_NOT_READY otherwise); the value is read
  * back. Not persistent: every boot re-initialises the chip with the normal input. */
 DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux);
+
+/* Sets the PGA gain of the S1 / S2 channels (each 1,2,4,...,128; else DRV_ERR_INVALID). Before init() it only stores
+ * the values (init() writes them); after init() it also writes GAIN1 and verifies it, and refuses with
+ * DRV_ERR_NOT_READY while the acquisition runs. */
+DrvStatus drv_ads131m04_set_pga(uint8_t s1, uint8_t s2);
 
 /* Fired once per sample. As of the ADC_Optimization work this runs in the
  * SysTick drain, not the TIM7 ISR: the SPI RX DMA writes each frame

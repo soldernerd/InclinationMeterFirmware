@@ -232,6 +232,9 @@ CALIBRATIONS = Cat(0x2, "CALIBRATIONS", "Calibrations", (GET, SET),
   _cal("S2_ZERO", 0x45, I32, "disp_s2_zero_ppm", -500000, 500000, "Sensor 2 zero", "ppm of the ratio"),
   _cal("S2_PHASE", 0x46, I16, "disp_s2_phase_cdeg", -18000, 18000, "Sensor 2 phase", "0.01 deg"),
   _cal("S2_INVERT", 0x47, U8, "disp_s2_invert", 0, 1, "Sensor 2 sign of the reported reading"),
+  _cal("S1_PGA", 0x48, U8, "disp_s1_pga", 1, 128, "Sensor 1 ADC PGA gain, a power of two (1, 2, 4 ... 128); applied "
+           "immediately, k stays stated for PGA 1", check="pga", after="adc_pga"),
+  _cal("S2_PGA", 0x49, U8, "disp_s2_pga", 1, 128, "Sensor 2 ADC PGA gain, a power of two", check="pga", after="adc_pga"),
   _cal("VBAT_SCALE_NUM", 0x50, U16, "vbat_scale_num", 1, 10000, "Battery divider scale numerator "
            "(Vbat = Vadc * num / den + offset)"),
   _cal("VBAT_SCALE_DEN", 0x51, U16, "vbat_scale_den", 1, 10000, "Battery divider scale denominator"),

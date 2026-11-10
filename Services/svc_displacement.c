@@ -140,6 +140,7 @@ static float s_delta2_mm_raw = 0.0f;
 static float s_residual1     = 0.0f;
 static float s_residual2     = 0.0f;
 static bool  s_disp_ok       = false;
+static uint8_t eff_pga(uint8_t raw, uint8_t dflt);   /* defined with svc_displacement_init() */
 
 /* --- Contiguous batch history + display stream (2026-10-07, config.h's
  * DISPLACEMENT_DISPLAY_TAPS and DISPLACEMENT_QUALITY_K comments) ---
@@ -371,9 +372,9 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     }
 
     MathSensorCal cal[2];
-    load_sensor_cal(&cal[0], g_device_settings.disp_s1_k_micro, ADS131M04_PGA_S1,
+    load_sensor_cal(&cal[0], g_device_settings.disp_s1_k_micro, eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
                     g_device_settings.disp_s1_zero_ppm, g_device_settings.disp_s1_phase_cdeg, 0U);
-    load_sensor_cal(&cal[1], g_device_settings.disp_s2_k_micro, ADS131M04_PGA_S2,
+    load_sensor_cal(&cal[1], g_device_settings.disp_s2_k_micro, eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA),
                     g_device_settings.disp_s2_zero_ppm, g_device_settings.disp_s2_phase_cdeg, 1U);
 
     MathBatchResult res;
@@ -401,6 +402,12 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
     s_disp_ok   = true;
 
     disp_procs_batch(&s_ds, res.delta[0], res.delta[1]);
+}
+
+/* A stored PGA is 1,2,4,...,128; anything else (0 = a page written before the field existed) falls back to the default. */
+static uint8_t eff_pga(uint8_t raw, uint8_t dflt)
+{
+    return (raw >= 1U && raw <= 128U && (raw & (uint8_t)(raw - 1U)) == 0U) ? raw : dflt;
 }
 
 DrvStatus svc_displacement_init(void)
@@ -431,8 +438,29 @@ DrvStatus svc_displacement_init(void)
      * feeding the input ring). The never-merged wp10 branch this was
      * ported from called these in the opposite order; that driver
      * revision apparently didn't reset the callback in init(). */
+    (void)drv_ads131m04_set_pga(eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
+                                eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA));   /* eff_pga always yields a valid gain */
     DrvStatus rc = drv_ads131m04_init();
     drv_ads131m04_set_on_sample(on_sample);
+    return rc;
+}
+
+/* A new S1 / S2 gain (API Calibrations 0x48 / 0x49): stop the demod, write GAIN1, restart it clean. */
+DrvStatus svc_displacement_apply_pga(void)
+{
+    if (g_disp_cap_active) {
+        return DRV_ERR_NOT_READY;
+    }
+    const bool was_running = drv_ads131m04_is_running();
+    if (was_running) {
+        svc_displacement_stop();
+    }
+    DrvStatus rc = drv_ads131m04_set_pga(eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
+                                         eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA));
+    accum_reset();
+    if (was_running) {
+        (void)svc_displacement_start();   /* fails only if the ADC was never initialised, impossible once it ran */
+    }
     return rc;
 }
 
@@ -562,7 +590,8 @@ void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
     const float i[4] = { s_phasors.iB, s_phasors.iA, s_phasors.iS1, s_phasors.iS2 };
     const float q[4] = { s_phasors.qB, s_phasors.qA, s_phasors.qS1, s_phasors.qS2 };
     /* B, A, S1, S2 -- single source of truth: drv_ads131m04.h. */
-    const uint8_t pga[4] = { ADS131M04_PGA_B, ADS131M04_PGA_A, ADS131M04_PGA_S1, ADS131M04_PGA_S2 };
+    const uint8_t pga[4] = { ADS131M04_PGA_B, ADS131M04_PGA_A, eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
+                             eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA) };
 
     /* Phase reference: D = A - B at 90 deg (Sec. 9.1) -- subtract D's own
      * angle, so the display no longer depends on the sample-grid phase. */

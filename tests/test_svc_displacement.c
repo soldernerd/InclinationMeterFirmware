@@ -30,6 +30,8 @@ void      drv_ads131m04_set_on_sample(Ads131m04SampleCb cb) { g_cb = cb; }
 bool      drv_ads131m04_faulted(void) { return false; }
 static uint8_t g_mux[4];
 static unsigned g_mux_calls;
+static uint8_t g_pga_s1, g_pga_s2;
+DrvStatus drv_ads131m04_set_pga(uint8_t s1, uint8_t s2) { g_pga_s1 = s1; g_pga_s2 = s2; return DRV_OK; }
 DrvStatus drv_ads131m04_set_channel_mux(uint8_t ch, uint8_t mux) { if (ch > 3U) return DRV_ERR_INVALID; g_mux[ch] = mux; g_mux_calls++; return DRV_OK; }
 static uint32_t g_freqreg;
 DrvStatus drv_ad9833_set_freqreg(uint32_t freqreg) { g_freqreg = freqreg; return DRV_OK; }

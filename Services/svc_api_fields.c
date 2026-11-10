@@ -4,6 +4,7 @@
 #include "svc_storage.h"
 #include "svc_log.h"
 #include "hal_rtc.h"
+#include "svc_displacement.h"
 #include <string.h>
 
 /* Generic GET / SET of the DeviceSettings members the Calibrations and Settings categories expose. The rows
@@ -77,6 +78,21 @@ bool api_check_battery_order(uint8_t res, int64_t value)
         return value > (int64_t)g_device_settings.battery_critical_mv;
     }
     return true;
+}
+
+/* The S1 / S2 PGA gain must be a power of two (the ADS131M04 PGA steps are 1,2,4,...,128). */
+bool api_check_pga(uint8_t res, int64_t value)
+{
+    (void)res;
+    return value >= 1 && value <= 128 && (value & (value - 1)) == 0;
+}
+
+/* A new sensor gain takes effect immediately: the demod restarts around the register write. */
+void api_after_adc_pga(void)
+{
+    if (svc_displacement_apply_pga() != DRV_OK) {
+        svc_log(API2_LOG_WARN, "adc: pga not applied");
+    }
 }
 
 /* A new clock trim takes effect immediately. */

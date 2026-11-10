@@ -33,6 +33,8 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *s) { (void)s; g_saves+
 void svc_log(Api2LogSeverity sev, const char *msg) { (void)sev; (void)msg; }
 void svc_logf(Api2LogSeverity sev, const char *fmt, ...) { (void)sev; (void)fmt; }
 DrvStatus hal_rtc_set_trim_ppm_x10(int16_t v) { (void)v; g_trim_calls++; return DRV_OK; }
+static int g_pga_calls;
+DrvStatus svc_displacement_apply_pga(void) { g_pga_calls++; return DRV_OK; }
 
 #include "../Services/svc_api.c"
 #include "../Services/svc_api_fields.c"

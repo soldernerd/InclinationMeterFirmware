@@ -406,6 +406,8 @@ Constants that correct a sensor or a measurement. Stored in EEPROM; every SET pe
 | 0x45 | S2_ZERO | GET, SET | Sensor 2 zero [-500000 .. 500000 ppm of the ratio] (service mode) |
 | 0x46 | S2_PHASE | GET, SET | Sensor 2 phase [-18000 .. 18000 0.01 deg] (service mode) |
 | 0x47 | S2_INVERT | GET, SET | Sensor 2 sign of the reported reading [0 .. 1] (service mode) |
+| 0x48 | S1_PGA | GET, SET | Sensor 1 ADC PGA gain, a power of two (1, 2, 4  [1 .. 128] (service mode) |
+| 0x49 | S2_PGA | GET, SET | Sensor 2 ADC PGA gain, a power of two [1 .. 128] (service mode) |
 | 0x50 | VBAT_SCALE_NUM | GET, SET | Battery divider scale numerator (Vbat = Vadc * num / den + offset) [1 .. 10000] (service mode) |
 | 0x51 | VBAT_SCALE_DEN | GET, SET | Battery divider scale denominator [1 .. 10000] (service mode) |
 | 0x52 | VBAT_OFFSET | GET, SET | Battery voltage offset [-500 .. 500 mV] (service mode) |
@@ -483,6 +485,22 @@ Sensor 2 sign of the reported reading
 Verbs: `GET` = 0x0247, `SET` = 0x1247. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
 
 Value: `u8`, range 0 .. 1. SET answers status only.
+
+### Calibrations S1_PGA (0x2/0x48)
+
+Sensor 1 ADC PGA gain, a power of two (1, 2, 4 ... 128); applied immediately, k stays stated for PGA 1
+
+Verbs: `GET` = 0x0248, `SET` = 0x1248. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
+
+Value: `u8`, range 1 .. 128. SET answers status only.
+
+### Calibrations S2_PGA (0x2/0x49)
+
+Sensor 2 ADC PGA gain, a power of two
+
+Verbs: `GET` = 0x0249, `SET` = 0x1249. **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)
+
+Value: `u8`, range 1 .. 128. SET answers status only.
 
 ### Calibrations VBAT_SCALE_NUM (0x2/0x50)
 

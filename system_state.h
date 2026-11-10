@@ -138,7 +138,11 @@ typedef struct {
      * "section must end exactly at the struct's end" assert meaningful.
      * Never read/written; exists purely so this struct's layout has no
      * bytes the EEPROM section machinery doesn't know about. */
-    uint8_t disp_reserved_pad[2];
+    uint8_t disp_s1_pga;             /* ADC PGA gain of the S1 / S2 channels: 1,2,4,...,128 (API Calibrations 0x48 / 0x49,
+                                      * applied live). k is stated for PGA 1, so changing the gain needs no recalibration.
+                                      * Took the two reserved pad bytes (same page layout, no version bump); a stored 0
+                                      * (page written before this existed) means "default" (DEFAULT_DISP_Sx_PGA). */
+    uint8_t disp_s2_pga;
 } DeviceSettings;
 
 typedef struct {

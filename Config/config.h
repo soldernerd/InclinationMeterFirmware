@@ -426,6 +426,8 @@
 #define DEFAULT_DISP_S2_ZERO_PPM               0
 #define DEFAULT_DISP_S1_INVERT                 0    /* 0=normal, 1=inverted -- see system_state.h */
 #define DEFAULT_DISP_S2_INVERT                 0
+#define DEFAULT_DISP_S1_PGA                    1    /* ADC PGA of the sensor channels, 1..128 power of two */
+#define DEFAULT_DISP_S2_PGA                    1
 /* Phase calibration defaults, centidegrees (docs/signal_processing.tex
  * Sec. 9.1): principal axis of S/D over the 19 h phasor stream of
  * 2026-10-04/05 (S1 -6.0 deg, S2 -9.15 deg). Estimates only -- determine

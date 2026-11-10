@@ -54,6 +54,8 @@
 #define API2_RES_CALIBRATIONS_S2_ZERO                0x45U
 #define API2_RES_CALIBRATIONS_S2_PHASE               0x46U
 #define API2_RES_CALIBRATIONS_S2_INVERT              0x47U
+#define API2_RES_CALIBRATIONS_S1_PGA                 0x48U
+#define API2_RES_CALIBRATIONS_S2_PGA                 0x49U
 #define API2_RES_CALIBRATIONS_VBAT_SCALE_NUM         0x50U
 #define API2_RES_CALIBRATIONS_VBAT_SCALE_DEN         0x51U
 #define API2_RES_CALIBRATIONS_VBAT_OFFSET            0x52U
@@ -148,6 +150,10 @@
 #define API2_OP_CALIBRATIONS_S2_PHASE_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S2_PHASE)
 #define API2_OP_CALIBRATIONS_S2_INVERT_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S2_INVERT)
 #define API2_OP_CALIBRATIONS_S2_INVERT_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S2_INVERT)
+#define API2_OP_CALIBRATIONS_S1_PGA_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S1_PGA)
+#define API2_OP_CALIBRATIONS_S1_PGA_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S1_PGA)
+#define API2_OP_CALIBRATIONS_S2_PGA_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S2_PGA)
+#define API2_OP_CALIBRATIONS_S2_PGA_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_S2_PGA)
 #define API2_OP_CALIBRATIONS_VBAT_SCALE_NUM_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_VBAT_SCALE_NUM)
 #define API2_OP_CALIBRATIONS_VBAT_SCALE_NUM_SET          API2_OPCODE(API2_VERB_SET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_VBAT_SCALE_NUM)
 #define API2_OP_CALIBRATIONS_VBAT_SCALE_DEN_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_CALIBRATIONS, API2_RES_CALIBRATIONS_VBAT_SCALE_DEN)
@@ -432,6 +438,14 @@ typedef struct {
     uint8_t  value;
 } __attribute__((packed)) Api2CalibrationsS2InvertValue;
 _Static_assert(sizeof(Api2CalibrationsS2InvertValue) == 1U, "Api2CalibrationsS2InvertValue layout");
+typedef struct {
+    uint8_t  value;
+} __attribute__((packed)) Api2CalibrationsS1PgaValue;
+_Static_assert(sizeof(Api2CalibrationsS1PgaValue) == 1U, "Api2CalibrationsS1PgaValue layout");
+typedef struct {
+    uint8_t  value;
+} __attribute__((packed)) Api2CalibrationsS2PgaValue;
+_Static_assert(sizeof(Api2CalibrationsS2PgaValue) == 1U, "Api2CalibrationsS2PgaValue layout");
 typedef struct {
     uint16_t value;
 } __attribute__((packed)) Api2CalibrationsVbatScaleNumValue;
@@ -797,6 +811,8 @@ extern const ApiEventOps api_ev_zero_cal;
 
 /* hooks of field resources */
 bool api_check_battery_order(uint8_t res, int64_t value);
+bool api_check_pga(uint8_t res, int64_t value);
+void api_after_adc_pga(void);
 void api_after_rtc_trim(void);
 
 /* subscription slots per transport (one per subscribable resource) */

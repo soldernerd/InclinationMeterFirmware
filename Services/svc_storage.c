@@ -84,7 +84,7 @@ static const SettingsSection s_sections[] = {
       SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad) },
     { EEPROM_DISPLACEMENT_SETTINGS_ADDR, EEPROM_DISPLACEMENT_SETTINGS_VERSION,
       offsetof(DeviceSettings, disp_s1_k_micro),
-      SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad) },
+      SECTION_SPAN(disp_s1_k_micro, disp_s2_pga) },
 };
 #define SETTINGS_SECTION_COUNT  ((uint8_t)(sizeof(s_sections) / sizeof(s_sections[0])))
 
@@ -111,7 +111,7 @@ _Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPA
 _Static_assert(offsetof(DeviceSettings, rtc_trim_ppm_x10) + SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad)
                 == offsetof(DeviceSettings, disp_s1_k_micro),
                 "rtc section must end exactly where displacement section begins");
-_Static_assert(offsetof(DeviceSettings, disp_s1_k_micro) + SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad)
+_Static_assert(offsetof(DeviceSettings, disp_s1_k_micro) + SECTION_SPAN(disp_s1_k_micro, disp_s2_pga)
                 == sizeof(DeviceSettings),
                 "displacement section must end exactly at the struct's end");
 
@@ -127,7 +127,7 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts
                "encoder page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad) <= 0x0100U,
                "rtc page must fit within its 256-byte EEPROM page budget");
-_Static_assert(HDR_SIZE + SECTION_SPAN(disp_s1_k_micro, disp_reserved_pad) <= 0x0100U,
+_Static_assert(HDR_SIZE + SECTION_SPAN(disp_s1_k_micro, disp_s2_pga) <= 0x0100U,
                "displacement page must fit within its 256-byte EEPROM page budget");
 
 _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
@@ -213,6 +213,8 @@ static void fill_default_settings(DeviceSettings *s)
     s->disp_s2_invert           = DEFAULT_DISP_S2_INVERT;
     s->disp_s1_phase_cdeg       = DEFAULT_DISP_S1_PHASE_CDEG;
     s->disp_s2_phase_cdeg       = DEFAULT_DISP_S2_PHASE_CDEG;
+    s->disp_s1_pga              = DEFAULT_DISP_S1_PGA;
+    s->disp_s2_pga              = DEFAULT_DISP_S2_PGA;
 }
 
 /* ---------------- header helpers ---------------- */

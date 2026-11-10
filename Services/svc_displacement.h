@@ -95,6 +95,10 @@ DrvStatus svc_displacement_init(void);
  * (EXECUTE / Commands / API2_RES_CMD_DISPLACEMENT). */
 DrvStatus svc_displacement_start(void);
 void      svc_displacement_stop(void);
+
+/* Applies the S1 / S2 PGA from DeviceSettings (disp_s1_pga / disp_s2_pga) to the ADC: stops the demod if it runs,
+ * writes the gain, restarts. DRV_ERR_NOT_READY while a bulk capture owns the ADC. */
+DrvStatus svc_displacement_apply_pga(void);
 bool      svc_displacement_is_running(void);
 
 /* Drains the completed batches queued since the last call (the
