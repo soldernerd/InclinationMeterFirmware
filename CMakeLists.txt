@@ -56,11 +56,18 @@ target_link_directories(${CMAKE_PROJECT_NAME} PRIVATE
 
 # Build id (commit + dirty flag), regenerated at every build into ${CMAKE_BINARY_DIR}/generated/build_info.h; the file is
 # only rewritten when the id changes, so an unchanged tree does not recompile anything.
-add_custom_target(build_info ALL
-    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${CMAKE_BINARY_DIR}/generated/build_info.h
+# The header is an OUTPUT of a custom command that is a source of the firmware target: CMake then runs it before ANY compile of
+# the target. (As a separate custom target it was only ordered before the link, so the file that prints the id could be compiled
+# against the previous build's header: fw 0.13.1 reported the id of the build before it.) The never-created ".always" output
+# makes the command run on every build; the generator marks custom commands restat, so an unchanged header recompiles nothing.
+set(BUILD_INFO_H ${CMAKE_BINARY_DIR}/generated/build_info.h)
+add_custom_command(
+    OUTPUT ${BUILD_INFO_H} ${BUILD_INFO_H}.always
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${BUILD_INFO_H}
             -P ${CMAKE_SOURCE_DIR}/cmake/build_info.cmake
-    COMMENT "Updating the build id")
-add_dependencies(${CMAKE_PROJECT_NAME} build_info)
+    COMMENT "Updating the build id"
+    VERBATIM)
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE ${BUILD_INFO_H})
 
 # Add sources to executable
 file(GLOB_RECURSE APP_SOURCES CONFIGURE_DEPENDS

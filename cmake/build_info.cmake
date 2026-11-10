@@ -1,6 +1,6 @@
 # Writes ${OUT} (a header with FW_BUILD_ID) when its content changes: the commit the firmware was built from, "-dirty" if the
 # working tree had uncommitted changes to tracked files, "nogit" when there is no repository (a source archive).
-# Run at every build by the build_info target in CMakeLists.txt, so the id is never stale.
+# Run at every build, before any compile of the firmware, by the custom command in CMakeLists.txt, so the id is never stale.
 find_package(Git QUIET)
 set(ID "nogit")
 if(GIT_FOUND AND EXISTS "${SRC}/.git")
