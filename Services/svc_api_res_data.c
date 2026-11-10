@@ -106,11 +106,14 @@ Api2Status api_h_topics_signal_diag(const ApiResource *r, ApiCall *c)
     DisplacementSignalDiag d;
     svc_displacement_get_signal_diag(&d);
     Api2TopicsSignalDiagResponse p;
-    /* signal order B, A, S1, S2 (docs/channel-map.md) -- NOT the ADC channel order */
-    p.rms_mv_b = d.rms_mv[0];  p.rms_mv_a = d.rms_mv[1];  p.rms_mv_s1 = d.rms_mv[2];  p.rms_mv_s2 = d.rms_mv[3];
-    p.p2p_mv_b = d.p2p_mv[0];  p.p2p_mv_a = d.p2p_mv[1];  p.p2p_mv_s1 = d.p2p_mv[2];  p.p2p_mv_s2 = d.p2p_mv[3];
-    p.phase_deg_b = d.phase_deg[0];  p.phase_deg_a = d.phase_deg[1];
-    p.phase_deg_s1 = d.phase_deg[2];  p.phase_deg_s2 = d.phase_deg[3];
+    /* the payload is in ADC channel order S2, B, A, S1 (the struct's field order, generated from the spec); d[] is indexed by
+     * the same channel numbers, so every value is picked by name. docs/channel-map.md */
+    p.rms_mv_s2 = d.rms_mv[ADS131M04_CH_S2];  p.rms_mv_b = d.rms_mv[ADS131M04_CH_B];
+    p.rms_mv_a  = d.rms_mv[ADS131M04_CH_A];   p.rms_mv_s1 = d.rms_mv[ADS131M04_CH_S1];
+    p.p2p_mv_s2 = d.p2p_mv[ADS131M04_CH_S2];  p.p2p_mv_b = d.p2p_mv[ADS131M04_CH_B];
+    p.p2p_mv_a  = d.p2p_mv[ADS131M04_CH_A];   p.p2p_mv_s1 = d.p2p_mv[ADS131M04_CH_S1];
+    p.phase_deg_s2 = d.phase_deg[ADS131M04_CH_S2];  p.phase_deg_b = d.phase_deg[ADS131M04_CH_B];
+    p.phase_deg_a  = d.phase_deg[ADS131M04_CH_A];   p.phase_deg_s1 = d.phase_deg[ADS131M04_CH_S1];
     p.theoretical_tilt_s1 = d.theoretical_tilt1_mm_per_m;
     p.theoretical_tilt_s2 = d.theoretical_tilt2_mm_per_m;
     API2_REPLY(c, &p);

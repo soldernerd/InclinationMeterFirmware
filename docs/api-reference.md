@@ -1018,7 +1018,7 @@ Verbs: `GET` = 0x0503, `SUBSCRIBE` = 0x3503, `UNSUBSCRIBE` = 0x4503. SUBSCRIBE r
 
 ### Topics PHASOR_STREAM (0x5/0x04)
 
-Gapless stream of every 64-cycle batch's raw phasors with a sequence number (about 40.7 pushes/s). The subscription arms the ADC for the stream; the demodulation keeps running. A gap in `seq` (modulo 65536, step 64) means lost batches. Event topic: the interval field is ignored. Fields are in SIGNAL order B, A, S1, S2 and are the raw sums, not divided by the channel PGAs (ADC channels: A = ch2, B = ch1, S1 = ch3, S2 = ch0; docs/channel-map.md).
+Gapless stream of every 64-cycle batch's raw phasors with a sequence number (about 40.7 pushes/s). The subscription arms the ADC for the stream; the demodulation keeps running. A gap in `seq` (modulo 65536, step 64) means lost batches. Event topic: the interval field is ignored. Fields are in ADC CHANNEL order S2, B, A, S1 (ch0..ch3; before fw 0.13.0 it was B, A, S1, S2) and are the raw sums, not divided by the channel PGAs (docs/channel-map.md).
 
 Verbs: `SUBSCRIBE` = 0x3504, `UNSUBSCRIBE` = 0x4504. SUBSCRIBE is event driven; request: `u32` (ignored).
 
@@ -1026,19 +1026,19 @@ Verbs: `SUBSCRIBE` = 0x3504, `UNSUBSCRIBE` = 0x4504. SUBSCRIBE is event driven; 
 
 | Offset | Type | Field | Unit | Meaning |
 |---:|---|---|---|---|
-| 0 | f32 | `iB` |  |  |
-| 4 | f32 | `qB` |  |  |
-| 8 | f32 | `iA` |  |  |
-| 12 | f32 | `qA` |  |  |
-| 16 | f32 | `iS1` |  |  |
-| 20 | f32 | `qS1` |  |  |
-| 24 | f32 | `iS2` |  |  |
-| 28 | f32 | `qS2` |  |  |
+| 0 | f32 | `iS2` |  | S2 (ADC ch0) |
+| 4 | f32 | `qS2` |  |  |
+| 8 | f32 | `iB` |  | B (ADC ch1) |
+| 12 | f32 | `qB` |  |  |
+| 16 | f32 | `iA` |  | A (ADC ch2) |
+| 20 | f32 | `qA` |  |  |
+| 24 | f32 | `iS1` |  | S1 (ADC ch3) |
+| 28 | f32 | `qS1` |  |  |
 | 32 | u16 | `seq` |  | cycle counter of the batch's last cycle (steps of 64, wraps at 65536) |
 
 ### Topics SIGNAL_DIAG (0x5/0x05)
 
-Per-signal amplitude, peak-to-peak and phase at the ADC pins, and the theoretical tilt each sensor implies (Wyler 20 uV per um/m). **The four values of each group are in SIGNAL order B, A, S1, S2** (the phasor-stream and LCD order), NOT the ADC channel order (ADC: ch0 = S2, ch1 = B, ch2 = A, ch3 = S1; see docs/channel-map.md). Phase is referenced so that A - B sits at 90 deg (A reads +90, B 270).
+Per-signal amplitude, peak-to-peak and phase at the ADC pins, and the theoretical tilt each sensor implies (Wyler 20 uV per um/m). **The four values of each group are in ADC CHANNEL order S2, B, A, S1** (ch0..ch3, the same order as the phasor stream, the bulk capture and the LCD; before fw 0.13.0 it was B, A, S1, S2; see docs/channel-map.md). Phase is referenced so that A - B sits at 90 deg (A reads +90, B 270).
 
 Verbs: `GET` = 0x0505, `SUBSCRIBE` = 0x3505, `UNSUBSCRIBE` = 0x4505. SUBSCRIBE request: `u32 interval_ms` (50 .. 3600000); pushes `[issue_seq][page][response payload]`.
 
@@ -1046,18 +1046,18 @@ Verbs: `GET` = 0x0505, `SUBSCRIBE` = 0x3505, `UNSUBSCRIBE` = 0x4505. SUBSCRIBE r
 
 | Offset | Type | Field | Unit | Meaning |
 |---:|---|---|---|---|
-| 0 | f32 | `rms_mv_b` | mV | B (ADC ch1) |
-| 4 | f32 | `rms_mv_a` | mV | A (ADC ch2) |
-| 8 | f32 | `rms_mv_s1` | mV | S1 (ADC ch3) |
-| 12 | f32 | `rms_mv_s2` | mV | S2 (ADC ch0) |
-| 16 | f32 | `p2p_mv_b` | mV | B |
-| 20 | f32 | `p2p_mv_a` | mV | A |
-| 24 | f32 | `p2p_mv_s1` | mV | S1 |
-| 28 | f32 | `p2p_mv_s2` | mV | S2 |
-| 32 | f32 | `phase_deg_b` | deg | B, about 270 (A - B = 90 by definition) |
-| 36 | f32 | `phase_deg_a` | deg | A, about 90 |
-| 40 | f32 | `phase_deg_s1` | deg | S1 |
-| 44 | f32 | `phase_deg_s2` | deg | S2 |
+| 0 | f32 | `rms_mv_s2` | mV | S2 (ADC ch0) |
+| 4 | f32 | `rms_mv_b` | mV | B (ADC ch1) |
+| 8 | f32 | `rms_mv_a` | mV | A (ADC ch2) |
+| 12 | f32 | `rms_mv_s1` | mV | S1 (ADC ch3) |
+| 16 | f32 | `p2p_mv_s2` | mV | S2 |
+| 20 | f32 | `p2p_mv_b` | mV | B |
+| 24 | f32 | `p2p_mv_a` | mV | A |
+| 28 | f32 | `p2p_mv_s1` | mV | S1 |
+| 32 | f32 | `phase_deg_s2` | deg | S2 |
+| 36 | f32 | `phase_deg_b` | deg | B, about 270 (A - B = 90 by definition) |
+| 40 | f32 | `phase_deg_a` | deg | A, about 90 |
+| 44 | f32 | `phase_deg_s1` | deg | S1 |
 | 48 | f32 | `theoretical_tilt_s1` | mm/m |  |
 | 52 | f32 | `theoretical_tilt_s2` | mm/m |  |
 
@@ -1182,11 +1182,11 @@ Large RAM-buffered transfers streamed in chunks under the START opcode, paced by
 
 | ID | Name | Verbs | Notes |
 |---:|---|---|---|
-| 0x00 | RAW_ADC | START_BULK, CANCEL_BULK | Raw ADC capture: 6144 samples x 4 channels x 24 bit (about 295 ms at 20.83 kHz), packed little-endian signed, ADC channel order ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 (not the signal order of the phasor stream; docs/channel-map.md) |
+| 0x00 | RAW_ADC | START_BULK, CANCEL_BULK | Raw ADC capture: 6144 samples x 4 channels x 24 bit (about 295 ms at 20.83 kHz), packed little-endian signed, ADC channel order ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 (docs/channel-map.md) |
 
 ### Bulk transfers RAW_ADC (0x8/0x00)
 
-Raw ADC capture: 6144 samples x 4 channels x 24 bit (about 295 ms at 20.83 kHz), packed little-endian signed, ADC channel order ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 (not the signal order of the phasor stream; docs/channel-map.md). After the OK ack the chunks follow: [status][page][10 samples x 12 bytes]. Device-wide exclusive; stops the demodulation for the duration.
+Raw ADC capture: 6144 samples x 4 channels x 24 bit (about 295 ms at 20.83 kHz), packed little-endian signed, ADC channel order ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 (docs/channel-map.md). After the OK ack the chunks follow: [status][page][10 samples x 12 bytes]. Device-wide exclusive; stops the demodulation for the duration.
 
 Verbs: `START_BULK` = 0x5800, `CANCEL_BULK` = 0x6800
 

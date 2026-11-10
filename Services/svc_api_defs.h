@@ -659,30 +659,30 @@ typedef struct {
 } __attribute__((packed)) Api2TopicsRawResponse;
 _Static_assert(sizeof(Api2TopicsRawResponse) == 23U, "Api2TopicsRawResponse layout");
 typedef struct {
+    float    iS2;
+    float    qS2;
     float    iB;
     float    qB;
     float    iA;
     float    qA;
     float    iS1;
     float    qS1;
-    float    iS2;
-    float    qS2;
     uint16_t seq;
 } __attribute__((packed)) Api2TopicsPhasorStreamPush;
 _Static_assert(sizeof(Api2TopicsPhasorStreamPush) == 34U, "Api2TopicsPhasorStreamPush layout");
 typedef struct {
+    float    rms_mv_s2;
     float    rms_mv_b;
     float    rms_mv_a;
     float    rms_mv_s1;
-    float    rms_mv_s2;
+    float    p2p_mv_s2;
     float    p2p_mv_b;
     float    p2p_mv_a;
     float    p2p_mv_s1;
-    float    p2p_mv_s2;
+    float    phase_deg_s2;
     float    phase_deg_b;
     float    phase_deg_a;
     float    phase_deg_s1;
-    float    phase_deg_s2;
     float    theoretical_tilt_s1;
     float    theoretical_tilt_s2;
 } __attribute__((packed)) Api2TopicsSignalDiagResponse;

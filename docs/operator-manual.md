@@ -45,7 +45,7 @@ and the environment sensor (temperature, pressure, humidity).
 | Reboot to DFU | puts the instrument in the ROM bootloader for flashing. **It stays there until reflashed**, section 9 |
 | Power off | sleep now |
 
-**DIAGNOSTICS** -- amplitude and phase of the four raw channels (B, A, S1, S2) and the tilt each sensor amplitude would
+**DIAGNOSTICS** -- amplitude and phase of the four raw channels (in ADC order: S2, B, A, S1) and the tilt each sensor amplitude would
 correspond to by the Wyler handbook figure. For setting up and troubleshooting, not for measuring.
 
 ## 4. Measuring

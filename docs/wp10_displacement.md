@@ -989,7 +989,7 @@ Two changes for tonight's granite-plate calibration, both requested directly.
 
 **1. DIAGNOSTICS screen** (`App/app_display.c`'s `draw_diagnostics_screen()`, a new
 `UI_SCREEN_DIAGNOSTICS` in the LEFT-encoder screen cycle) shows amplitude (RMS +
-peak-to-peak) and phase for all 4 raw ADC channels (B, A, S1, S2) -- the calibration tool
+peak-to-peak) and phase for all 4 raw ADC channels (S2, B, A, S1 since fw 0.13.0; B, A, S1, S2 before) -- the calibration tool
 for the two Wyler sensors' own "zero" and "gain" trim pots. S1/S2 shown in microvolts
 (their signal is small enough that millivolt resolution would hide exactly the digits a
 pot adjustment needs), B/A in millivolts. Also exposed over the API as Topic groups

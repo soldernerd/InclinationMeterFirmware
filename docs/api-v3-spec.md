@@ -148,6 +148,13 @@ measurement, charging control, power off, reboot, the clock) works without it.
 A host tool that writes calibrations therefore asks the operator to switch service mode on first, and should handle
 `SERVICE_MODE_REQUIRED` by saying exactly that.
 
+## 5b. Channels, labels and payload order
+
+The four ADC channels are **S2 (ch0), B (ch1), A (ch2), S1 (ch3)**, and every payload that carries the four of them (bulk capture, phasor
+stream, signal diagnostics, `ADC_MUX` mask) lists them in that order. The tilt readings and the other sensor-only results list S1 then S2.
+Labels, indices, byte offsets, a decoding checklist and the history of the order are in **`docs/channel-map.md`**: implementers of the
+mobile and desktop apps should read it before decoding any of these payloads.
+
 ## 6. Bulk transfers
 
 `START_BULK` is acknowledged with a status byte, then the data follows as chunks under the START_BULK opcode:

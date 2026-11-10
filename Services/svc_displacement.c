@@ -608,17 +608,23 @@ void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
     if (out == 0) {
         return;
     }
-    const float i[4] = { s_phasors.iB, s_phasors.iA, s_phasors.iS1, s_phasors.iS2 };
-    const float q[4] = { s_phasors.qB, s_phasors.qA, s_phasors.qS1, s_phasors.qS2 };
-    /* SIGNAL order B, A, S1, S2 (not the ADC channel order, docs/channel-map.md); the gains are the live settings. */
-    const uint8_t pga[4] = { eff_pga(g_device_settings.disp_b_pga, DEFAULT_DISP_B_PGA),
-                             eff_pga(g_device_settings.disp_a_pga, DEFAULT_DISP_A_PGA),
-                             eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA),
-                             eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA) };
+    /* Every array is indexed by ADC channel (ADS131M04_CH_*: 0 = S2, 1 = B, 2 = A, 3 = S1), the order of the wire payload
+     * (docs/channel-map.md). The gains are the live settings. */
+    float i[4], q[4];
+    uint8_t pga[4];
+    i[ADS131M04_CH_S2] = s_phasors.iS2;  q[ADS131M04_CH_S2] = s_phasors.qS2;
+    i[ADS131M04_CH_B]  = s_phasors.iB;   q[ADS131M04_CH_B]  = s_phasors.qB;
+    i[ADS131M04_CH_A]  = s_phasors.iA;   q[ADS131M04_CH_A]  = s_phasors.qA;
+    i[ADS131M04_CH_S1] = s_phasors.iS1;  q[ADS131M04_CH_S1] = s_phasors.qS1;
+    pga[ADS131M04_CH_S2] = eff_pga(g_device_settings.disp_s2_pga, DEFAULT_DISP_S2_PGA);
+    pga[ADS131M04_CH_B]  = eff_pga(g_device_settings.disp_b_pga,  DEFAULT_DISP_B_PGA);
+    pga[ADS131M04_CH_A]  = eff_pga(g_device_settings.disp_a_pga,  DEFAULT_DISP_A_PGA);
+    pga[ADS131M04_CH_S1] = eff_pga(g_device_settings.disp_s1_pga, DEFAULT_DISP_S1_PGA);
 
     /* Phase reference: D = A - B at 90 deg (Sec. 9.1) -- subtract D's own
      * angle, so the display no longer depends on the sample-grid phase. */
-    const float psi_d = atan2f(q[1] - q[0], i[1] - i[0]) * (180.0f / 3.14159265f);
+    const float psi_d = atan2f(q[ADS131M04_CH_A] - q[ADS131M04_CH_B], i[ADS131M04_CH_A] - i[ADS131M04_CH_B])
+                        * (180.0f / 3.14159265f);
 
     for (uint8_t ch = 0; ch < 4U; ++ch) {
         float peak_mv    = phasor_peak_mv(i[ch], q[ch], pga[ch]);
@@ -633,8 +639,8 @@ void svc_displacement_get_signal_diag(DisplacementSignalDiag *out)
     /* Wyler-handbook-only estimate -- see svc_displacement.h's comment.
      * 20uV RMS = 1um/m => tilt_mm_per_m = S_rms_uV/20/1000 = S_rms_mV/20
      * (the uV->mV and um/m->mm/m factors of 1000 cancel exactly). */
-    out->theoretical_tilt1_mm_per_m = out->rms_mv[2] / (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M;
-    out->theoretical_tilt2_mm_per_m = out->rms_mv[3] / (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M;
+    out->theoretical_tilt1_mm_per_m = out->rms_mv[ADS131M04_CH_S1] / (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M;
+    out->theoretical_tilt2_mm_per_m = out->rms_mv[ADS131M04_CH_S2] / (float)DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M;
 }
 
 void svc_displacement_stop(void)

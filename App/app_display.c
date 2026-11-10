@@ -1,6 +1,7 @@
 #include "app_display.h"
 #include "app_ui.h"
 #include "drv_sharp_lcd.h"
+#include "drv_ads131m04.h"
 #include "u8g2_hal_callback.h"
 #include "app_version.h"
 #include "system_state.h"
@@ -200,7 +201,7 @@ typedef struct {
                                   * measurement strategy. Same "empty means
                                   * don't draw" convention as disp2_line. */
     char diag_line[4][96];      /* DIAGNOSTICS screen (2026-09-27), one row
-                                   * per raw channel (B, A, S1, S2) -- see
+                                   * per raw channel (ADC order S2, B, A, S1) -- see
                                    * draw_diagnostics_screen(). Only
                                    * populated/drawn while that screen is
                                    * shown (same "only checked while its own
@@ -884,9 +885,10 @@ static void snapshot_capture(void)
         if (svc_displacement_get_ok()) {
             DisplacementSignalDiag diag;
             svc_displacement_get_signal_diag(&diag);
-            static const char *const ch_labels[4] = { "B", "A", "S1", "S2" };
+            /* index = ADC channel (docs/channel-map.md): ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 */
+            static const char *const ch_labels[4] = { "S2", "B", "A", "S1" };
             for (uint8_t ch = 0; ch < 4U; ++ch) {
-                bool micro = (ch >= 2U);   /* S1/S2 (index 2,3) shown in uV, B/A in mV */
+                bool micro = (ch == ADS131M04_CH_S1 || ch == ADS131M04_CH_S2);   /* the sensors are shown in uV, B/A in mV */
                 char rms_s[16], p2p_s[16], ph_s[16];
                 format_phase_deg(ph_s, sizeof ph_s, diag.phase_deg[ch]);
                 if (micro) {

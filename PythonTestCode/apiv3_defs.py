@@ -1278,7 +1278,7 @@ def decode_topics_raw_response(data):
 
 FMT_TOPICS_PHASOR_STREAM_PUSH = '<ffffffffH'
 SIZE_TOPICS_PHASOR_STREAM_PUSH = struct.calcsize(FMT_TOPICS_PHASOR_STREAM_PUSH)
-FIELDS_TOPICS_PHASOR_STREAM_PUSH = ('iB', 'qB', 'iA', 'qA', 'iS1', 'qS1', 'iS2', 'qS2', 'seq', )
+FIELDS_TOPICS_PHASOR_STREAM_PUSH = ('iS2', 'qS2', 'iB', 'qB', 'iA', 'qA', 'iS1', 'qS1', 'seq', )
 def decode_topics_phasor_stream_push(data):
     if len(data) < SIZE_TOPICS_PHASOR_STREAM_PUSH:
         return None
@@ -1291,7 +1291,7 @@ def decode_topics_phasor_stream_push(data):
 
 FMT_TOPICS_SIGNAL_DIAG_RESPONSE = '<ffffffffffffff'
 SIZE_TOPICS_SIGNAL_DIAG_RESPONSE = struct.calcsize(FMT_TOPICS_SIGNAL_DIAG_RESPONSE)
-FIELDS_TOPICS_SIGNAL_DIAG_RESPONSE = ('rms_mv_b', 'rms_mv_a', 'rms_mv_s1', 'rms_mv_s2', 'p2p_mv_b', 'p2p_mv_a', 'p2p_mv_s1', 'p2p_mv_s2', 'phase_deg_b', 'phase_deg_a', 'phase_deg_s1', 'phase_deg_s2', 'theoretical_tilt_s1', 'theoretical_tilt_s2', )
+FIELDS_TOPICS_SIGNAL_DIAG_RESPONSE = ('rms_mv_s2', 'rms_mv_b', 'rms_mv_a', 'rms_mv_s1', 'p2p_mv_s2', 'p2p_mv_b', 'p2p_mv_a', 'p2p_mv_s1', 'phase_deg_s2', 'phase_deg_b', 'phase_deg_a', 'phase_deg_s1', 'theoretical_tilt_s1', 'theoretical_tilt_s2', )
 def decode_topics_signal_diag_response(data):
     if len(data) < SIZE_TOPICS_SIGNAL_DIAG_RESPONSE:
         return None

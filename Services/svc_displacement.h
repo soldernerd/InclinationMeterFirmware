@@ -197,21 +197,21 @@ void svc_displacement_get_phasors(DisplacementPhasors *out);
  * units -- microvolts for S1/S2, millivolts for A/B). theoretical_tilt1/2
  * are the Wyler-handbook-only estimate (config.h's
  * DISPLACEMENT_WYLER_UV_RMS_PER_UM_PER_M: 20uV RMS = 1um/m, applied
- * directly to rms_mv[2]/rms_mv[3] -- S1/S2's own RMS amplitude), computed
+ * directly to rms_mv[ADS131M04_CH_S1]/rms_mv[ADS131M04_CH_S2] -- S1/S2's own RMS amplitude), computed
  * with NO dependency on atten/gain/d0/cal_mult at all -- an independent
  * cross-check to compare against delta1_mm/delta2_mm side by side. Same
  * validity contract as the other getters (meaningless before the first
  * batch / while !get_ok()). */
 typedef struct {
-    float rms_mv[4];         /* order: B, A, S1, S2 -- matches DisplacementPhasors */
+    float rms_mv[4];         /* indexed by ADC channel: [0] S2, [1] B, [2] A, [3] S1 (ADS131M04_CH_*) -- since 0.13.0; the wire payload has the same order */
     float p2p_mv[4];
     float phase_deg[4];      /* atan2(q,i) rotated so that D = A - B sits at 90 deg
                               * (2026-10-06, Sec. 9.1 of docs/signal_processing.tex),
                               * degrees, 0..360: A ~ 90.5, B ~ 269.5, a sensor near
                               * 90 (positive tilt) or 270 (negative). Independent of
                               * the sample-grid alignment. */
-    float theoretical_tilt1_mm_per_m;   /* from rms_mv[2] (S1) via the Wyler constant */
-    float theoretical_tilt2_mm_per_m;   /* from rms_mv[3] (S2) */
+    float theoretical_tilt1_mm_per_m;   /* from rms_mv[ADS131M04_CH_S1] via the Wyler constant */
+    float theoretical_tilt2_mm_per_m;   /* from rms_mv[ADS131M04_CH_S2] */
 } DisplacementSignalDiag;
 
 void svc_displacement_get_signal_diag(DisplacementSignalDiag *out);

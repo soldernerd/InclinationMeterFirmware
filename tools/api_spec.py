@@ -358,22 +358,22 @@ TOPICS = Cat(0x5, "TOPICS", "Topics", (GET, SUBSCRIBE, UNSUBSCRIBE),
   Res("PHASOR_STREAM", 0x04, (SUBSCRIBE, UNSUBSCRIBE),
       "Gapless stream of every 64-cycle batch's raw phasors with a sequence number (about 40.7 pushes/s). The "
       "subscription arms the ADC for the stream; the demodulation keeps running. A gap in `seq` (modulo 65536, step "
-      "64) means lost batches. Event topic: the interval field is ignored. Fields are in SIGNAL order B, A, S1, S2 and are the "
-      "raw sums, not divided by the channel PGAs (ADC channels: A = ch2, B = ch1, S1 = ch3, S2 = ch0; docs/channel-map.md).",
-      push=[F(F32, "iB"), F(F32, "qB"), F(F32, "iA"), F(F32, "qA"), F(F32, "iS1"), F(F32, "qS1"), F(F32, "iS2"),
-            F(F32, "qS2"), F(U16, "seq", "cycle counter of the batch's last cycle (steps of 64, wraps at 65536)")],
+      "64) means lost batches. Event topic: the interval field is ignored. Fields are in ADC CHANNEL order S2, B, A, S1 (ch0..ch3; before fw 0.13.0 it was B, A, S1, S2) and are the "
+      "raw sums, not divided by the channel PGAs (docs/channel-map.md).",
+      push=[F(F32, "iS2", "S2 (ADC ch0)"), F(F32, "qS2"), F(F32, "iB", "B (ADC ch1)"), F(F32, "qB"),
+            F(F32, "iA", "A (ADC ch2)"), F(F32, "qA"), F(F32, "iS1", "S1 (ADC ch3)"), F(F32, "qS1"), F(U16, "seq", "cycle counter of the batch's last cycle (steps of 64, wraps at 65536)")],
       sub="event", ev="phasor_stream"),
   Res("SIGNAL_DIAG", 0x05, (GET, SUBSCRIBE, UNSUBSCRIBE),
       "Per-signal amplitude, peak-to-peak and phase at the ADC pins, and the theoretical tilt each sensor implies "
-      "(Wyler 20 uV per um/m). **The four values of each group are in SIGNAL order B, A, S1, S2** (the phasor-stream and LCD "
-      "order), NOT the ADC channel order (ADC: ch0 = S2, ch1 = B, ch2 = A, ch3 = S1; see docs/channel-map.md). "
+      "(Wyler 20 uV per um/m). **The four values of each group are in ADC CHANNEL order S2, B, A, S1** (ch0..ch3, the same "
+      "order as the phasor stream, the bulk capture and the LCD; before fw 0.13.0 it was B, A, S1, S2; see docs/channel-map.md). "
       "Phase is referenced so that A - B sits at 90 deg (A reads +90, B 270).",
-      rsp=[F(F32, "rms_mv_b", "B (ADC ch1)", "mV"), F(F32, "rms_mv_a", "A (ADC ch2)", "mV"),
-           F(F32, "rms_mv_s1", "S1 (ADC ch3)", "mV"), F(F32, "rms_mv_s2", "S2 (ADC ch0)", "mV"),
-           F(F32, "p2p_mv_b", "B", "mV"), F(F32, "p2p_mv_a", "A", "mV"),
-           F(F32, "p2p_mv_s1", "S1", "mV"), F(F32, "p2p_mv_s2", "S2", "mV"),
-           F(F32, "phase_deg_b", "B, about 270 (A - B = 90 by definition)", "deg"), F(F32, "phase_deg_a", "A, about 90", "deg"),
-           F(F32, "phase_deg_s1", "S1", "deg"), F(F32, "phase_deg_s2", "S2", "deg"),
+      rsp=[F(F32, "rms_mv_s2", "S2 (ADC ch0)", "mV"), F(F32, "rms_mv_b", "B (ADC ch1)", "mV"),
+           F(F32, "rms_mv_a", "A (ADC ch2)", "mV"), F(F32, "rms_mv_s1", "S1 (ADC ch3)", "mV"),
+           F(F32, "p2p_mv_s2", "S2", "mV"), F(F32, "p2p_mv_b", "B", "mV"),
+           F(F32, "p2p_mv_a", "A", "mV"), F(F32, "p2p_mv_s1", "S1", "mV"),
+           F(F32, "phase_deg_s2", "S2", "deg"), F(F32, "phase_deg_b", "B, about 270 (A - B = 90 by definition)", "deg"),
+           F(F32, "phase_deg_a", "A, about 90", "deg"), F(F32, "phase_deg_s1", "S1", "deg"),
            F(F32, "theoretical_tilt_s1", "", "mm/m"), F(F32, "theoretical_tilt_s2", "", "mm/m")],
       sub="interval"),
 ])
@@ -417,7 +417,7 @@ BULK = Cat(0x8, "BULK", "Bulk transfers", (START_BULK, CANCEL_BULK),
   "Large RAM-buffered transfers streamed in chunks under the START opcode, paced by the transport's transmit ring.", [
   Res("RAW_ADC", 0x00, (START_BULK, CANCEL_BULK),
       "Raw ADC capture: 6144 samples x 4 channels x 24 bit (about 295 ms at 20.83 kHz), packed little-endian signed, "
-      "ADC channel order ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 (not the signal order of the phasor stream; docs/channel-map.md). After the OK ack the chunks follow: [status][page][10 samples x 12 bytes]. "
+      "ADC channel order ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 (docs/channel-map.md). After the OK ack the chunks follow: [status][page][10 samples x 12 bytes]. "
       "Device-wide exclusive; stops the demodulation for the duration.",
       push=[F(U8, "page", "wrapping chunk counter")]),
 ])
