@@ -198,7 +198,7 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
   Res("ADC_MUX", 0x75, (EXECUTE,), service=True, doc="Investigation: set the ADS131M04 input multiplexer of the selected "
       "channels. A running demodulation is restarted around the change (readings are invalid for about 2 s afterwards). "
       "BUSY_EXCLUSIVE during a bulk capture. Not persistent: every boot starts with all channels normal.",
-      req=[F(U8, "channel_mask", "bit n = ADC channel n (0..3), at least one bit"),
+      req=[F(U8, "channel_mask", "bit n = ADC channel n (ch0 = S2, ch1 = B, ch2 = A, ch3 = S1), at least one bit"),
            F(U8, "mux", "0 normal (input pins), 1 inputs shorted, 2 positive DC test signal, 3 negative DC test signal")]),
   Res("RAIL", 0x73, (EXECUTE,), service=True, doc="Switch one supply rail (shortcut for POWER_TEST bits 0 and 1).",
       req=[F(U8, "rail", "0 = 3V3 rail, 1 = 5V rail"), F(U8, "on", "1 on, 0 off")],
@@ -352,19 +352,22 @@ TOPICS = Cat(0x5, "TOPICS", "Topics", (GET, SUBSCRIBE, UNSUBSCRIBE),
   Res("PHASOR_STREAM", 0x04, (SUBSCRIBE, UNSUBSCRIBE),
       "Gapless stream of every 64-cycle batch's raw phasors with a sequence number (about 40.7 pushes/s). The "
       "subscription arms the ADC for the stream; the demodulation keeps running. A gap in `seq` (modulo 65536, step "
-      "64) means lost batches. Event topic: the interval field is ignored.",
+      "64) means lost batches. Event topic: the interval field is ignored. Fields are in SIGNAL order B, A, S1, S2 and are the "
+      "raw sums, not divided by the channel PGAs (ADC channels: A = ch2, B = ch1, S1 = ch3, S2 = ch0; docs/channel-map.md).",
       push=[F(F32, "iB"), F(F32, "qB"), F(F32, "iA"), F(F32, "qA"), F(F32, "iS1"), F(F32, "qS1"), F(F32, "iS2"),
             F(F32, "qS2"), F(U16, "seq", "cycle counter of the batch's last cycle (steps of 64, wraps at 65536)")],
       sub="event", ev="phasor_stream"),
   Res("SIGNAL_DIAG", 0x05, (GET, SUBSCRIBE, UNSUBSCRIBE),
-      "Per-channel amplitude, peak-to-peak and phase at the ADC pins (channel order S2, B, A, S1), and the "
-      "theoretical tilt each sensor channel implies (Wyler 20 uV per um/m).",
-      rsp=[F(F32, "rms_mv_ch0", "", "mV"), F(F32, "rms_mv_ch1", "", "mV"), F(F32, "rms_mv_ch2", "", "mV"),
-           F(F32, "rms_mv_ch3", "", "mV"),
-           F(F32, "p2p_mv_ch0", "", "mV"), F(F32, "p2p_mv_ch1", "", "mV"), F(F32, "p2p_mv_ch2", "", "mV"),
-           F(F32, "p2p_mv_ch3", "", "mV"),
-           F(F32, "phase_deg_ch0", "ch2 = 0 by definition", "deg"), F(F32, "phase_deg_ch1", "", "deg"),
-           F(F32, "phase_deg_ch2", "", "deg"), F(F32, "phase_deg_ch3", "", "deg"),
+      "Per-signal amplitude, peak-to-peak and phase at the ADC pins, and the theoretical tilt each sensor implies "
+      "(Wyler 20 uV per um/m). **The four values of each group are in SIGNAL order B, A, S1, S2** (the phasor-stream and LCD "
+      "order), NOT the ADC channel order (ADC: ch0 = S2, ch1 = B, ch2 = A, ch3 = S1; see docs/channel-map.md). "
+      "Phase is referenced so that A - B sits at 90 deg (A reads +90, B 270).",
+      rsp=[F(F32, "rms_mv_b", "B (ADC ch1)", "mV"), F(F32, "rms_mv_a", "A (ADC ch2)", "mV"),
+           F(F32, "rms_mv_s1", "S1 (ADC ch3)", "mV"), F(F32, "rms_mv_s2", "S2 (ADC ch0)", "mV"),
+           F(F32, "p2p_mv_b", "B", "mV"), F(F32, "p2p_mv_a", "A", "mV"),
+           F(F32, "p2p_mv_s1", "S1", "mV"), F(F32, "p2p_mv_s2", "S2", "mV"),
+           F(F32, "phase_deg_b", "B, about 270 (A - B = 90 by definition)", "deg"), F(F32, "phase_deg_a", "A, about 90", "deg"),
+           F(F32, "phase_deg_s1", "S1", "deg"), F(F32, "phase_deg_s2", "S2", "deg"),
            F(F32, "theoretical_tilt_s1", "", "mm/m"), F(F32, "theoretical_tilt_s2", "", "mm/m")],
       sub="interval"),
 ])
@@ -408,7 +411,7 @@ BULK = Cat(0x8, "BULK", "Bulk transfers", (START_BULK, CANCEL_BULK),
   "Large RAM-buffered transfers streamed in chunks under the START opcode, paced by the transport's transmit ring.", [
   Res("RAW_ADC", 0x00, (START_BULK, CANCEL_BULK),
       "Raw ADC capture: 6144 samples x 4 channels x 24 bit (about 295 ms at 20.83 kHz), packed little-endian signed, "
-      "channel order S2, B, A, S1. After the OK ack the chunks follow: [status][page][10 samples x 12 bytes]. "
+      "ADC channel order ch0 = S2, ch1 = B, ch2 = A, ch3 = S1 (not the signal order of the phasor stream; docs/channel-map.md). After the OK ack the chunks follow: [status][page][10 samples x 12 bytes]. "
       "Device-wide exclusive; stops the demodulation for the duration.",
       push=[F(U8, "page", "wrapping chunk counter")]),
 ])

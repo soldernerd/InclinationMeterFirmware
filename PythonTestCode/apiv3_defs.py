@@ -1259,7 +1259,7 @@ def decode_topics_phasor_stream_push(data):
 
 FMT_TOPICS_SIGNAL_DIAG_RESPONSE = '<ffffffffffffff'
 SIZE_TOPICS_SIGNAL_DIAG_RESPONSE = struct.calcsize(FMT_TOPICS_SIGNAL_DIAG_RESPONSE)
-FIELDS_TOPICS_SIGNAL_DIAG_RESPONSE = ('rms_mv_ch0', 'rms_mv_ch1', 'rms_mv_ch2', 'rms_mv_ch3', 'p2p_mv_ch0', 'p2p_mv_ch1', 'p2p_mv_ch2', 'p2p_mv_ch3', 'phase_deg_ch0', 'phase_deg_ch1', 'phase_deg_ch2', 'phase_deg_ch3', 'theoretical_tilt_s1', 'theoretical_tilt_s2', )
+FIELDS_TOPICS_SIGNAL_DIAG_RESPONSE = ('rms_mv_b', 'rms_mv_a', 'rms_mv_s1', 'rms_mv_s2', 'p2p_mv_b', 'p2p_mv_a', 'p2p_mv_s1', 'p2p_mv_s2', 'phase_deg_b', 'phase_deg_a', 'phase_deg_s1', 'phase_deg_s2', 'theoretical_tilt_s1', 'theoretical_tilt_s2', )
 def decode_topics_signal_diag_response(data):
     if len(data) < SIZE_TOPICS_SIGNAL_DIAG_RESPONSE:
         return None

@@ -106,10 +106,11 @@ Api2Status api_h_topics_signal_diag(const ApiResource *r, ApiCall *c)
     DisplacementSignalDiag d;
     svc_displacement_get_signal_diag(&d);
     Api2TopicsSignalDiagResponse p;
-    p.rms_mv_ch0 = d.rms_mv[0];  p.rms_mv_ch1 = d.rms_mv[1];  p.rms_mv_ch2 = d.rms_mv[2];  p.rms_mv_ch3 = d.rms_mv[3];
-    p.p2p_mv_ch0 = d.p2p_mv[0];  p.p2p_mv_ch1 = d.p2p_mv[1];  p.p2p_mv_ch2 = d.p2p_mv[2];  p.p2p_mv_ch3 = d.p2p_mv[3];
-    p.phase_deg_ch0 = d.phase_deg[0];  p.phase_deg_ch1 = d.phase_deg[1];
-    p.phase_deg_ch2 = d.phase_deg[2];  p.phase_deg_ch3 = d.phase_deg[3];
+    /* signal order B, A, S1, S2 (docs/channel-map.md) -- NOT the ADC channel order */
+    p.rms_mv_b = d.rms_mv[0];  p.rms_mv_a = d.rms_mv[1];  p.rms_mv_s1 = d.rms_mv[2];  p.rms_mv_s2 = d.rms_mv[3];
+    p.p2p_mv_b = d.p2p_mv[0];  p.p2p_mv_a = d.p2p_mv[1];  p.p2p_mv_s1 = d.p2p_mv[2];  p.p2p_mv_s2 = d.p2p_mv[3];
+    p.phase_deg_b = d.phase_deg[0];  p.phase_deg_a = d.phase_deg[1];
+    p.phase_deg_s1 = d.phase_deg[2];  p.phase_deg_s2 = d.phase_deg[3];
     p.theoretical_tilt_s1 = d.theoretical_tilt1_mm_per_m;
     p.theoretical_tilt_s2 = d.theoretical_tilt2_mm_per_m;
     API2_REPLY(c, &p);
