@@ -91,7 +91,14 @@ def all_resources():
             yield c, r
 
 
+def parse_since(s, where):
+    parts = s.split(".")
+    assert len(parts) == 2 and all(p.isdigit() for p in parts), "%s: since %r is not 'major.minor'" % (where, s)
+    return (int(parts[0]), int(parts[1]))
+
+
 def check_spec():
+    cur = (S.API_VERSION, S.API_VERSION_MINOR)
     seen = set()
     for c in S.CATEGORIES:
         assert c.id not in seen, "duplicate category id"
@@ -100,6 +107,13 @@ def check_spec():
         for r in c.resources:
             assert r.id not in ids, "duplicate resource id %s %s" % (c.name, r.name)
             ids.add(r.id)
+            assert parse_since(r.since, "%s.%s" % (c.name, r.name)) <= cur, "%s.%s: since %s is newer than the API version" % (
+                c.name, r.name, r.since)
+            for fl in (r.rsp, r.req, r.push, r.sub_req):
+                for f in fl or []:
+                    if f.since is not None:
+                        assert parse_since(f.since, "%s.%s.%s" % (c.name, r.name, f.name)) <= cur, \
+                            "%s.%s.%s: since %s is newer than the API version" % (c.name, r.name, f.name, f.since)
             for v in r.verbs:
                 assert v in c.verbs, "%s.%s: verb %s not allowed in category" % (c.name, r.name, v)
             if "EXECUTE" in r.verbs or "SET" in r.verbs:
@@ -142,7 +156,8 @@ def gen_defs_h():
     w("/* %s */\n" % BANNER)
     w("#ifndef SVC_API_DEFS_H\n#define SVC_API_DEFS_H\n\n#include <stdint.h>\n#include <stdbool.h>\n")
     w('#include "svc_api_core.h"\n\n')
-    w("#define API2_VERSION      %dU\n" % S.API_VERSION)
+    w("#define API2_VERSION      %dU   /* major */\n" % S.API_VERSION)
+    w("#define API2_VERSION_MINOR %dU\n" % S.API_VERSION_MINOR)
     w("#define API2_MAX_PAYLOAD  %dU\n\n" % S.MAX_PAYLOAD)
     w("/* categories */\n")
     for c in S.CATEGORIES:
@@ -274,7 +289,7 @@ def gen_py():
     w = o.append
     w('"""%s"""\n' % BANNER)
     w("import struct\n\n")
-    w("API_VERSION = %d\nMAX_PAYLOAD = %d\n\n" % (S.API_VERSION, S.MAX_PAYLOAD))
+    w("API_VERSION = %d\nAPI_VERSION_MINOR = %d\nMAX_PAYLOAD = %d\n\n" % (S.API_VERSION, S.API_VERSION_MINOR, S.MAX_PAYLOAD))
     w("VERBS = {%s}\n" % ", ".join('"%s": %d' % (k, v) for k, v in S.VERB_VALUE.items()))
     for k, v in S.VERB_VALUE.items():
         w("%s = %d\n" % (k, v))
@@ -338,7 +353,8 @@ def md_fields(fl, with_off=True):
         else:
             o_ = str(off)
             off += tsize(f.ctype)
-        rows.append("| %s | %s | `%s` | %s | %s |" % (o_, t, f.name, f.unit, f.doc))
+        doc = f.doc + ((" *(since API %s)*" % f.since) if f.since else "")
+        rows.append("| %s | %s | `%s` | %s | %s |" % (o_, t, f.name, f.unit, doc))
     return "\n".join(rows)
 
 
@@ -346,10 +362,15 @@ def gen_md():
     o = []
     w = o.append
     w("<!-- %s -->\n" % BANNER)
-    w("# Device API v%d -- reference\n\n" % S.API_VERSION)
+    w("# Device API v%d.%d -- reference\n\n" % (S.API_VERSION, S.API_VERSION_MINOR))
     w("Generated from `tools/api_spec.py`. The protocol itself (framing, verbs, status codes, dispatch order, "
       "subscriptions, bulk transfers, the transports) is described in [api-v3-spec.md](api-v3-spec.md); this page lists "
       "every resource.\n\n")
+    w("This is API version **%d.%d** (System IDENTITY reports `api_version` = %d and `api_minor` = %d). Every resource "
+      "lists the version that introduced it in the *Since* column, and a field added to an existing payload later is "
+      "marked *(since API x.y)*; `3.0` is the baseline of the versioning scheme (everything that existed when 3.1 was "
+      "cut). Rules: [api-v3-spec.md](api-v3-spec.md), section 11.\n\n" % (
+          S.API_VERSION, S.API_VERSION_MINOR, S.API_VERSION, S.API_VERSION_MINOR))
     w("Opcode = `[verb:4][category:4][resource:8]`, little-endian on the wire. Every response payload starts with a "
       "status byte; the tables below describe what follows an OK status. Little-endian, IEEE-754 floats. "
       "Largest payload: %d bytes.\n\n" % S.MAX_PAYLOAD)
@@ -360,18 +381,18 @@ def gen_md():
     w("\n")
     for c in S.CATEGORIES:
         w("## %s\n\nCategory 0x%X. Verbs: %s.\n\n%s\n\n" % (c.title, c.id, ", ".join(c.verbs), c.doc))
-        w("| ID | Name | Verbs | Notes |\n|---:|---|---|---|\n")
+        w("| ID | Name | Verbs | Since | Notes |\n|---:|---|---|---|---|\n")
         for r in c.resources:
             note = r.doc.split(". ")[0].rstrip(".")
             if r.kind == "field":
                 note = "%s [%d .. %d%s]" % (note, r.lo, r.hi, (" " + r.unit) if r.unit else "")
-            w("| 0x%02X | %s | %s | %s%s |\n" % (r.id, r.name, ", ".join(r.verbs), note,
-                                                " (service mode)" if r.service else ""))
+            w("| 0x%02X | %s | %s | %s | %s%s |\n" % (r.id, r.name, ", ".join(r.verbs), r.since, note,
+                                                      " (service mode)" if r.service else ""))
         w("\n")
         for r in c.resources:
             w("### %s %s (0x%X/0x%02X)\n\n%s\n\n" % (c.title, r.name, c.id, r.id, r.doc))
-            w("Verbs: %s" % ", ".join("`%s` = 0x%04X" % (v, ((S.VERB_VALUE[v] << 12) | (c.id << 8) | r.id))
-                                      for v in r.verbs))
+            w("Since API %s. Verbs: %s" % (r.since, ", ".join("`%s` = 0x%04X" % (v, ((S.VERB_VALUE[v] << 12) | (c.id << 8) | r.id))
+                                                             for v in r.verbs)))
             if r.service:
                 w(". **Needs service mode** (`SERVICE_MODE_REQUIRED` otherwise; reading is always allowed)")
             if r.sub == "interval":

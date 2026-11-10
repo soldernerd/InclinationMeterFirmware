@@ -143,10 +143,12 @@ class HidReassembler:
 
 # ---------------------------------------------------------------------------------------------- readable forms
 def format_identity(data: bytes):
-    d = decode_system_identity_response(data)
+    has_minor = len(data) >= SIZE_SYSTEM_IDENTITY_RESPONSE      # firmware before 0.15.0 (API 3.0) has no api_minor byte
+    d = decode_system_identity_response(data if has_minor else data + bytes(SIZE_SYSTEM_IDENTITY_RESPONSE - len(data)))
     if d is None:
         return None
-    return (f"fw v{d['fw_major']}.{d['fw_minor']}.{d['fw_patch']}  api v{d['api_version']}  "
+    api = f"{d['api_version']}.{d['api_minor']}" if has_minor else f"{d['api_version']}.0"
+    return (f"fw v{d['fw_major']}.{d['fw_minor']}.{d['fw_patch']}  api v{api}  "
             f"product={d['product']!r}  serial={d['serial']!r}  built {d['build']!r}")
 
 

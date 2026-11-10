@@ -13,6 +13,10 @@ Conventions
   * Wire byte order is little-endian, floats are IEEE-754 binary32.
   * Every response payload starts with a status byte (Api2Status); the layouts below describe what follows it when the
     status is OK.
+  * Versioning (docs/api-v3-spec.md, section 11): API_VERSION is the major, API_VERSION_MINOR the minor part. Every
+    change to the API surface -- a new resource, a new field appended to a payload, a new command or error code --
+    bumps the minor; a wire-incompatible change bumps the major. Every resource and every field added after the 3.0
+    baseline says so with since="3.n"; the generated reference shows it.
   * Resource IDs of state-changing resources (SET / EXECUTE) are >= 0x40 so that a stale v2 client, whose IDs were all
     below 0x40, gets UNKNOWN_RESOURCE instead of triggering something else.
 """
@@ -26,8 +30,10 @@ def S(n):
 
 
 class Field:
-    def __init__(self, ctype, name, doc="", unit=""):
-        self.ctype, self.name, self.doc, self.unit = ctype, name, doc, unit
+    """One payload field. since: the API version that introduced it ("3.1"); None = it came with its resource."""
+
+    def __init__(self, ctype, name, doc="", unit="", since=None):
+        self.ctype, self.name, self.doc, self.unit, self.since = ctype, name, doc, unit, since
 
 
 F = Field
@@ -46,10 +52,13 @@ class Res:
     ev        name of the event-ops table for sub == 'event' (api_ev_<ev>)
     service   True: SET / EXECUTE answer SERVICE_MODE_REQUIRED unless service mode is active (see api-v3-spec.md,
               section 5a); GET and the other verbs are never gated
+    since     the API version that introduced the resource ("3.0" = the baseline of this versioning scheme: everything
+              that existed when 3.1 was cut; the history before that is not broken down)
     """
 
     def __init__(self, name, rid, verbs, doc, rsp=None, req=None, req_len=None, push=None,
-                 sub=None, sub_req=None, ev=None, service=False):
+                 sub=None, sub_req=None, ev=None, service=False, since="3.0"):
+        self.since = since
         self.service = service
         self.name, self.id, self.verbs, self.doc = name, rid, tuple(verbs), doc
         self.rsp, self.req, self.req_len, self.push = rsp, req, req_len, push
@@ -61,9 +70,9 @@ class Res:
 class FieldRes(Res):
     """A GET/SET resource backed by one DeviceSettings member (generic handler, bounds checked)."""
 
-    def __init__(self, name, rid, ctype, field, lo, hi, doc, unit="", check=None, after=None, service=False):
+    def __init__(self, name, rid, ctype, field, lo, hi, doc, unit="", check=None, after=None, service=False, since="3.0"):
         super().__init__(name, rid, ("GET", "SET"), doc, rsp=[F(ctype, "value", doc, unit)],
-                         req=[F(ctype, "value", doc, unit)], service=service)
+                         req=[F(ctype, "value", doc, unit)], service=service, since=since)
         self.kind = "field"
         self.ctype, self.field, self.lo, self.hi = ctype, field, lo, hi
         self.check, self.after, self.unit = check, after, unit
@@ -86,11 +95,15 @@ SYSTEM = Cat(0x0, "SYSTEM", "System", (GET, SET),
   "Identity, live device state, health and the real-time clock. Read-only except the RTC.", [
   Res("IDENTITY", 0x00, (GET,), "Who and what is this: firmware, protocol version, serial number.",
       rsp=[F(U8, "fw_major"), F(U8, "fw_minor"), F(U8, "fw_patch"),
-           F(U8, "api_version", "protocol version, 3"),
+           F(U8, "api_version", "protocol version, major part (3): changes only for a wire-incompatible redesign"),
            F(U16, "max_payload", "largest payload any packet may carry (122)", "B"),
            F(S(16), "product"), F(S(8), "serial", "8 hex digits of the factory UID, identical to the USB serial"),
            F(S(20), "build", "build id: the git commit the firmware was built from (8 hex digits), '-dirty' appended if the "
-                       "working tree had uncommitted changes, 'nogit' for a build from a source archive")]),
+                       "working tree had uncommitted changes, 'nogit' for a build from a source archive"),
+           F(U8, "api_minor", "protocol version, minor part: grows with every compatible addition to the API (a new resource or "
+                              "field). A client written for 3.n works with every 3.m, m >= n, but only sees the features up to "
+                              "its own n. Firmware that predates it (before 0.15.0) sends a payload without this byte",
+             since="3.1")]),
   Res("STATE", 0x01, (GET,), "Live state: battery, connections, charging, rails and which activities are running. "
       "Also available as the periodic topic STATUS.",
       rsp=[F(U8, "battery_state", "0 normal, 1 low, 2 critical, 3 charging, 4 full"),
@@ -453,4 +466,5 @@ CATEGORIES = [SYSTEM, COMMANDS, CALIBRATIONS, SETTINGS, MEASUREMENTS, TOPICS, DE
 MAX_PAYLOAD = 122
 # RTC SET etc. use the request fields; topics push [issue_seq][page] before the payload.
 PUSH_PREFIX = 2
-API_VERSION = 3
+API_VERSION = 3          # major
+API_VERSION_MINOR = 1    # minor; see the docstring and docs/api-v3-spec.md, section 11

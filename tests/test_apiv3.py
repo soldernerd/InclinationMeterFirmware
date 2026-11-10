@@ -74,6 +74,44 @@ class Framing(unittest.TestCase):
         self.assertEqual([o[0] for o in out], [a.OP_TOPICS_LIVE_GET, a.OP_SYSTEM_STATE_GET])
 
 
+class Versioning(unittest.TestCase):
+    def test_the_version_is_major_dot_minor_and_the_generated_constants_agree(self):
+        self.assertEqual((a.API_VERSION, a.API_VERSION_MINOR), (spec.API_VERSION, spec.API_VERSION_MINOR))
+        self.assertEqual((spec.API_VERSION, spec.API_VERSION_MINOR), (3, 1))
+
+    def test_identity_ends_with_the_minor_version_and_an_older_payload_reads_as_x_0(self):
+        ident = next(r for r in spec.SYSTEM.resources if r.name == "IDENTITY")
+        self.assertEqual([f.name for f in ident.rsp][3], "api_version")
+        self.assertEqual(ident.rsp[-1].name, "api_minor")
+        self.assertEqual(ident.rsp[-1].since, "3.1")
+        raw = struct.pack(a.FMT_SYSTEM_IDENTITY_RESPONSE, 0, 15, 0, 3, 122, b"prod", b"ABCD0123", b"deadbeef", 1)
+        self.assertEqual(len(raw), a.SIZE_SYSTEM_IDENTITY_RESPONSE)
+        self.assertEqual(raw[-1], 1)
+        self.assertIn("api v3.1", a.format_identity(raw))
+        self.assertIn("api v3.0", a.format_identity(raw[:-1]))       # firmware before 0.15.0
+
+    def test_every_since_is_a_valid_version_not_newer_than_the_api(self):
+        cur = (spec.API_VERSION, spec.API_VERSION_MINOR)
+        def parse(s):
+            ma, mi = s.split("."); return (int(ma), int(mi))
+        n_new = 0
+        for cat in spec.CATEGORIES:
+            for r in cat.resources:
+                self.assertLessEqual(parse(r.since), cur, r.name)
+                for fl in (r.rsp, r.req, r.push, r.sub_req):
+                    for f in fl or []:
+                        if f.since is not None:
+                            self.assertLessEqual(parse(f.since), cur, f.name)
+                            n_new += 1
+        self.assertGreaterEqual(n_new, 1)                            # api_minor itself
+
+    def test_the_reference_shows_the_version_and_the_since_marks(self):
+        md = open(os.path.join(REPO, "docs", "api-reference.md"), encoding="utf-8").read()
+        self.assertIn("# Device API v3.1 -- reference", md)
+        self.assertIn("| Since |", md)
+        self.assertIn("(since API 3.1)", md)
+
+
 class Generated(unittest.TestCase):
     def test_opcodes_are_unique_and_follow_the_layout(self):
         seen = {}

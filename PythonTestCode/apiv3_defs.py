@@ -2,6 +2,7 @@
 import struct
 
 API_VERSION = 3
+API_VERSION_MINOR = 1
 MAX_PAYLOAD = 122
 
 VERBS = {"GET": 0, "SET": 1, "EXECUTE": 2, "SUBSCRIBE": 3, "UNSUBSCRIBE": 4, "START_BULK": 5, "CANCEL_BULK": 6}
@@ -291,9 +292,9 @@ OP_PROCEDURES_PRECISION_SUBSCRIBE = opcode(SUBSCRIBE, CAT_PROCEDURES, RES_PROCED
 OP_PROCEDURES_PRECISION_UNSUBSCRIBE = opcode(UNSUBSCRIBE, CAT_PROCEDURES, RES_PROCEDURES_PRECISION)
 
 
-FMT_SYSTEM_IDENTITY_RESPONSE = '<BBBBH16s8s20s'
+FMT_SYSTEM_IDENTITY_RESPONSE = '<BBBBH16s8s20sB'
 SIZE_SYSTEM_IDENTITY_RESPONSE = struct.calcsize(FMT_SYSTEM_IDENTITY_RESPONSE)
-FIELDS_SYSTEM_IDENTITY_RESPONSE = ('fw_major', 'fw_minor', 'fw_patch', 'api_version', 'max_payload', 'product', 'serial', 'build', )
+FIELDS_SYSTEM_IDENTITY_RESPONSE = ('fw_major', 'fw_minor', 'fw_patch', 'api_version', 'max_payload', 'product', 'serial', 'build', 'api_minor', )
 def decode_system_identity_response(data):
     if len(data) < SIZE_SYSTEM_IDENTITY_RESPONSE:
         return None

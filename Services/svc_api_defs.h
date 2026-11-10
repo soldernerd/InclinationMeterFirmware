@@ -6,7 +6,8 @@
 #include <stdbool.h>
 #include "svc_api_core.h"
 
-#define API2_VERSION      3U
+#define API2_VERSION      3U   /* major */
+#define API2_VERSION_MINOR 1U
 #define API2_MAX_PAYLOAD  122U
 
 /* categories */
@@ -294,8 +295,9 @@ typedef struct {
     char     product[16];
     char     serial[8];
     char     build[20];
+    uint8_t  api_minor;
 } __attribute__((packed)) Api2SystemIdentityResponse;
-_Static_assert(sizeof(Api2SystemIdentityResponse) == 50U, "Api2SystemIdentityResponse layout");
+_Static_assert(sizeof(Api2SystemIdentityResponse) == 51U, "Api2SystemIdentityResponse layout");
 typedef struct {
     uint8_t  battery_state;
     uint8_t  battery_soc_pct;

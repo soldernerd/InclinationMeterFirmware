@@ -6,7 +6,8 @@ with its opcode, request and response layout; it is generated from `tools/api_sp
 also produces the firmware's ID definitions and tables and the host-side constants (`PythonTestCode/apiv3_defs.py`).
 
 v3 keeps the v2 framing and CRC and regroups the resources; it is a deliberate, one-time break with v2 (section 9 maps
-every v2 resource to its v3 place). A client can tell: System IDENTITY reports `api_version = 3`.
+every v2 resource to its v3 place). A client can tell: System IDENTITY reports `api_version = 3` and, since API 3.1,
+`api_minor`; section 11 says what the two numbers promise.
 
 ---
 
@@ -219,6 +220,31 @@ reserve for responses).
 2. `python tools/gen_api.py` regenerates `Services/svc_api_defs.h`, `Services/svc_api_tables.c`,
    `PythonTestCode/apiv3_defs.py`, `docs/api-reference.md` and `tests/api_handler_stubs.inc`. `--check` (run by the
    tests' `make`) fails when a committed file is out of date.
-3. Write the handler `api_h_<category>_<resource>` in `Services/svc_api_res_*.c` (a missing one is a link error).
+3. Bump `API_VERSION_MINOR` (and mention it in the changelog) and mark the new resource (`since="3.n"`) or the field added to an
+   existing payload (`F(..., since="3.n")`); section 11 says when. The generated reference shows the *Since* column.
+3a. Write the handler `api_h_<category>_<resource>` in `Services/svc_api_res_*.c` (a missing one is a link error).
    Settings and calibrations are rows in the spec and need no code except an optional cross-field check.
 4. `tests/test_api_tables.c` exercises every generated row.
+
+## 11. Versioning
+
+The API version is **major.minor**, reported by System IDENTITY as `api_version` (major) and `api_minor` (minor, appended
+at the end of the payload in 3.1; firmware before 0.15.0 sends a payload without it, which a client reads as 3.0). It is
+independent of the firmware version (`fw_major.fw_minor.fw_patch`), which also changes for fixes that do not touch the API.
+
+* **Major** changes only when the wire is incompatible: a client written for 3.x must not talk to 4.x, or needs a separate
+  code path. A fundamentally different design is 4.0.
+* **Minor** grows with every change of the API surface that an existing client survives: a new resource, command or
+  error code, a field appended to a payload, a widened range. A client written for 3.n works with every 3.m, m >= n,
+  and simply does not see what came after n. Clients must therefore accept a payload that is longer than the layout they
+  know and must not assume an unknown resource exists (it answers `UNKNOWN_RESOURCE`).
+* A change that breaks existing clients (a reordered field, a different opcode, a changed meaning) is not a minor change.
+  Before firmware 1.0.0 it still happens, and is then announced in the firmware changelog as a break within 3.x (the
+  channel order of 0.13.0 was one); from 1.0.0 on it means a new major.
+* **Since.** Every resource in the generated reference has a *Since* column and every field added to an existing payload
+  after the baseline is marked *(since API x.y)*. **3.0** is the baseline of this scheme: everything that existed when
+  3.1 was cut. The history before that is not broken down; from 3.1 on a feature carries the version that introduced it.
+
+| API | Firmware | Change |
+|---|---|---|
+| 3.1 | 0.15.0 | `api_minor` appended to IDENTITY; this versioning scheme |

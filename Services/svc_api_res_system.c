@@ -45,6 +45,7 @@ Api2Status api_h_system_identity(const ApiResource *r, ApiCall *c)
     p.fw_minor    = (uint8_t)FW_VERSION_MINOR;
     p.fw_patch    = (uint8_t)FW_VERSION_PATCH;
     p.api_version = (uint8_t)API2_VERSION;
+    p.api_minor   = (uint8_t)API2_VERSION_MINOR;
     p.max_payload = (uint16_t)API2_PACKET_MAX_PAYLOAD;
     copy_fixed(p.product, USB_PRODUCT_STR, sizeof p.product);
     /* all three words of the 96-bit factory UID folded to 32 bits (HAL_App/hal_mcu.c): the same value the STATUS
