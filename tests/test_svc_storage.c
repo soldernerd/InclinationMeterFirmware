@@ -355,6 +355,31 @@ TEST(a_displacement_page_of_layout_0x000C_is_migrated_not_reseeded)
     CHECK_EQ(g_device_settings.disp_s1_k_micro, DEFAULT_DISP_S1_K_MICRO);
 }
 
+TEST(a_battery_page_of_layout_0x0006_is_migrated_keeping_its_values)
+{
+    chip_blank();
+    svc_storage_init();
+    const SettingsSection *bp = &s_sections[1];
+    CHECK_EQ(bp->legacy_version, 0x0006);
+    DeviceSettings old = g_device_settings;
+    old.battery_critical_mv = 3450; old.vbat_offset_mv = -83; old.vbat_scale_num = 133; old.charge_full_timeout_min = 45;
+    memset(&g_mem[bp->eeprom_addr], 0xFF, 256);
+    const uint8_t *bytes = (const uint8_t *)&old + bp->offset;
+    build_header(&g_mem[bp->eeprom_addr], 0x0006, math_crc16(bytes, (uint16_t)bp->legacy_size));
+    memcpy(&g_mem[bp->eeprom_addr + HDR_SIZE], bytes, bp->legacy_size);
+
+    ram_reboot();
+    g_warns = 0;
+    svc_storage_init();
+    CHECK_EQ(g_warns, 0);
+    CHECK_EQ(g_device_settings.battery_critical_mv, 3450);
+    CHECK_EQ(g_device_settings.vbat_offset_mv, -83);
+    CHECK_EQ(g_device_settings.vbat_scale_num, 133);
+    CHECK_EQ(g_device_settings.charge_full_timeout_min, 45);
+    CHECK_EQ(g_device_settings.charge_full_soc_pct, DEFAULT_CHARGE_FULL_SOC_PCT);   /* the new field starts at its default */
+    CHECK_EQ((uint16_t)(g_mem[bp->eeprom_addr + 2] | (g_mem[bp->eeprom_addr + 3] << 8)), bp->version);   /* page rewritten */
+}
+
 TEST(a_failed_page_write_is_retried_and_succeeds)
 {
     chip_blank();
@@ -531,6 +556,7 @@ int main(void)
     RUN(only_the_pages_that_changed_are_written);
     RUN(a_burst_of_calibration_writes_is_never_refused_and_all_of_it_is_stored);
     RUN(a_displacement_page_of_layout_0x000C_is_migrated_not_reseeded);
+    RUN(a_battery_page_of_layout_0x0006_is_migrated_keeping_its_values);
     RUN(a_failed_page_write_is_retried_and_succeeds);
     RUN(a_write_that_keeps_failing_gives_up_and_latches_the_failure);
     RUN(an_operation_that_never_finishes_is_aborted_after_the_timeout);

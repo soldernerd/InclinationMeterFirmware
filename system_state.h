@@ -51,6 +51,11 @@ typedef struct {
                                       * Settings 0x1D. Bumped EEPROM_BATTERY_SETTINGS_VERSION
                                       * to 0x0006. */
     uint16_t battery_page_pad;       /* keeps DeviceSettings a multiple of 4 */
+    uint16_t charge_full_soc_pct;    /* SoC reading (percent, voltage based) from which the charge_full_timeout_min timer runs;
+                                      * 50..100. API Settings 0x54. Appended after battery_page_pad so a layout 0x0006
+                                      * page is a byte prefix of the new one and is migrated, not reseeded
+                                      * (EEPROM_BATTERY_SETTINGS_VERSION 0x0007). */
+    uint16_t battery_page_pad2;      /* keeps DeviceSettings a multiple of 4 */
 
     /* --- TMP236 (on-board temp sensor) page --- */
     uint16_t tmp236_seg1_voffs_mv;

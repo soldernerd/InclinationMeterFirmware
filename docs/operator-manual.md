@@ -64,6 +64,8 @@ quiet window appears within 5 s it reports an error and no value -- repeat when 
 ## 5. Power and charging
 
 * Charge by USB. Charging starts when the battery is below 3.70 V; `Force charge` overrides that once.
+* Charging stops by itself once the battery has read at least 97 % (setting `CHARGE_FULL_SOC`, 50..100) for 60 minutes (setting
+  `CHARGE_FULL_TIMEOUT`, 0 = never), so it does not sit at 4.2 V while USB stays connected. It restarts below 3.70 V.
 * The instrument warns at 3.60 V and powers off at 3.40 V (the setting `Battery critical`). It does not power off while USB
   power is present.
 * It sleeps after `Auto power-off` seconds without knob activity. It does not sleep while USB or BLE is connected, while

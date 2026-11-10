@@ -5,6 +5,9 @@ of the wire protocol or the stored settings; the patch number with every build h
 newest first. **Nothing from 0.10.64 on has been bench-tested yet** unless a line says so; the acceptance list for 1.0.0 is
 `docs/release-checklist.md`.
 
+## 0.14.0 - 2026-11-10
+The **state-of-charge threshold of the "stop charging after N minutes at full charge" feature is a setting now**: Settings `CHARGE_FULL_SOC` (0x54, u16, percent, 50..100, default 97, `GET` + `SET`, stored in the battery EEPROM page). Before, 97 % was a compile-time constant. The timer (`CHARGE_FULL_TIMEOUT`, 0x53) runs while the voltage-based SoC reading is at or above this value; a lower reading resets it. Use 100 to run it only at a full reading, which the reading often never reaches while the instrument runs from the battery. The battery page layout is 0x0007 (new field appended); a stored 0x0006 page is **migrated**, so the Vbat offset, scale, thresholds and timeout survive the flash and the new field starts at 97. The SETTINGS-screen row is now labelled "Charge stop". New host tests: threshold respected (50 % and 100 %), 0x0006 page migration.
+
 ## 0.13.1 - 2026-11-10
 Fixes 0.13.0: the **phasor stream** was still sent in the old B, A, S1, S2 byte order while the spec and the generated field names (`iS2 qS2 iB qB iA qA iS1 qS1 seq`) already said ADC order, so a client decoding by name got the signals under the wrong names. Cause: the stream copies the hand-written `DisplacementPhasorEntry` onto the wire, and only its size was checked against the generated struct. The struct now has the ADC order and `svc_api_res_stream.c` asserts every field offset against `Api2TopicsPhasorStreamPush`, so the two cannot drift again. Found by cross-checking the new frames against a raw bulk capture channel by channel; the signal-diagnostics frame was already correct (all four channels matched the capture exactly). Use 0.13.1, not 0.13.0.
 

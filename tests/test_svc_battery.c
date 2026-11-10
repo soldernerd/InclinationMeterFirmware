@@ -68,6 +68,7 @@ static void fresh(void)
     g_device_settings.battery_critical_mv = 3400;
     g_device_settings.battery_low_mv = 3600;
     g_device_settings.battery_charge_start_mv = 3700;
+    g_device_settings.charge_full_soc_pct = 97;
     memset(&g_adc, 0, sizeof g_adc);
     g_ms = 100000u;
     g_standby_calls = g_leave_calls = g_logs = 0;
@@ -265,6 +266,33 @@ TEST(a_full_timeout_of_zero_never_stops_charging_and_the_timer_needs_100_percent
     CHECK(charge_enabled());
 }
 
+TEST(the_full_threshold_is_the_charge_full_soc_pct_setting)
+{
+    /* a lower threshold starts the timer earlier: 4000 mV is below 97 % (see above) but above 50 % */
+    fresh();
+    g_device_settings.charge_full_timeout_min = 2;
+    g_device_settings.charge_full_soc_pct = 50;
+    set_vbus(1);
+    set_vbat(3600);
+    tick(4);
+    set_vbat(4000);
+    tick(100);
+    CHECK(charge_enabled());
+    tick(30);
+    CHECK(!charge_enabled());                                 /* 2 min at >= 50 % */
+
+    /* a threshold of 100 is not reached at 4134 mV (97 %) */
+    fresh();
+    g_device_settings.charge_full_timeout_min = 2;
+    g_device_settings.charge_full_soc_pct = 100;
+    set_vbus(1);
+    set_vbat(3600);
+    tick(4);
+    set_vbat(4134);
+    tick(400);
+    CHECK(charge_enabled());
+}
+
 TEST(a_full_timeout_also_ends_a_forced_charge)
 {
     fresh();
@@ -414,6 +442,7 @@ int main(void)
     RUN(once_started_charging_stays_on_as_the_voltage_rises_until_complete);
     RUN(charging_stops_after_the_full_timeout_at_100_percent_and_restarts_below_the_start_threshold);
     RUN(the_full_timer_runs_from_97_percent_not_only_at_100);
+    RUN(the_full_threshold_is_the_charge_full_soc_pct_setting);
 RUN(a_full_timeout_of_zero_never_stops_charging_and_the_timer_needs_100_percent);
     RUN(a_full_timeout_also_ends_a_forced_charge);
     RUN(force_charge_bypasses_the_threshold_but_not_the_usb_guard);

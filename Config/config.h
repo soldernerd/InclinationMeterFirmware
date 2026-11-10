@@ -66,7 +66,7 @@
  * down into Standby. 0 disables it. EEPROM-backed (battery page), get/set
  * over the API (Settings resource 0x1B) and on the SETTINGS screen. */
 #define DEFAULT_AUTO_POWEROFF_S        300     /* 5 minutes */
-/* Stop charging after this many minutes at a SoC reading of at least CHARGE_FULL_SOC_PCT, or as soon as the TP4056
+/* Stop charging after this many minutes at a SoC reading of at least DEFAULT_CHARGE_FULL_SOC_PCT, or as soon as the TP4056
  * reports STANDBY, whichever comes first (0 = disabled). Added 2026-10-08: with the instrument
  * running from the battery the TP4056 never terminates by itself (its end-of-charge detection
  * sees the board's own load current), so it sat in constant-voltage at ~4.2 V for 20 hours.
@@ -75,10 +75,11 @@
  * stop, charging restarts when Vbat falls below DEFAULT_BATTERY_CHARGE_START_MV. */
 #define DEFAULT_CHARGE_FULL_TIMEOUT_MIN 60
 
-/* SoC (percent, voltage based) from which the above timer runs. 100 % is reached only late in a charge, and with the
+/* Default SoC (percent, voltage based) from which the above timer runs; the live value is the EEPROM-backed setting
+ * DeviceSettings.charge_full_soc_pct (API Settings 0x54, 50..100). 100 % is reached only late in a charge, and with the
  * instrument running from the battery the reading often tops out at 97..99 %, so a 100 % threshold never fired
  * (2026-10-26). 97 % is about 4.13 V. */
-#define CHARGE_FULL_SOC_PCT             97U
+#define DEFAULT_CHARGE_FULL_SOC_PCT     97U
 
 /* --- ADC/sensor scaling calibration (2026-08-17) ---
  * General project rule: no numeric calibration constant lives only in
@@ -154,7 +155,9 @@
                                                      fields — a stored 0x0001 page is
                                                      discarded and reseeded from DEFAULT_*. */
 #define EEPROM_BATTERY_SETTINGS_ADDR      0x0100  /* thresholds + ADC divider scale */
-#define EEPROM_BATTERY_SETTINGS_VERSION   0x0006  /* 0x0006 (2026-10-08): added charge_full_timeout_min
+#define EEPROM_BATTERY_SETTINGS_VERSION   0x0007  /* 0x0007 (2026-11-10): appended charge_full_soc_pct (+ pad); a 0x0006
+                                                     page is migrated (values kept, see svc_storage.c).
+                                                     0x0006 (2026-10-08): added charge_full_timeout_min
                                                      (+ alignment pad), reseeds this page.
                                                      0x0002: added battery_charge_start_mv
                                                      and retuned thresholds (WP2 debug).

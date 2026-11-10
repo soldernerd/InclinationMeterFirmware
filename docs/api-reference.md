@@ -640,7 +640,8 @@ Behaviour: how often tasks run, thresholds, timeouts. Stored in EEPROM; every SE
 | 0x50 | BATTERY_CRITICAL | GET, SET | Below this the instrument powers off (must stay below BATTERY_LOW) [2500 .. 3600 mV] |
 | 0x51 | BATTERY_LOW | GET, SET | Below this the low-battery warning shows (must stay above BATTERY_CRITICAL) [3000 .. 4200 mV] |
 | 0x52 | BATTERY_CHARGE_START | GET, SET | Below this, with USB power present, charging starts [3000 .. 4200 mV] |
-| 0x53 | CHARGE_FULL_TIMEOUT | GET, SET | Stop charging after this long at a state-of-charge reading of 97 % or more, or as soon as the charger reports STANDBY, whichever comes first (0 = never) [0 .. 1440 min] |
+| 0x53 | CHARGE_FULL_TIMEOUT | GET, SET | Stop charging after this long at a state-of-charge reading of CHARGE_FULL_SOC or more, or as soon as the charger reports STANDBY, whichever comes first (0 = never) [0 .. 1440 min] |
+| 0x54 | CHARGE_FULL_SOC | GET, SET | State-of-charge reading (voltage based) from which the CHARGE_FULL_TIMEOUT timer runs [50 .. 100 %] |
 | 0x60 | AUTO_POWEROFF | GET, SET | Idle time with no encoder input before the instrument powers off (0 = never) [0 .. 65535 s] |
 | 0x61 | ENCODER_COUNTS_PER_DETENT | GET, SET | Raw quadrature transitions per mechanical detent of the rotary encoders [1 .. 100] |
 
@@ -710,11 +711,19 @@ Value: `u16` in mV, range 3000 .. 4200. SET answers status only.
 
 ### Settings CHARGE_FULL_TIMEOUT (0x3/0x53)
 
-Stop charging after this long at a state-of-charge reading of 97 % or more, or as soon as the charger reports STANDBY, whichever comes first (0 = never). The charger cannot end a charge by itself while the instrument runs from the battery. Charging restarts below BATTERY_CHARGE_START.
+Stop charging after this long at a state-of-charge reading of CHARGE_FULL_SOC or more, or as soon as the charger reports STANDBY, whichever comes first (0 = never). The charger cannot end a charge by itself while the instrument runs from the battery. Charging restarts below BATTERY_CHARGE_START.
 
 Verbs: `GET` = 0x0353, `SET` = 0x1353
 
 Value: `u16` in min, range 0 .. 1440. SET answers status only.
+
+### Settings CHARGE_FULL_SOC (0x3/0x54)
+
+State-of-charge reading (voltage based) from which the CHARGE_FULL_TIMEOUT timer runs. The reading often tops out at 97..99 % while the instrument runs from the battery, so 100 would never fire; default 97
+
+Verbs: `GET` = 0x0354, `SET` = 0x1354
+
+Value: `u16` in %, range 50 .. 100. SET answers status only.
 
 ### Settings AUTO_POWEROFF (0x3/0x60)
 

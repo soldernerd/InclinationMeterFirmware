@@ -41,6 +41,7 @@ static const ApiFieldDesc k_fields_settings[] = {
     { API2_RES_SETTINGS_BATTERY_LOW, 2, false, offsetof(DeviceSettings, battery_low_mv), 3000LL, 4200LL, api_check_battery_order, 0, true },  /* BATTERY_LOW */
     { API2_RES_SETTINGS_BATTERY_CHARGE_START, 2, false, offsetof(DeviceSettings, battery_charge_start_mv), 3000LL, 4200LL, 0, 0, true },  /* BATTERY_CHARGE_START */
     { API2_RES_SETTINGS_CHARGE_FULL_TIMEOUT, 2, false, offsetof(DeviceSettings, charge_full_timeout_min), 0LL, 1440LL, 0, 0, true },  /* CHARGE_FULL_TIMEOUT */
+    { API2_RES_SETTINGS_CHARGE_FULL_SOC, 2, false, offsetof(DeviceSettings, charge_full_soc_pct), 50LL, 100LL, 0, 0, true },  /* CHARGE_FULL_SOC */
     { API2_RES_SETTINGS_AUTO_POWEROFF, 2, false, offsetof(DeviceSettings, auto_poweroff_s), 0LL, 65535LL, 0, 0, true },  /* AUTO_POWEROFF */
     { API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT, 2, false, offsetof(DeviceSettings, encoder_counts_per_detent), 1LL, 100LL, 0, 0, true },  /* ENCODER_COUNTS_PER_DETENT */
 };
@@ -113,8 +114,9 @@ static const ApiResource k_res_settings[] = {
     { API2_RES_SETTINGS_BATTERY_LOW, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[6], 0, 1, 0 },  /* BATTERY_LOW */
     { API2_RES_SETTINGS_BATTERY_CHARGE_START, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[7], 0, 1, 0 },  /* BATTERY_CHARGE_START */
     { API2_RES_SETTINGS_CHARGE_FULL_TIMEOUT, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[8], 0, 1, 0 },  /* CHARGE_FULL_TIMEOUT */
-    { API2_RES_SETTINGS_AUTO_POWEROFF, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[9], 0, 1, 0 },  /* AUTO_POWEROFF */
-    { API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[10], 0, 1, 0 },  /* ENCODER_COUNTS_PER_DETENT */
+    { API2_RES_SETTINGS_CHARGE_FULL_SOC, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[9], 0, 1, 0 },  /* CHARGE_FULL_SOC */
+    { API2_RES_SETTINGS_AUTO_POWEROFF, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[10], 0, 1, 0 },  /* AUTO_POWEROFF */
+    { API2_RES_SETTINGS_ENCODER_COUNTS_PER_DETENT, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SET), API2_SUB_NONE, 4, 2, 2, api_field_handler, 0, &k_fields_settings[11], 0, 1, 0 },  /* ENCODER_COUNTS_PER_DETENT */
 };
 
 static const ApiResource k_res_measurements[] = {
