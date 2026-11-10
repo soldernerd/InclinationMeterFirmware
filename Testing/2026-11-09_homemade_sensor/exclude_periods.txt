@@ -1,0 +1,3 @@
+# periods (t_s = seconds since collect.py start, 22:26:50 local) to exclude from long-term analysis
+# tap test by user, 2026-11-09 ~23:05-23:09 (taps every ~20 s; S1/S2 clipped during the taps)
+2240 2570

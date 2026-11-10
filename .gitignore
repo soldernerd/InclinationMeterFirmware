@@ -82,4 +82,11 @@ tests/test_golden_displacement
 
 # bench-test data above the 5 MB policy limit (Testing/README.md, "Data policy"); see Testing/large_files.py
 Testing/*/data/large/
+
+# 2026-11-09 home-made sensor run: recorded data stays out of the repo, only the scripts are tracked
+Testing/2026-11-09_homemade_sensor/data/
+Testing/2026-11-09_homemade_sensor/old_clipped/
+Testing/2026-11-09_homemade_sensor/*.npy
+Testing/2026-11-09_homemade_sensor/*.log
+Testing/2026-11-09_homemade_sensor/calibrations_before_*.json
 Testing/2026-09-30_bulk_adc_30s_interval/analysis/quality_tune.npz
