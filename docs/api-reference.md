@@ -73,7 +73,7 @@ Verbs: `GET` = 0x0001
 | 11 | u8 | `demod_running` |  | the tilt demodulation is running |
 | 12 | u8 | `phasor_stream_active` |  | a phasor stream subscription owns the ADC |
 | 13 | u8 | `bulk_active` |  | a bulk transfer is active |
-| 14 | u8 | `service_mode` |  | service mode is active (unlocks the gated commands and calibration writes) |
+| 14 | u8 | `service_mode` |  | the gated commands and calibration writes are unlocked: service mode is active, or the firmware was built with the gate off (then always 1) |
 
 ### System HEALTH (0x0/0x02)
 
@@ -961,7 +961,7 @@ Verbs: `GET` = 0x0501, `SUBSCRIBE` = 0x3501, `UNSUBSCRIBE` = 0x4501. SUBSCRIBE r
 | 11 | u8 | `demod_running` |  | the tilt demodulation is running |
 | 12 | u8 | `phasor_stream_active` |  | a phasor stream subscription owns the ADC |
 | 13 | u8 | `bulk_active` |  | a bulk transfer is active |
-| 14 | u8 | `service_mode` |  | service mode is active (unlocks the gated commands and calibration writes) |
+| 14 | u8 | `service_mode` |  | the gated commands and calibration writes are unlocked: service mode is active, or the firmware was built with the gate off (then always 1) |
 
 ### Topics LIVE (0x5/0x02)
 

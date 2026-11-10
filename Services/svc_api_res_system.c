@@ -70,7 +70,9 @@ static void fill_state(Api2SystemStateResponse *p)
     p->demod_running = svc_displacement_is_running() ? 1U : 0U;
     p->phasor_stream_active = svc_displacement_phasor_stream_active() ? 1U : 0U;
     p->bulk_active          = api_bulk_active() ? 1U : 0U;
-    p->service_mode         = svc_service_active() ? 1U : 0U;
+    /* "writes unlocked": service mode is on, or the gate is compiled off (config.h SERVICE_MODE_REQUIRED 0) and everything is open.
+     * Hosts read this flag to decide whether calibration writes are allowed. */
+    p->service_mode         = api_service_unlocked() ? 1U : 0U;
 }
 
 Api2Status api_h_system_state(const ApiResource *r, ApiCall *c)

@@ -139,7 +139,8 @@ measurement, charging control, power off, reboot, the clock) works without it.
 
 * **Entering** is possible **only on the instrument**: SETTINGS screen, row *Service mode*, press the right knob twice. There
   is no API command that enters it, so a client that is merely in radio range cannot unlock it. System STATE reports the
-  flag (`service_mode`).
+  flag (`service_mode`); it reads 1 when writes are unlocked, which includes a firmware built with the gate off
+  (`SERVICE_MODE_REQUIRED 0`, then always 1), so a host can rely on it to decide whether to offer calibration writes.
 * **Leaving**: the same menu row, or Commands **SERVICE_END** (allowed at any time), or automatically after **10 minutes
   without any API request** (every well-formed request, on any transport, restarts the timer), or when the instrument goes
   to sleep. Nothing is persistent: a reset starts locked.

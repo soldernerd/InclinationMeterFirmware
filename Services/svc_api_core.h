@@ -164,7 +164,7 @@ void     svc_api_clear_counters(void);
 /* ---------------- implemented by the resource side (svc_api_res_*.c) ---------------- */
 void api_res_update(void);                      /* once per svc_api_update(): bulk pump, procedure follow-ups */
 void api_res_request_seen(void);                /* a valid request reached the dispatcher: API activity (service-mode timeout) */
-bool api_service_unlocked(void);                /* service mode is active */
+bool api_service_unlocked(void);                /* service mode is active, or the gate is compiled off (always true then) */
 void api_res_transport_disconnected(ApiTransport t);
 
 #endif /* SVC_API_CORE_H */
