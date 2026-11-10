@@ -5,6 +5,7 @@
 #include "svc_log.h"
 #include "svc_service.h"
 #include <string.h>
+#include <stddef.h>
 
 /* API streams: the debug log, the gapless phasor stream and the raw-ADC bulk transfer, plus the periodic hook the
  * dispatcher calls (api_res_update). */
@@ -191,7 +192,19 @@ static bool phasor_poll(const ApiResource *r, ApiTransport t, ApiSub *s, uint8_t
     if (!svc_displacement_phasor_stream_peek(&e)) {
         return false;
     }
+    /* The entry is copied onto the wire as it is: every field must sit where the generated wire struct has it (a size check alone let
+     * the order drift from the spec once -- fw 0.13.0 sent the old B, A, S1, S2 order under the new field names). */
     _Static_assert(sizeof e == sizeof(Api2TopicsPhasorStreamPush), "phasor entry layout == wire layout");
+    _Static_assert(offsetof(DisplacementPhasorEntry, iS2) == offsetof(Api2TopicsPhasorStreamPush, iS2)
+                   && offsetof(DisplacementPhasorEntry, qS2) == offsetof(Api2TopicsPhasorStreamPush, qS2)
+                   && offsetof(DisplacementPhasorEntry, iB)  == offsetof(Api2TopicsPhasorStreamPush, iB)
+                   && offsetof(DisplacementPhasorEntry, qB)  == offsetof(Api2TopicsPhasorStreamPush, qB)
+                   && offsetof(DisplacementPhasorEntry, iA)  == offsetof(Api2TopicsPhasorStreamPush, iA)
+                   && offsetof(DisplacementPhasorEntry, qA)  == offsetof(Api2TopicsPhasorStreamPush, qA)
+                   && offsetof(DisplacementPhasorEntry, iS1) == offsetof(Api2TopicsPhasorStreamPush, iS1)
+                   && offsetof(DisplacementPhasorEntry, qS1) == offsetof(Api2TopicsPhasorStreamPush, qS1)
+                   && offsetof(DisplacementPhasorEntry, seq) == offsetof(Api2TopicsPhasorStreamPush, seq),
+                   "phasor entry field order == wire field order");
     memcpy(out, &e, sizeof e);
     *len = (uint16_t)sizeof e;
     svc_displacement_phasor_stream_consume();   /* handed over: the frame is built, the ring decides about space */

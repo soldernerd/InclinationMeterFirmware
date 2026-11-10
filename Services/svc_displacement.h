@@ -321,12 +321,14 @@ void svc_displacement_last_capture(uint16_t *samples, uint16_t *drops,
                                     uint32_t *elapsed_ms);
 
 /* One batch's raw phasors as the continuous phasor stream carries them
- * (API Topic 0x05 / resource 0x05); 34 bytes on the wire. */
+ * (API Topic 0x04 / PHASOR_STREAM); 34 bytes on the wire. The struct IS the wire layout (it is copied byte for byte), so its field
+ * order is the ADC channel order S2, B, A, S1 (docs/channel-map.md); svc_api_res_stream.c asserts every offset against the
+ * generated Api2TopicsPhasorStreamPush. */
 typedef struct {
+    float    iS2, qS2;
     float    iB, qB;
     float    iA, qA;
     float    iS1, qS1;
-    float    iS2, qS2;
     uint16_t seq;   /* the last raw cycle folded into this batch: a rolling
                        * per-cycle counter (wraps every 65536 cycles, ~25 s), so
                        * compare with modular arithmetic. */
