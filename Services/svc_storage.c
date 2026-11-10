@@ -56,6 +56,8 @@ typedef struct {
     uint16_t version;
     size_t   offset;   /* offsetof(DeviceSettings, <first field in group>) */
     size_t   size;      /* byte span through <last field in group> */
+    uint16_t legacy_version;   /* 0 = none. A page of this layout version, shorter by (size - legacy_size) bytes at the end, is */
+    size_t   legacy_size;      /* MIGRATED (its bytes kept, the new tail fields left at their defaults) instead of reseeded */
 } SettingsSection;
 
 /* offsetof(DeviceSettings, last) + sizeof(that field) - offsetof(DeviceSettings, first) */
@@ -66,25 +68,26 @@ typedef struct {
 static const SettingsSection s_sections[] = {
     { EEPROM_SCHEDULER_SETTINGS_ADDR, EEPROM_SCHEDULER_SETTINGS_VERSION,
       offsetof(DeviceSettings, task_sensors_ms),
-      SECTION_SPAN(task_sensors_ms, task_temperature_ms) },
+      SECTION_SPAN(task_sensors_ms, task_temperature_ms), 0, 0 },
     { EEPROM_BATTERY_SETTINGS_ADDR, EEPROM_BATTERY_SETTINGS_VERSION,
       offsetof(DeviceSettings, battery_critical_mv),
-      SECTION_SPAN(battery_critical_mv, battery_page_pad) },
+      SECTION_SPAN(battery_critical_mv, battery_page_pad), 0, 0 },
     { EEPROM_TMP236_SETTINGS_ADDR, EEPROM_TMP236_SETTINGS_VERSION,
       offsetof(DeviceSettings, tmp236_seg1_voffs_mv),
-      SECTION_SPAN(tmp236_seg1_voffs_mv, tmp236_seg2_tinfl_cdeg) },
+      SECTION_SPAN(tmp236_seg1_voffs_mv, tmp236_seg2_tinfl_cdeg), 0, 0 },
     { EEPROM_LM35_SETTINGS_ADDR, EEPROM_LM35_SETTINGS_VERSION,
       offsetof(DeviceSettings, lm35_scale_mv_per_c),
-      SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c) },
+      SECTION_SPAN(lm35_scale_mv_per_c, lm35_scale_mv_per_c), 0, 0 },
     { EEPROM_ENCODER_SETTINGS_ADDR, EEPROM_ENCODER_SETTINGS_VERSION,
       offsetof(DeviceSettings, encoder_counts_per_detent),
-      SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent) },
+      SECTION_SPAN(encoder_counts_per_detent, encoder_counts_per_detent), 0, 0 },
     { EEPROM_RTC_SETTINGS_ADDR, EEPROM_RTC_SETTINGS_VERSION,
       offsetof(DeviceSettings, rtc_trim_ppm_x10),
-      SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad) },
+      SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad), 0, 0 },
     { EEPROM_DISPLACEMENT_SETTINGS_ADDR, EEPROM_DISPLACEMENT_SETTINGS_VERSION,
       offsetof(DeviceSettings, disp_s1_k_micro),
-      SECTION_SPAN(disp_s1_k_micro, disp_s2_pga) },
+      SECTION_SPAN(disp_s1_k_micro, disp_gain_pad),
+      0x000CU, SECTION_SPAN(disp_s1_k_micro, disp_s2_pga) },   /* layout 0x000C ended at disp_s2_pga */
 };
 #define SETTINGS_SECTION_COUNT  ((uint8_t)(sizeof(s_sections) / sizeof(s_sections[0])))
 
@@ -111,7 +114,7 @@ _Static_assert(offsetof(DeviceSettings, encoder_counts_per_detent) + SECTION_SPA
 _Static_assert(offsetof(DeviceSettings, rtc_trim_ppm_x10) + SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad)
                 == offsetof(DeviceSettings, disp_s1_k_micro),
                 "rtc section must end exactly where displacement section begins");
-_Static_assert(offsetof(DeviceSettings, disp_s1_k_micro) + SECTION_SPAN(disp_s1_k_micro, disp_s2_pga)
+_Static_assert(offsetof(DeviceSettings, disp_s1_k_micro) + SECTION_SPAN(disp_s1_k_micro, disp_gain_pad)
                 == sizeof(DeviceSettings),
                 "displacement section must end exactly at the struct's end");
 
@@ -127,7 +130,7 @@ _Static_assert(HDR_SIZE + SECTION_SPAN(encoder_counts_per_detent, encoder_counts
                "encoder page must fit within its 256-byte EEPROM page budget");
 _Static_assert(HDR_SIZE + SECTION_SPAN(rtc_trim_ppm_x10, rtc_page_pad) <= 0x0100U,
                "rtc page must fit within its 256-byte EEPROM page budget");
-_Static_assert(HDR_SIZE + SECTION_SPAN(disp_s1_k_micro, disp_s2_pga) <= 0x0100U,
+_Static_assert(HDR_SIZE + SECTION_SPAN(disp_s1_k_micro, disp_gain_pad) <= 0x0100U,
                "displacement page must fit within its 256-byte EEPROM page budget");
 
 _Static_assert(EEPROM_SCHEDULER_SETTINGS_ADDR != EEPROM_BATTERY_SETTINGS_ADDR
@@ -161,6 +164,14 @@ static PendingWrite s_pending = {0};
 
 /* Set when svc_storage_init() could not read the chip at all (as opposed to reading garbage): see there. */
 static bool s_eeprom_unreachable = false;
+
+/* Saves are QUEUED, never refused: svc_storage_save_settings() only records where to read from and raises a request;
+ * svc_storage_update() then writes just the pages whose bytes differ from s_shadow (what the EEPROM holds) -- a calibration
+ * write touches one page instead of all seven -- and goes on until nothing differs, so any number of changes made while a
+ * write is running (a host writing k, zero, phase, invert back to back) are coalesced and none is answered "busy". */
+static DeviceSettings         s_shadow;
+static const DeviceSettings  *s_save_src       = 0;
+static bool                   s_save_requested = false;
 
 /* ---------------- defaults ---------------- */
 
@@ -215,6 +226,8 @@ static void fill_default_settings(DeviceSettings *s)
     s->disp_s2_phase_cdeg       = DEFAULT_DISP_S2_PHASE_CDEG;
     s->disp_s1_pga              = DEFAULT_DISP_S1_PGA;
     s->disp_s2_pga              = DEFAULT_DISP_S2_PGA;
+    s->disp_a_pga               = DEFAULT_DISP_A_PGA;
+    s->disp_b_pga               = DEFAULT_DISP_B_PGA;
 }
 
 /* ---------------- header helpers ---------------- */
@@ -310,8 +323,9 @@ static bool blocking_write_block(uint16_t addr, const uint8_t *buf, uint16_t len
  * bytes overwrite a good default, and svc_storage_init()'s reseed path
  * would then compute a CRC over that corruption and persist it as
  * "valid" — the exact bug this ordering exists to prevent. */
-static DrvStatus load_section(const SettingsSection *sec, uint8_t *dest)
+static DrvStatus load_section(const SettingsSection *sec, uint8_t *dest, bool *migrated)
 {
+    *migrated = false;
     uint8_t hdr[HDR_SIZE];
     if (!blocking_read(sec->eeprom_addr, hdr, HDR_SIZE)) return DRV_ERR_COMM;
 
@@ -328,6 +342,15 @@ static DrvStatus load_section(const SettingsSection *sec, uint8_t *dest)
 
     uint16_t calc_crc = math_crc16(tmp, (uint16_t)sec->size);
     if (calc_crc != stored_crc) {
+        /* Not valid at the current size. A page of the immediately preceding layout is shorter (new fields were appended):
+         * if it is intact over ITS size, keep its bytes and leave the new tail at the default the caller seeded --
+         * the stored calibrations survive a layout change that only appends. The caller persists the migrated page. */
+        if (sec->legacy_version != 0U && version == sec->legacy_version
+            && math_crc16(tmp, (uint16_t)sec->legacy_size) == stored_crc) {
+            memcpy(dest, tmp, sec->legacy_size);
+            *migrated = true;
+            return DRV_OK;
+        }
         return DRV_ERR_INVALID;         /* corrupt — dest untouched */
     }
     if (version != sec->version) {
@@ -426,18 +449,27 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *settings)
 {
     if (settings == 0)     return DRV_ERR_INVALID;
     if (s_eeprom_unreachable) return DRV_ERR_COMM;     /* booted without being able to read the chip: never overwrite it */
-    if (s_pending.active)  return DRV_ERR_NOT_READY;
 
-    s_pending.is_settings_save = true;
-    s_pending.settings_src     = settings;
-    s_pending.active           = true;
-    start_section_write(settings, 0);
+    s_save_src       = settings;     /* must stay valid until svc_storage_is_busy() is false (callers pass &g_device_settings) */
+    s_save_requested = true;
     return DRV_OK;
 }
 
 bool svc_storage_is_busy(void)
 {
-    return s_pending.active;
+    return s_pending.active || s_save_requested;
+}
+
+/* Index of the first section at or after `from` whose bytes in `src` differ from what the EEPROM holds, or -1. */
+static int next_dirty_section(const DeviceSettings *src, uint8_t from)
+{
+    for (uint8_t i = from; i < SETTINGS_SECTION_COUNT; ++i) {
+        const SettingsSection *sec = &s_sections[i];
+        if (memcmp((const uint8_t *)src + sec->offset, (const uint8_t *)&s_shadow + sec->offset, sec->size) != 0) {
+            return (int)i;
+        }
+    }
+    return -1;
 }
 
 void svc_storage_update(void)
@@ -447,6 +479,18 @@ void svc_storage_update(void)
     drv_24lc256_update();
 
     if (!s_pending.active) {
+        if (!s_save_requested) {
+            return;
+        }
+        int first = next_dirty_section(s_save_src, 0);
+        if (first < 0) {
+            s_save_requested = false;       /* everything requested is on the chip */
+            return;
+        }
+        s_pending.is_settings_save = true;
+        s_pending.settings_src     = s_save_src;
+        s_pending.active           = true;
+        start_section_write(s_save_src, (uint8_t)first);
         return;
     }
     if (drv_24lc256_is_busy()) {
@@ -499,6 +543,7 @@ void svc_storage_update(void)
             s_pending.active       = false;
             s_pending.inflight_len = 0U;
             s_pending.retry_count  = 0U;
+            s_save_requested       = false;   /* no retry storm against a failing chip; the next save request tries again */
             return;
         }
     }
@@ -507,10 +552,16 @@ void svc_storage_update(void)
         /* Current page fully written. A settings save still has more
          * pages to go — arm the next one and let the following tick
          * pick it up, rather than recursing. */
-        if (s_pending.is_settings_save
-            && (uint8_t)(s_pending.section_idx + 1U) < SETTINGS_SECTION_COUNT) {
-            start_section_write(s_pending.settings_src, (uint8_t)(s_pending.section_idx + 1U));
-            return;
+        {
+            const SettingsSection *done = &s_sections[s_pending.section_idx];
+            memcpy((uint8_t *)&s_shadow + done->offset, &s_pending.buf[HDR_SIZE], done->size);   /* the chip now holds these bytes */
+        }
+        if (s_pending.is_settings_save) {
+            int nxt = next_dirty_section(s_pending.settings_src, (uint8_t)(s_pending.section_idx + 1U));
+            if (nxt >= 0) {
+                start_section_write(s_pending.settings_src, (uint8_t)nxt);
+                return;
+            }
         }
         /* The whole write genuinely finished — all settings pages — the
          * authoritative "did it really succeed" point, as opposed to
@@ -536,6 +587,10 @@ void svc_storage_init(void)
 {
     drv_24lc256_init();
     s_eeprom_unreachable = false;
+    s_pending.active     = false;
+    s_save_requested     = false;
+    s_save_src           = 0;
+    memset(&s_shadow, 0, sizeof s_shadow);   /* "the chip holds nothing known yet": every page not confirmed below counts as dirty */
 
     /* Prove the EEPROM write path end-to-end before relying on it below. */
     run_eeprom_selftest();
@@ -549,7 +604,23 @@ void svc_storage_init(void)
     for (uint8_t i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
         const SettingsSection *sec = &s_sections[i];
         uint8_t *dest = (uint8_t *)&g_device_settings + sec->offset;
-        DrvStatus rc = load_section(sec, dest);
+        bool migrated = false;
+        DrvStatus rc = load_section(sec, dest, &migrated);
+        if (rc == DRV_OK && !migrated) {
+            memcpy((uint8_t *)&s_shadow + sec->offset, dest, sec->size);   /* the chip holds exactly this */
+        }
+        if (rc == DRV_OK && migrated) {
+            svc_logf(API2_LOG_INFO, "storage: settings page %u migrated from layout 0x%04X, values kept",
+                     (unsigned)i, (unsigned)sec->legacy_version);
+            uint8_t mbuf[HDR_SIZE + sizeof(DeviceSettings)];
+            build_header(mbuf, sec->version, math_crc16(dest, (uint16_t)sec->size));
+            memcpy(&mbuf[HDR_SIZE], dest, sec->size);
+            if (blocking_write_block(sec->eeprom_addr, mbuf, (uint16_t)(HDR_SIZE + sec->size))) {
+                memcpy((uint8_t *)&s_shadow + sec->offset, dest, sec->size);
+            } else {
+                g_system_state.settings_save_failed = true;   /* retried at the next save; RAM holds the migrated values */
+            }
+        }
         if (rc == DRV_ERR_COMM) {
             /* The chip could not be READ (stuck bus, loose connector): that says nothing about what is stored
              * on it, so it must not be reseeded -- writing defaults here would overwrite real calibrations the
@@ -576,7 +647,9 @@ void svc_storage_init(void)
             uint16_t crc = math_crc16(dest, (uint16_t)sec->size);
             build_header(buf, sec->version, crc);
             memcpy(&buf[HDR_SIZE], dest, sec->size);
-            if (!blocking_write_block(sec->eeprom_addr, buf, (uint16_t)(HDR_SIZE + sec->size))) {
+            if (blocking_write_block(sec->eeprom_addr, buf, (uint16_t)(HDR_SIZE + sec->size))) {
+                memcpy((uint8_t *)&s_shadow + sec->offset, dest, sec->size);
+            } else {
                 /* Not silently discarded (CLAUDE.md 7.6) -- g_device_settings
                  * still holds the correct in-RAM default either way, so this
                  * boot runs correctly; only the reseed-to-EEPROM step failed,
@@ -639,9 +712,6 @@ void svc_storage_validate_settings(DeviceSettings *settings)
 
 DrvStatus svc_storage_restore_defaults(void)
 {
-    if (s_pending.active) {
-        return DRV_ERR_NOT_READY;
-    }
     fill_default_settings(&g_device_settings);
     svc_storage_validate_settings(&g_device_settings);
     return svc_storage_save_settings(&g_device_settings);

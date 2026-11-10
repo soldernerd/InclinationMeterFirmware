@@ -267,16 +267,16 @@ TEST(a_set_is_validated_saved_and_only_settings_notify_the_app)
     CHECK_EQ(g_changed, 1);                                          /* calibrations do not notify */
 }
 
-TEST(a_busy_store_or_a_failed_save_is_reported_and_latched)
+TEST(a_set_is_never_refused_because_a_save_is_running_but_a_failed_save_is_reported_and_latched)
 {
     fresh();
     const ApiCategory *cal = cat_by_id(API2_CAT_CALIBRATIONS);
     const ApiResource *r = &cal->res[0];
     const ApiFieldDesc *d = (const ApiFieldDesc *)r->ctx;
     CHECK_EQ(set_field(r, cal->id, d->lo), API2_STATUS_OK);
-    g_storage_busy = true;
-    CHECK_EQ(set_field(r, cal->id, d->hi), API2_STATUS_BUSY_RESOURCE);
-    CHECK_EQ(read_field(d), d->lo);                                  /* nothing changed */
+    g_storage_busy = true;                                           /* an EEPROM save is still running (any transport, e.g. BLE) */
+    CHECK_EQ(set_field(r, cal->id, d->hi), API2_STATUS_OK);          /* the write is applied and queued, not refused */
+    CHECK_EQ(read_field(d), d->hi);
     g_storage_busy = false;
     g_save_fails = true;
     CHECK_EQ(set_field(r, cal->id, d->hi), API2_STATUS_BUSY_RESOURCE);
@@ -423,7 +423,7 @@ int main(void)
     RUN(every_field_resource_reads_back_what_is_stored_and_rejects_the_wrong_length);
     RUN(every_field_accepts_both_bounds_and_refuses_one_step_outside);
     RUN(a_set_is_validated_saved_and_only_settings_notify_the_app);
-    RUN(a_busy_store_or_a_failed_save_is_reported_and_latched);
+    RUN(a_set_is_never_refused_because_a_save_is_running_but_a_failed_save_is_reported_and_latched);
     RUN(the_battery_thresholds_keep_critical_below_low);
     RUN(a_new_rtc_trim_is_applied_at_once_but_only_when_it_was_stored);
     RUN(selected_resources_have_the_documented_verbs_and_lengths);

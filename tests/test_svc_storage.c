@@ -91,6 +91,7 @@ static void chip_blank(void)
     memset(&g_system_state, 0, sizeof g_system_state);
     memset(&s_pending, 0, sizeof s_pending);
     s_busy_seen = false;
+    s_save_requested = false; s_save_src = 0; memset(&s_shadow, 0, sizeof s_shadow);
 }
 
 static void pump_until_idle(int max_ms)
@@ -232,16 +233,126 @@ TEST(a_flipped_bit_in_one_page_reseeds_only_that_page)
     CHECK_EQ(g_device_settings.disp_s2_k_micro, DEFAULT_DISP_S2_K_MICRO);
 }
 
-TEST(a_save_while_one_is_running_is_refused_not_mixed)
+TEST(a_save_requested_while_one_is_running_is_accepted_and_coalesced)
 {
     chip_blank();
     svc_storage_init();
     g_delay_updates = 3;
+    g_device_settings.disp_s1_zero_ppm = 111;
     CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);
     CHECK(svc_storage_is_busy());
-    CHECK(svc_storage_save_settings(&g_device_settings) != DRV_OK);
+    for (int i = 0; i < 6; ++i) { g_ms++; svc_storage_update(); }          /* the first write is under way ... */
+    g_device_settings.disp_s1_zero_ppm = 222;                              /* ... and the host writes again */
+    g_device_settings.disp_s1_phase_cdeg = -333;
+    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);       /* never refused */
     pump_until_idle(5000);
     CHECK(!svc_storage_is_busy());
+    CHECK(!g_system_state.settings_save_failed);
+    DeviceSettings want = g_device_settings;
+    ram_reboot();
+    svc_storage_init();
+    CHECK(memcmp(&g_device_settings, &want, sizeof want) == 0);            /* the LAST values are what is stored */
+    CHECK_EQ(g_device_settings.disp_s1_zero_ppm, 222);
+    CHECK_EQ(g_device_settings.disp_s1_phase_cdeg, -333);
+}
+
+TEST(only_the_pages_that_changed_are_written)
+{
+    chip_blank();
+    svc_storage_init();
+    static uint8_t before[EEPROM_TOTAL_BYTES];
+    memcpy(before, g_mem, sizeof before);
+    g_writes = 0;
+    g_device_settings.disp_s1_phase_cdeg = 1234;
+    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);
+    pump_until_idle(2000);
+    const SettingsSection *dp = section_of(&g_device_settings.disp_s1_phase_cdeg);
+    CHECK(g_writes <= 3);                                                  /* one page is 2 chunks at most, not seven pages */
+    for (uint8_t i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
+        size_t n = HDR_SIZE + s_sections[i].size;
+        if (&s_sections[i] == dp) CHECK(memcmp(&g_mem[s_sections[i].eeprom_addr], &before[s_sections[i].eeprom_addr], n) != 0);
+        else                      CHECK(memcmp(&g_mem[s_sections[i].eeprom_addr], &before[s_sections[i].eeprom_addr], n) == 0);
+    }
+    g_writes = 0;
+    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);       /* nothing changed: nothing is written */
+    pump_until_idle(2000);
+    CHECK_EQ(g_writes, 0);
+    CHECK(!svc_storage_is_busy());
+}
+
+TEST(a_burst_of_calibration_writes_is_never_refused_and_all_of_it_is_stored)
+{
+    chip_blank();
+    svc_storage_init();
+    g_delay_updates = 4;                                                   /* a slow chip: the saves overlap the next writes */
+    int32_t *k[2]   = { &g_device_settings.disp_s1_k_micro, &g_device_settings.disp_s2_k_micro };
+    int32_t *zero[2] = { &g_device_settings.disp_s1_zero_ppm, &g_device_settings.disp_s2_zero_ppm };
+    int16_t *ph[2]  = { &g_device_settings.disp_s1_phase_cdeg, &g_device_settings.disp_s2_phase_cdeg };
+    for (int s = 0; s < 2; ++s) {
+        *k[s] = 12000 + s;  CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);  g_ms++; svc_storage_update();
+        *zero[s] = -5000 - s; CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK); g_ms++; svc_storage_update();
+        *ph[s] = (int16_t)(-700 - s); CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK); g_ms++; svc_storage_update();
+    }
+    g_device_settings.disp_s1_invert = 1;
+    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);
+    pump_until_idle(10000);
+    CHECK(!svc_storage_is_busy());
+    DeviceSettings want = g_device_settings;
+    ram_reboot();
+    svc_storage_init();
+    CHECK(memcmp(&g_device_settings, &want, sizeof want) == 0);
+    CHECK_EQ(g_warns, 0);
+}
+
+TEST(a_displacement_page_of_layout_0x000C_is_migrated_not_reseeded)
+{
+    chip_blank();
+    svc_storage_init();                                                    /* a valid current-layout chip ... */
+    const SettingsSection *dp = &s_sections[SETTINGS_SECTION_COUNT - 1];
+    CHECK_EQ(dp->legacy_version, 0x000C);
+    /* ... then the displacement page is replaced by one in the old layout: shorter, version 0x000C, CRC over the old size */
+    DeviceSettings old = g_device_settings;
+    old.disp_s1_k_micro = 12612; old.disp_s1_zero_ppm = -7733; old.disp_s1_phase_cdeg = -744; old.disp_s1_invert = 1;
+    old.disp_s2_k_micro = 11808; old.disp_s2_zero_ppm = 1688;  old.disp_s2_phase_cdeg = -931; old.disp_s2_invert = 1;
+    old.disp_s1_pga = 4; old.disp_s2_pga = 2;
+    memset(&g_mem[dp->eeprom_addr], 0xFF, 256);
+    const uint8_t *bytes = (const uint8_t *)&old + dp->offset;
+    uint16_t crc = math_crc16(bytes, (uint16_t)dp->legacy_size);
+    build_header(&g_mem[dp->eeprom_addr], 0x000C, crc);
+    memcpy(&g_mem[dp->eeprom_addr + HDR_SIZE], bytes, dp->legacy_size);
+
+    ram_reboot();
+    g_warns = 0;
+    svc_storage_init();
+    CHECK_EQ(g_warns, 0);                                                  /* migrated, not "reseeded to defaults" */
+    CHECK_EQ(g_device_settings.disp_s1_k_micro, 12612);
+    CHECK_EQ(g_device_settings.disp_s1_zero_ppm, -7733);
+    CHECK_EQ(g_device_settings.disp_s1_phase_cdeg, -744);
+    CHECK_EQ(g_device_settings.disp_s1_invert, 1);
+    CHECK_EQ(g_device_settings.disp_s2_k_micro, 11808);
+    CHECK_EQ(g_device_settings.disp_s2_zero_ppm, 1688);
+    CHECK_EQ(g_device_settings.disp_s2_phase_cdeg, -931);
+    CHECK_EQ(g_device_settings.disp_s1_pga, 4);                            /* the S gains were inside the old page */
+    CHECK_EQ(g_device_settings.disp_s2_pga, 2);
+    CHECK_EQ(g_device_settings.disp_a_pga, DEFAULT_DISP_A_PGA);            /* the new fields start at their defaults */
+    CHECK_EQ(g_device_settings.disp_b_pga, DEFAULT_DISP_B_PGA);
+    CHECK_EQ((uint16_t)(g_mem[dp->eeprom_addr + 2] | (g_mem[dp->eeprom_addr + 3] << 8)), dp->version);   /* page rewritten */
+    DeviceSettings mig = g_device_settings;
+    ram_reboot();
+    g_warns = 0;
+    svc_storage_init();                                                    /* and the next boot loads it as a normal page */
+    CHECK_EQ(g_warns, 0);
+    CHECK(memcmp(&g_device_settings, &mig, sizeof mig) == 0);
+
+    /* a corrupt old-layout page is still reseeded, not trusted */
+    ram_reboot();
+    g_mem[dp->eeprom_addr] = 0xA5;
+    build_header(&g_mem[dp->eeprom_addr], 0x000C, (uint16_t)(crc ^ 0x1234U));
+    memcpy(&g_mem[dp->eeprom_addr + HDR_SIZE], bytes, dp->legacy_size);
+    g_warns = 0;
+    svc_storage_init();
+    CHECK(g_warns >= 1);
+    CHECK_EQ(g_device_settings.disp_s1_k_micro, DEFAULT_DISP_S1_K_MICRO);
 }
 
 TEST(a_failed_page_write_is_retried_and_succeeds)
@@ -256,7 +367,7 @@ TEST(a_failed_page_write_is_retried_and_succeeds)
     CHECK(!g_system_state.settings_save_failed);
     const SettingsSection *dp = section_of(&g_device_settings.disp_s1_zero_ppm);
     CHECK_EQ(page_crc_in_mem(dp), math_crc16((const uint8_t *)&g_device_settings + dp->offset, (uint16_t)dp->size));
-    CHECK(g_writes > SETTINGS_SECTION_COUNT);                /* the retries happened */
+    CHECK(g_writes >= 3);                                    /* the retries happened: 2 NAKs + the page's chunks */
 }
 
 TEST(a_write_that_keeps_failing_gives_up_and_latches_the_failure)
@@ -264,12 +375,17 @@ TEST(a_write_that_keeps_failing_gives_up_and_latches_the_failure)
     chip_blank();
     svc_storage_init();
     g_fail_writes = 100;
+    g_device_settings.disp_s1_zero_ppm = 777;                /* a save only writes what changed */
     svc_storage_save_settings(&g_device_settings);
     pump_until_idle(5000);
-    CHECK(!svc_storage_is_busy());                           /* it did not wedge */
+    CHECK(!svc_storage_is_busy());                           /* it did not wedge, and does not retry by itself */
     CHECK(g_system_state.settings_save_failed);
+    int writes_after_giving_up = g_writes;
+    pump_until_idle(100);
+    for (int i = 0; i < 100; ++i) { g_ms++; svc_storage_update(); }
+    CHECK_EQ(g_writes, writes_after_giving_up);              /* no retry storm against a failing chip */
     g_fail_writes = 0;
-    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);   /* and a later save works again */
+    CHECK_EQ(svc_storage_save_settings(&g_device_settings), DRV_OK);   /* and the next request works again (the page is still dirty) */
     pump_until_idle(5000);
     CHECK(!g_system_state.settings_save_failed);             /* success clears the latch */
 }
@@ -280,6 +396,7 @@ TEST(an_operation_that_never_finishes_is_aborted_after_the_timeout)
     svc_storage_init();
     g_aborts = 0;
     g_stuck_ops = 1;                                         /* the first chunk hangs on the bus */
+    g_device_settings.disp_s1_zero_ppm = 888;
     svc_storage_save_settings(&g_device_settings);
     pump_until_idle(5000);
     CHECK(!svc_storage_is_busy());
@@ -287,6 +404,7 @@ TEST(an_operation_that_never_finishes_is_aborted_after_the_timeout)
     CHECK(!g_system_state.settings_save_failed);             /* ... and the retry completed the save */
 
     g_stuck_ops = 100;                                       /* a bus that stays dead */
+    g_device_settings.disp_s1_zero_ppm = 999;
     svc_storage_save_settings(&g_device_settings);
     pump_until_idle(20000);
     CHECK(!svc_storage_is_busy());
@@ -310,9 +428,13 @@ TEST(restore_defaults_overwrites_ram_and_chip)
     svc_storage_init();
     CHECK(memcmp(&g_device_settings, &d, sizeof d) == 0);    /* and persisted */
     g_delay_updates = 5;
+    g_device_settings.disp_s1_k_micro = 5555;
     svc_storage_save_settings(&g_device_settings);
-    CHECK(svc_storage_restore_defaults() != DRV_OK);         /* refused while a save runs */
+    CHECK_EQ(svc_storage_restore_defaults(), DRV_OK);        /* accepted while a save runs: the defaults win */
     pump_until_idle(5000);
+    ram_reboot();
+    svc_storage_init();
+    CHECK(memcmp(&g_device_settings, &d, sizeof d) == 0);
 }
 
 TEST(divisors_and_ranges_are_guarded)
@@ -405,7 +527,10 @@ int main(void)
     RUN(saved_settings_survive_a_reboot_exactly);
     RUN(a_wrong_version_page_is_reseeded_and_the_other_pages_are_untouched);
     RUN(a_flipped_bit_in_one_page_reseeds_only_that_page);
-    RUN(a_save_while_one_is_running_is_refused_not_mixed);
+    RUN(a_save_requested_while_one_is_running_is_accepted_and_coalesced);
+    RUN(only_the_pages_that_changed_are_written);
+    RUN(a_burst_of_calibration_writes_is_never_refused_and_all_of_it_is_stored);
+    RUN(a_displacement_page_of_layout_0x000C_is_migrated_not_reseeded);
     RUN(a_failed_page_write_is_retried_and_succeeds);
     RUN(a_write_that_keeps_failing_gives_up_and_latches_the_failure);
     RUN(an_operation_that_never_finishes_is_aborted_after_the_timeout);

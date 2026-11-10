@@ -143,6 +143,11 @@ typedef struct {
                                       * Took the two reserved pad bytes (same page layout, no version bump); a stored 0
                                       * (page written before this existed) means "default" (DEFAULT_DISP_Sx_PGA). */
     uint8_t disp_s2_pga;
+    /* ADC PGA gain of the excitation channels A (ch2) / B (ch1), same rules (API Calibrations 0x4A / 0x4B). Appended in
+     * displacement-page layout 0x000D; a 0x000C page is migrated by svc_storage.c (its calibrations are kept). */
+    uint8_t disp_a_pga;
+    uint8_t disp_b_pga;
+    uint8_t disp_gain_pad[2];        /* keeps sizeof(DeviceSettings) a multiple of 4 (section asserts in svc_storage.c) */
 } DeviceSettings;
 
 typedef struct {

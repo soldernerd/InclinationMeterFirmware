@@ -191,9 +191,12 @@
                                                          rest of the REV A sensor
                                                          stack; first REV B use of
                                                          this freed page. */
-#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x000C  /* bump on ANY layout/default change of the page (an old
+#define EEPROM_DISPLACEMENT_SETTINGS_VERSION 0x000D  /* bump on ANY layout/default change of the page (an old
                                                          page is then reseeded to defaults and a WARN is
-                                                         logged); version history in docs/decisions.md */
+                                                         logged); version history in docs/decisions.md.
+                                                         0x000D (fw 0.12.0) appended the A / B PGA bytes: a 0x000C
+                                                         page is MIGRATED (calibrations kept), not reseeded -- see
+                                                         svc_storage.c's legacy_version. */
 
 /* --- USB HID (WP4) ---
  * VID 0x04D8 = Microchip Technology. Other soldernerd projects (notably
@@ -428,6 +431,8 @@
 #define DEFAULT_DISP_S2_INVERT                 0
 #define DEFAULT_DISP_S1_PGA                    1    /* ADC PGA of the sensor channels, 1..128 power of two */
 #define DEFAULT_DISP_S2_PGA                    1
+#define DEFAULT_DISP_A_PGA                     1    /* excitation channels A / B: 1 keeps them at ~0.6 V peak of the +-1.2 V range */
+#define DEFAULT_DISP_B_PGA                     1
 /* Phase calibration defaults, centidegrees (docs/signal_processing.tex
  * Sec. 9.1): principal axis of S/D over the 19 h phasor stream of
  * 2026-10-04/05 (S1 -6.0 deg, S2 -9.15 deg). Estimates only -- determine

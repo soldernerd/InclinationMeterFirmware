@@ -37,10 +37,8 @@ Api2Status api_field_handler(const ApiResource *r, ApiCall *c)
         return API2_STATUS_OK;
     }
 
-    /* SET (the core checked the length) */
-    if (svc_storage_is_busy()) {
-        return API2_STATUS_BUSY_RESOURCE;
-    }
+    /* SET (the core checked the length). Never refused because an EEPROM save is running: the value is applied at once
+     * and the save is queued and coalesced (svc_storage.c), so a host may write many values back to back. */
     int64_t val = parse_value(d, c->in);
     if (val < d->lo || val > d->hi) {
         return API2_STATUS_INVALID_PARAMETER;

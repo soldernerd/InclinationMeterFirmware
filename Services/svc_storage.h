@@ -9,13 +9,12 @@
 void      svc_storage_init(void);    /* called at boot — loads or initialises EEPROM */
 void      svc_storage_update(void);  /* call every scheduler tick — drives non-blocking writes */
 
-/* Saves every DeviceSettings page (see config.h's EEPROM_*_SETTINGS_ADDR)
- * in sequence, non-blocking — svc_storage_is_busy() reports true until
- * all pages have been written. `settings` must stay valid for the whole
- * multi-tick operation; the only caller (App/app_ui.c) always passes the
- * persistent &g_device_settings. There is no svc_storage_load_settings()
- * — nothing outside this module needs it; svc_storage_init() loads each
- * page directly. */
+/* Queues a save of `settings` (see config.h's EEPROM_*_SETTINGS_ADDR) and returns at once; it never refuses because a save is
+ * already running. svc_storage_update() writes, in the background, only the pages that differ from what the EEPROM holds, and
+ * keeps going until none does, so several changes made in a row are coalesced. svc_storage_is_busy() is true until every
+ * requested change is on the chip. `settings` must stay valid until then; every caller passes the persistent
+ * &g_device_settings. DRV_ERR_COMM = the chip could not be read at boot, nothing is ever written to it. There is no
+ * svc_storage_load_settings() -- svc_storage_init() loads each page directly. */
 DrvStatus svc_storage_save_settings(const DeviceSettings *settings);
 
 /* Clamps every EEPROM-backed divisor field (encoder_counts_per_detent,
@@ -29,9 +28,9 @@ DrvStatus svc_storage_save_settings(const DeviceSettings *settings);
 void svc_storage_validate_settings(DeviceSettings *settings);
 
 /* Resets EVERY setting and calibration to the compiled defaults (in RAM at once) and saves all pages.
- * DRV_ERR_NOT_READY if a save is already running. Wipes the tilt calibrations. */
+ * Wipes the tilt calibrations. */
 DrvStatus svc_storage_restore_defaults(void);
 
-bool      svc_storage_is_busy(void); /* true while a write operation is in progress */
+bool      svc_storage_is_busy(void); /* true while a requested save is not yet on the chip */
 
 #endif /* SVC_STORAGE_H */
