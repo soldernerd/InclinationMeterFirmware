@@ -248,3 +248,4 @@ independent of the firmware version (`fw_major.fw_minor.fw_patch`), which also c
 | API | Firmware | Change |
 |---|---|---|
 | 3.1 | 0.15.0 | `api_minor` appended to IDENTITY; this versioning scheme |
+| 3.2 | 0.15.1 | Topics `NOISE` (0x06) and Commands `NOISE_RESET` (0x53): noise figures of the raw batch readings |

@@ -120,6 +120,24 @@ Api2Status api_h_topics_signal_diag(const ApiResource *r, ApiCall *c)
     return API2_STATUS_OK;
 }
 
+Api2Status api_h_topics_noise(const ApiResource *r, ApiCall *c)
+{
+    (void)r;
+    DisplacementNoise n;
+    svc_displacement_get_noise(&n);
+    Api2TopicsNoiseResponse p;
+    p.valid          = n.valid ? 1U : 0U;
+    p.floors_ready   = n.floors_ready ? 1U : 0U;
+    p.window_batches = n.window_batches;
+    p.sigma_s1  = n.sigma[0];  p.sigma_s2 = n.sigma[1];  p.sigma_diff = n.sigma[2];
+    p.p2p_s1    = n.p2p[0];    p.p2p_s2   = n.p2p[1];    p.p2p_diff   = n.p2p[2];
+    p.quad_s1   = n.quad_sigma[0];  p.quad_s2  = n.quad_sigma[1];
+    p.floor_s1  = n.floor[0];       p.floor_s2 = n.floor[1];
+    p.step_s1   = n.step[0];        p.step_s2  = n.step[1];
+    API2_REPLY(c, &p);
+    return API2_STATUS_OK;
+}
+
 /* The LIVE topic pushes once per new display value, and once right away on subscribe. s->a = last pushed seq,
  * s->b = 1 once the first push went out. */
 static Api2Status live_start(const ApiResource *r, ApiTransport t, ApiSub *s, const uint8_t *in, uint16_t len)

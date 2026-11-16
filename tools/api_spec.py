@@ -181,6 +181,9 @@ COMMANDS = Cat(0x1, "COMMANDS", "Commands", (EXECUTE,),
   Res("PRECISION", 0x52, (EXECUTE,), "Triggered precision measurement: one reliable value from the first clean 2 s "
       "window within 5 s, else an error. Needs the demodulation running; BUSY_RESOURCE during a zero calibration. "
       "Result: Procedures PRECISION.", req=[F(U8, "action", "0 start, 1 cancel")]),
+  Res("NOISE_RESET", 0x53, (EXECUTE,), since="3.2", doc="Restart the noise window of Topics NOISE (the 10 s window of the raw "
+      "batch readings), so that \"noise since I touched the table\" can be read cleanly. The quiet floors are kept (they "
+      "describe the instrument). Topics NOISE reports `valid` = 0 until the window has filled again (10 s).", req=[]),
   Res("FACTORY_DEFAULTS", 0x60, (EXECUTE,), service=True, doc="Reset ALL settings and calibrations to the compiled defaults and save "
       "them. Wipes the tilt calibrations: use with care.",
       req=[F(U8, "confirm", "must be 0xA5")]),
@@ -392,6 +395,28 @@ TOPICS = Cat(0x5, "TOPICS", "Topics", (GET, SUBSCRIBE, UNSUBSCRIBE),
            F(F32, "phase_deg_a", "A, about 90", "deg"), F(F32, "phase_deg_s1", "S1", "deg"),
            F(F32, "theoretical_tilt_s1", "", "mm/m"), F(F32, "theoretical_tilt_s2", "", "mm/m")],
       sub="interval"),
+  Res("NOISE", 0x06, (GET, SUBSCRIBE, UNSUBSCRIBE), since="3.2", doc=
+      "Noise figures of the RAW, unsmoothed batch readings (about 40.7/s) over a sliding 10 s window "
+      "(407 batches). Unlike anything computed from LIVE, which is smoothed to about 4 Hz, these do not depend on the "
+      "display bandwidth. Everything in mm/m, sign-corrected like the readings: S1, S2 and Diff = S1 - S2. "
+      "`sigma` = sample standard deviation over the window, `p2p` = maximum minus minimum over the window. "
+      "`quad_*` = standard deviation of the quadrature part Im(x) of the sensor ratio on the tilt scale: independent of "
+      "the tilt, so it separates sensor noise from real movement. `floor_*` and `step_*` are the measure the doubtful "
+      "flag uses, in the same unit: the rms of the batch-to-batch step of Im(x), `floor` the instrument's quiet level "
+      "(a running estimate), `step` over the newest 25 batches. A reading is flagged doubtful when "
+      "step > sqrt(6) x floor (about 2.45x). The figures are meaningful only while `valid` = 1: the window is full "
+      "(false for 10 s after a start, a gap in the batch series, a degenerate batch or Commands NOISE_RESET; then "
+      "`window_batches` says how far it has filled). `floors_ready` = 0 until the quiet floor rests on two "
+      "independent windows (then floor and step read 0). Needs the demodulation running. SUBSCRIBE about once a second.",
+      rsp=[F(U8, "valid", "the 10 s window is full"),
+           F(U8, "floors_ready", "the quiet floors are established (floor_*, step_* valid)"),
+           F(U16, "window_batches", "batches the figures are based on (407 when valid)"),
+           F(F32, "sigma_s1", "", "mm/m"), F(F32, "sigma_s2", "", "mm/m"), F(F32, "sigma_diff", "S1 - S2", "mm/m"),
+           F(F32, "p2p_s1", "", "mm/m"), F(F32, "p2p_s2", "", "mm/m"), F(F32, "p2p_diff", "", "mm/m"),
+           F(F32, "quad_s1", "quadrature noise, standard deviation", "mm/m"), F(F32, "quad_s2", "", "mm/m"),
+           F(F32, "floor_s1", "quiet floor of the Im(x) step, rms", "mm/m"), F(F32, "floor_s2", "", "mm/m"),
+           F(F32, "step_s1", "Im(x) step, rms over the newest 25 batches", "mm/m"), F(F32, "step_s2", "", "mm/m")],
+      sub="interval"),
 ])
 
 DEBUG = Cat(0x6, "DEBUG", "Debug log", (SUBSCRIBE, UNSUBSCRIBE),
@@ -467,4 +492,4 @@ MAX_PAYLOAD = 122
 # RTC SET etc. use the request fields; topics push [issue_seq][page] before the payload.
 PUSH_PREFIX = 2
 API_VERSION = 3          # major
-API_VERSION_MINOR = 1    # minor; see the docstring and docs/api-v3-spec.md, section 11
+API_VERSION_MINOR = 2    # minor; see the docstring and docs/api-v3-spec.md, section 11

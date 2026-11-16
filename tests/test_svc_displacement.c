@@ -43,6 +43,7 @@ void svc_logf(Api2LogSeverity s, const char *f, ...) { (void)s; (void)f; }
 #include "../Math/math_window.c"
 #include "../Math/math_displacement.c"
 #include "../Math/math_quality.c"
+#include "../Math/math_noise.c"
 #include "../Services/svc_displacement.c"
 #include "../Services/svc_disp_capture.c"
 #include "../Services/svc_disp_phasor_stream.c"
@@ -343,6 +344,109 @@ TEST(a_dropped_batch_restarts_the_precision_window)
     CHECK_EQ(svc_displacement_precision_get_phase(), DISP_PRECISION_DONE);
 }
 
+/* ---------------- noise figures (API Topics NOISE) ---------------- */
+TEST(the_noise_window_fills_in_10_s_and_a_steady_signal_has_no_noise)
+{
+    fresh();
+    DisplacementNoise n;
+    feed(MATH_NOISE_LEN - 1U, 0.0125, -0.03);
+    svc_displacement_get_noise(&n);
+    CHECK(!n.valid);
+    CHECK_EQ(n.window_batches, MATH_NOISE_LEN - 1U);
+    feed(1, 0.0125, -0.03);
+    svc_displacement_get_noise(&n);
+    CHECK(n.valid);
+    CHECK_EQ(n.window_batches, MATH_NOISE_LEN);
+    for (int i = 0; i < 3; ++i) { CHECK(n.sigma[i] < 1e-6f && n.p2p[i] < 1e-6f); }
+    CHECK(n.quad_sigma[0] < 1e-6f && n.quad_sigma[1] < 1e-6f);
+}
+
+TEST(sigma_and_p2p_report_the_raw_readings_of_each_sensor_and_the_difference)
+{
+    fresh();
+    const double a = 0.004;
+    for (unsigned i = 0; i < MATH_NOISE_LEN; ++i) {
+        feed_batch(0.02 + ((i & 1U) ? a : -a), -0.01);       /* only S1 is noisy */
+    }
+    DisplacementNoise n;
+    svc_displacement_get_noise(&n);
+    CHECK(n.valid);
+    const float k = sqrtf((float)MATH_NOISE_LEN / (float)(MATH_NOISE_LEN - 1U));
+    NEAR(n.sigma[0], a * k, 2e-5);
+    NEAR(n.sigma[1], 0.0, 1e-5);
+    NEAR(n.sigma[2], a * k, 2e-5);                           /* Diff follows S1 */
+    NEAR(n.p2p[0], 2.0 * a, 3e-5);
+    NEAR(n.p2p[2], 2.0 * a, 3e-5);
+}
+
+TEST(the_difference_uses_the_sign_corrected_readings)
+{
+    /* both sensors wobble in step: S1 - S2 cancels it; with S2 inverted the reported S2 is -S2, so the difference doubles it */
+    for (int inv = 0; inv < 2; ++inv) {
+        fresh();
+        g_device_settings.disp_s2_invert = (uint8_t)inv;
+        const double a = 0.004;
+        for (unsigned i = 0; i < MATH_NOISE_LEN; ++i) {
+            double w = (i & 1U) ? a : -a;
+            feed_batch(0.02 + w, 0.01 + w);
+        }
+        DisplacementNoise n;
+        svc_displacement_get_noise(&n);
+        CHECK(n.valid);
+        const float k = sqrtf((float)MATH_NOISE_LEN / (float)(MATH_NOISE_LEN - 1U));
+        NEAR(n.sigma[0], a * k, 2e-5);
+        NEAR(n.sigma[1], a * k, 2e-5);
+        NEAR(n.sigma[2], inv ? 2.0 * a * k : 0.0, 4e-5);
+    }
+}
+
+TEST(quadrature_noise_is_independent_of_the_tilt_and_floor_and_step_use_the_flag_measure)
+{
+    fresh();
+    warm_up(0.01, 0.01);                          /* quiet floor established (and zero, the signal is perfectly stable) */
+    DisplacementNoise n;
+    svc_displacement_get_noise(&n);
+    CHECK(n.floors_ready);
+    CHECK(n.floor[0] < 1e-6f && n.step[0] < 1e-6f);
+    feed_disturbed(MATH_NOISE_LEN, 0.01, 0.01);   /* S1's carrier phase alternates: the residual steps, the tilt hardly moves */
+    svc_displacement_get_noise(&n);
+    CHECK(n.valid);
+    NEAR(n.quad_sigma[0], 0.01 * sin(0.4) * sqrt((double)MATH_NOISE_LEN / (MATH_NOISE_LEN - 1U)), 2e-5);   /* +-0.01 sin(0.4), k = 1 */
+    CHECK(n.quad_sigma[1] < 1e-5f);               /* S2 untouched */
+    NEAR(n.step[0], 2.0 * 0.01 * sin(0.4), 5e-4);  /* the newest 25 batches step by 2 x 0.01 sin(0.4) */
+    CHECK(n.step[1] < 1e-5f);
+    CHECK(svc_displacement_get_display_doubtful1());   /* the same measure raises the flag ... */
+    CHECK(n.step[0] > 2.45f * n.floor[0]);             /* ... exactly when step exceeds sqrt(6) x floor */
+}
+
+TEST(a_dropped_batch_a_stop_and_the_reset_command_each_restart_the_window)
+{
+    fresh();
+    feed(MATH_NOISE_LEN, 0.01, 0.01);
+    DisplacementNoise n;
+    svc_displacement_get_noise(&n);
+    CHECK(n.valid);
+    svc_displacement_noise_reset();
+    svc_displacement_get_noise(&n);
+    CHECK(!n.valid);
+    CHECK_EQ(n.window_batches, 0);
+    feed(MATH_NOISE_LEN, 0.01, 0.01);
+    svc_displacement_get_noise(&n);
+    CHECK(n.valid);
+    s_cycle_seq = (uint16_t)(s_cycle_seq + DISPLACEMENT_BATCH_CYCLES);   /* a whole batch was lost on the way */
+    feed(1, 0.01, 0.01);
+    svc_displacement_get_noise(&n);
+    CHECK(!n.valid);
+    CHECK(n.window_batches <= 1U);                                       /* no window spans the gap */
+    feed(MATH_NOISE_LEN, 0.01, 0.01);
+    svc_displacement_get_noise(&n);
+    CHECK(n.valid);
+    svc_displacement_stop();
+    svc_displacement_get_noise(&n);
+    CHECK(!n.valid);
+    CHECK_EQ(n.window_batches, 0);
+}
+
 TEST(precision_and_zero_cal_exclude_each_other_in_both_directions)
 {
     fresh();
@@ -480,6 +584,11 @@ int main(void)
     RUN(a_disturbed_window_is_not_accepted_and_the_measurement_times_out);
     RUN(the_timeout_fires_even_when_no_batch_arrives);
     RUN(a_dropped_batch_restarts_the_precision_window);
+    RUN(the_noise_window_fills_in_10_s_and_a_steady_signal_has_no_noise);
+    RUN(sigma_and_p2p_report_the_raw_readings_of_each_sensor_and_the_difference);
+    RUN(the_difference_uses_the_sign_corrected_readings);
+    RUN(quadrature_noise_is_independent_of_the_tilt_and_floor_and_step_use_the_flag_measure);
+    RUN(a_dropped_batch_a_stop_and_the_reset_command_each_restart_the_window);
     RUN(precision_and_zero_cal_exclude_each_other_in_both_directions);
     RUN(a_finished_precision_run_does_not_block_a_zero_calibration);
     RUN(a_stop_cancels_a_running_precision_measurement);

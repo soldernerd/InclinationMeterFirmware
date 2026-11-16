@@ -7,7 +7,7 @@
 #include "svc_api_core.h"
 
 #define API2_VERSION      3U   /* major */
-#define API2_VERSION_MINOR 1U
+#define API2_VERSION_MINOR 2U
 #define API2_MAX_PAYLOAD  122U
 
 /* categories */
@@ -36,6 +36,7 @@
 #define API2_RES_COMMANDS_TILT_DEMOD                 0x50U
 #define API2_RES_COMMANDS_ZERO_CAL                   0x51U
 #define API2_RES_COMMANDS_PRECISION                  0x52U
+#define API2_RES_COMMANDS_NOISE_RESET                0x53U
 #define API2_RES_COMMANDS_FACTORY_DEFAULTS           0x60U
 #define API2_RES_COMMANDS_SERVICE_END                0x62U
 #define API2_RES_COMMANDS_CLEAR_COUNTERS             0x61U
@@ -104,6 +105,7 @@
 #define API2_RES_TOPICS_RAW                          0x03U
 #define API2_RES_TOPICS_PHASOR_STREAM                0x04U
 #define API2_RES_TOPICS_SIGNAL_DIAG                  0x05U
+#define API2_RES_TOPICS_NOISE                        0x06U
 #define API2_RES_DEBUG_LOG                           0x00U
 #define API2_RES_DIAGNOSTICS_ADC                     0x00U
 #define API2_RES_DIAGNOSTICS_POWER                   0x01U
@@ -127,6 +129,7 @@
 #define API2_OP_COMMANDS_TILT_DEMOD_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_TILT_DEMOD)
 #define API2_OP_COMMANDS_ZERO_CAL_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_ZERO_CAL)
 #define API2_OP_COMMANDS_PRECISION_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_PRECISION)
+#define API2_OP_COMMANDS_NOISE_RESET_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_NOISE_RESET)
 #define API2_OP_COMMANDS_FACTORY_DEFAULTS_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_FACTORY_DEFAULTS)
 #define API2_OP_COMMANDS_SERVICE_END_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_SERVICE_END)
 #define API2_OP_COMMANDS_CLEAR_COUNTERS_EXECUTE      API2_OPCODE(API2_VERB_EXECUTE, API2_CAT_COMMANDS, API2_RES_COMMANDS_CLEAR_COUNTERS)
@@ -271,6 +274,9 @@
 #define API2_OP_TOPICS_SIGNAL_DIAG_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_TOPICS, API2_RES_TOPICS_SIGNAL_DIAG)
 #define API2_OP_TOPICS_SIGNAL_DIAG_SUBSCRIBE    API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_TOPICS, API2_RES_TOPICS_SIGNAL_DIAG)
 #define API2_OP_TOPICS_SIGNAL_DIAG_UNSUBSCRIBE  API2_OPCODE(API2_VERB_UNSUBSCRIBE, API2_CAT_TOPICS, API2_RES_TOPICS_SIGNAL_DIAG)
+#define API2_OP_TOPICS_NOISE_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_TOPICS, API2_RES_TOPICS_NOISE)
+#define API2_OP_TOPICS_NOISE_SUBSCRIBE    API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_TOPICS, API2_RES_TOPICS_NOISE)
+#define API2_OP_TOPICS_NOISE_UNSUBSCRIBE  API2_OPCODE(API2_VERB_UNSUBSCRIBE, API2_CAT_TOPICS, API2_RES_TOPICS_NOISE)
 #define API2_OP_DEBUG_LOG_SUBSCRIBE    API2_OPCODE(API2_VERB_SUBSCRIBE, API2_CAT_DEBUG, API2_RES_DEBUG_LOG)
 #define API2_OP_DEBUG_LOG_UNSUBSCRIBE  API2_OPCODE(API2_VERB_UNSUBSCRIBE, API2_CAT_DEBUG, API2_RES_DEBUG_LOG)
 #define API2_OP_DIAGNOSTICS_ADC_GET          API2_OPCODE(API2_VERB_GET, API2_CAT_DIAGNOSTICS, API2_RES_DIAGNOSTICS_ADC)
@@ -697,6 +703,24 @@ typedef struct {
 } __attribute__((packed)) Api2TopicsSignalDiagResponse;
 _Static_assert(sizeof(Api2TopicsSignalDiagResponse) == 56U, "Api2TopicsSignalDiagResponse layout");
 typedef struct {
+    uint8_t  valid;
+    uint8_t  floors_ready;
+    uint16_t window_batches;
+    float    sigma_s1;
+    float    sigma_s2;
+    float    sigma_diff;
+    float    p2p_s1;
+    float    p2p_s2;
+    float    p2p_diff;
+    float    quad_s1;
+    float    quad_s2;
+    float    floor_s1;
+    float    floor_s2;
+    float    step_s1;
+    float    step_s2;
+} __attribute__((packed)) Api2TopicsNoiseResponse;
+_Static_assert(sizeof(Api2TopicsNoiseResponse) == 52U, "Api2TopicsNoiseResponse layout");
+typedef struct {
     uint8_t  min_severity;
 } __attribute__((packed)) Api2DebugLogSubscribe;
 _Static_assert(sizeof(Api2DebugLogSubscribe) == 1U, "Api2DebugLogSubscribe layout");
@@ -786,6 +810,7 @@ Api2Status api_h_commands_charge_inhibit(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_tilt_demod(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_zero_cal(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_precision(const ApiResource *r, ApiCall *c);
+Api2Status api_h_commands_noise_reset(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_factory_defaults(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_service_end(const ApiResource *r, ApiCall *c);
 Api2Status api_h_commands_clear_counters(const ApiResource *r, ApiCall *c);
@@ -817,6 +842,7 @@ Api2Status api_h_topics_live(const ApiResource *r, ApiCall *c);
 Api2Status api_h_topics_raw(const ApiResource *r, ApiCall *c);
 Api2Status api_h_topics_phasor_stream(const ApiResource *r, ApiCall *c);
 Api2Status api_h_topics_signal_diag(const ApiResource *r, ApiCall *c);
+Api2Status api_h_topics_noise(const ApiResource *r, ApiCall *c);
 Api2Status api_h_debug_log(const ApiResource *r, ApiCall *c);
 Api2Status api_h_diagnostics_adc(const ApiResource *r, ApiCall *c);
 Api2Status api_h_diagnostics_power(const ApiResource *r, ApiCall *c);
@@ -839,7 +865,7 @@ void api_after_adc_pga(void);
 void api_after_rtc_trim(void);
 
 /* subscription slots per transport (one per subscribable resource) */
-#define API2_SUB_SLOTS 23U
+#define API2_SUB_SLOTS 24U
 
 extern const ApiCategory g_api_categories[];
 extern const uint8_t g_api_category_count;

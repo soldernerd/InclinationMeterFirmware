@@ -160,6 +160,14 @@ Api2Status api_h_commands_precision(const ApiResource *r, ApiCall *c)
     }
 }
 
+Api2Status api_h_commands_noise_reset(const ApiResource *r, ApiCall *c)
+{
+    (void)r; (void)c;
+    svc_displacement_noise_reset();
+    svc_log(API2_LOG_INFO, "cmd: noise window restarted");
+    return API2_STATUS_OK;
+}
+
 Api2Status api_h_commands_factory_defaults(const ApiResource *r, ApiCall *c)
 {
     (void)r;

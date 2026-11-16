@@ -16,6 +16,7 @@ Api2Status api_h_commands_charge_inhibit(const ApiResource *r, ApiCall *c) { (vo
 Api2Status api_h_commands_tilt_demod(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_zero_cal(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_precision(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
+Api2Status api_h_commands_noise_reset(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_factory_defaults(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_service_end(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_commands_clear_counters(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
@@ -47,6 +48,7 @@ Api2Status api_h_topics_live(const ApiResource *r, ApiCall *c) { (void)r; g_stub
 Api2Status api_h_topics_raw(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_topics_phasor_stream(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_topics_signal_diag(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
+Api2Status api_h_topics_noise(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_debug_log(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_diagnostics_adc(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }
 Api2Status api_h_diagnostics_power(const ApiResource *r, ApiCall *c) { (void)r; g_stub_calls++; g_stub_last_verb = c->verb; g_stub_last_res = c->res; return API2_STATUS_OK; }

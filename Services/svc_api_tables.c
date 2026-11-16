@@ -63,6 +63,7 @@ static const ApiResource k_res_commands[] = {
     { API2_RES_COMMANDS_TILT_DEMOD, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_tilt_demod, 0, 0, 0, 1, 0 },  /* TILT_DEMOD */
     { API2_RES_COMMANDS_ZERO_CAL, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 2, api_h_commands_zero_cal, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* ZERO_CAL */
     { API2_RES_COMMANDS_PRECISION, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_precision, 0, 0, 0, 1, 0 },  /* PRECISION */
+    { API2_RES_COMMANDS_NOISE_RESET, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 0, 0, api_h_commands_noise_reset, 0, 0, 0, 1, 0 },  /* NOISE_RESET */
     { API2_RES_COMMANDS_FACTORY_DEFAULTS, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 1, 1, api_h_commands_factory_defaults, 0, 0, 0, 1, API2_RES_F_SERVICE },  /* FACTORY_DEFAULTS */
     { API2_RES_COMMANDS_SERVICE_END, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 0, 0, api_h_commands_service_end, 0, 0, 0, 1, 0 },  /* SERVICE_END */
     { API2_RES_COMMANDS_CLEAR_COUNTERS, API2_VERB_BIT(API2_VERB_EXECUTE), API2_SUB_NONE, 4, 0, 0, api_h_commands_clear_counters, 0, 0, 0, 1, 0 },  /* CLEAR_COUNTERS */
@@ -143,10 +144,11 @@ static const ApiResource k_res_topics[] = {
     { API2_RES_TOPICS_RAW, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_INTERVAL, 4, 0, 0, api_h_topics_raw, 0, 0, 17, 1, 0 },  /* RAW */
     { API2_RES_TOPICS_PHASOR_STREAM, API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 4, 0, 0, api_h_topics_phasor_stream, &api_ev_phasor_stream, 0, 18, 4, 0 },  /* PHASOR_STREAM */
     { API2_RES_TOPICS_SIGNAL_DIAG, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_INTERVAL, 4, 0, 0, api_h_topics_signal_diag, 0, 0, 19, 1, 0 },  /* SIGNAL_DIAG */
+    { API2_RES_TOPICS_NOISE, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_INTERVAL, 4, 0, 0, api_h_topics_noise, 0, 0, 20, 1, 0 },  /* NOISE */
 };
 
 static const ApiResource k_res_debug[] = {
-    { API2_RES_DEBUG_LOG, API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 1, 0, 0, api_h_debug_log, &api_ev_log, 0, 20, 4, 0 },  /* LOG */
+    { API2_RES_DEBUG_LOG, API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 1, 0, 0, api_h_debug_log, &api_ev_log, 0, 21, 4, 0 },  /* LOG */
 };
 
 static const ApiResource k_res_diagnostics[] = {
@@ -160,8 +162,8 @@ static const ApiResource k_res_bulk[] = {
 };
 
 static const ApiResource k_res_procedures[] = {
-    { API2_RES_PROCEDURES_ZERO_CAL, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 4, 0, 0, api_h_procedures_zero_cal, &api_ev_zero_cal, 0, 21, 1, 0 },  /* ZERO_CAL */
-    { API2_RES_PROCEDURES_PRECISION, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 4, 0, 0, api_h_procedures_precision, &api_ev_precision, 0, 22, 1, 0 },  /* PRECISION */
+    { API2_RES_PROCEDURES_ZERO_CAL, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 4, 0, 0, api_h_procedures_zero_cal, &api_ev_zero_cal, 0, 22, 1, 0 },  /* ZERO_CAL */
+    { API2_RES_PROCEDURES_PRECISION, API2_VERB_BIT(API2_VERB_GET) | API2_VERB_BIT(API2_VERB_SUBSCRIBE) | API2_VERB_BIT(API2_VERB_UNSUBSCRIBE), API2_SUB_EVENT, 4, 0, 0, api_h_procedures_precision, &api_ev_precision, 0, 23, 1, 0 },  /* PRECISION */
 };
 
 const ApiCategory g_api_categories[] = {

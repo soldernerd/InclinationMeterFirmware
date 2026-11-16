@@ -173,6 +173,29 @@ float svc_displacement_get_delta_diff_mm_raw(void);
 float    svc_displacement_get_display_delta1_mm(void);
 float    svc_displacement_get_display_delta2_mm(void);
 float    svc_displacement_get_display_delta_diff_mm(void);
+/* Noise figures of the raw per-batch readings over a sliding 10 s window (API Topics NOISE; Math/math_noise.h). All in
+ * mm/m, sign-corrected like the readings. sigma / p2p index 0 = S1, 1 = S2, 2 = Diff = S1 - S2. quad_sigma = standard
+ * deviation of the quadrature part Im(x) of the sensor ratio converted to the tilt scale (independent of the tilt, so it
+ * separates sensor noise from real movement). floor[] / step[] are the doubtful flag's own measure in the same unit: the
+ * rms of the batch-to-batch step of Im(x) -- `floor` the instrument's quiet level, `step` over the newest
+ * DISPLACEMENT_QUALITY_TAPS batches. A reading is flagged doubtful when step^2 > DISPLACEMENT_QUALITY_K x floor^2, i.e.
+ * step > sqrt(K) x floor (about 2.45x). floors_ready is false until the floor rests on two independent windows;
+ * floor/step are 0 until then (and step until the quality window is full). valid = the 10 s window is full (false after
+ * a start, a gap, a degenerate batch or svc_displacement_noise_reset()). */
+typedef struct {
+    bool     valid;
+    bool     floors_ready;
+    uint16_t window_batches;
+    float    sigma[3];
+    float    p2p[3];
+    float    quad_sigma[2];
+    float    floor[2];
+    float    step[2];
+} DisplacementNoise;
+void svc_displacement_get_noise(DisplacementNoise *out);
+/* Restart the noise window (not the quiet floors: they describe the instrument, not the data). */
+void svc_displacement_noise_reset(void);
+
 bool     svc_displacement_get_display_doubtful1(void);
 bool     svc_displacement_get_display_doubtful2(void);
 bool     svc_displacement_get_display_doubtful_diff(void);

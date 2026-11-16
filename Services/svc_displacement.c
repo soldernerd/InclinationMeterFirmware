@@ -6,6 +6,7 @@
 #include "math_window.h"
 #include "math_displacement.h"
 #include "math_quality.h"
+#include "math_noise.h"
 #include "svc_log.h"
 #include "hal_systick.h"
 #include "config.h"
@@ -159,6 +160,11 @@ static uint8_t eff_pga(uint8_t raw, uint8_t dflt);   /* defined with svc_displac
  * tracking live in one pure state machine (Math/math_quality.h, host-tested). */
 static MathDisplay s_ds;
 
+/* Noise figures over a sliding window of the raw batch readings (Math/math_noise.h, API Topics NOISE). s_inv_k converts
+ * a dimensionless Im(x) to the tilt scale (mm/m); refreshed every batch. */
+static MathNoise s_noise;
+static float     s_inv_k[2] = { 0.0f, 0.0f };
+
 /* Latest completed batch's raw phasors -- same storage/context reasoning
  * as the block above, added 2026-09-25 for the API v2 Topic groups (0x5)
  * real-time diagnostic resource. Written alongside s_delta1_mm etc. in
@@ -223,6 +229,7 @@ static void accum_reset(void)
 static void display_reset(void)
 {
     math_display_reset(&s_ds);
+    math_noise_reset(&s_noise);
 }
 
 static void note_saturating(volatile uint16_t *counter)
@@ -401,6 +408,7 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
          * denominator so it is degenerate for both. */
         note_saturating(&s_degenerate_count);
         math_display_skip(&s_ds);   /* the next batch must not join this window */
+        math_noise_reset(&s_noise);
         s_disp_ok = false;          /* no valid reading from this batch; the next good one sets it again */
         return;
     }
@@ -410,6 +418,17 @@ static void process_one_batch(const BatchSums *s, uint16_t seq)
      * measurement in progress starts filling again. */
     if (!math_display_feed(&s_ds, seq, (uint16_t)DISPLACEMENT_BATCH_CYCLES, res.delta, res.residual)) {
         disp_procs_break();
+        math_noise_reset(&s_noise);   /* no noise window spans a gap */
+    }
+
+    /* Noise figures: sign-corrected readings (so Diff is the reported S1 - S2) and the quadrature part on the tilt scale. */
+    {
+        const float t1 = disp_sensor_sign(g_device_settings.disp_s1_invert) * res.delta[0];
+        const float t2 = disp_sensor_sign(g_device_settings.disp_s2_invert) * res.delta[1];
+        s_inv_k[0] = cal[0].inv_k;
+        s_inv_k[1] = cal[1].inv_k;
+        const float v[MATH_NOISE_CHANNELS] = { t1, t2, t1 - t2, res.residual[0] * cal[0].inv_k, res.residual[1] * cal[1].inv_k };
+        math_noise_push(&s_noise, v);
     }
 
     s_delta1_mm_raw = res.delta[0];
@@ -545,6 +564,36 @@ float svc_displacement_get_display_delta_diff_mm(void)
 {
     return svc_displacement_get_display_delta1_mm() - svc_displacement_get_display_delta2_mm();
 }
+void svc_displacement_get_noise(DisplacementNoise *out)
+{
+    MathNoiseStats st;
+    math_noise_stats(&s_noise, &st);
+    out->valid          = st.valid;
+    out->window_batches = st.count;
+    for (uint8_t i = 0; i < 3U; ++i) {
+        out->sigma[i] = st.sigma[i];
+        out->p2p[i]   = st.p2p[i];
+    }
+    out->quad_sigma[0] = st.sigma[3];
+    out->quad_sigma[1] = st.sigma[4];
+    out->floors_ready  = math_window_floor_ready(&s_ds.win);
+    for (uint8_t i = 0; i < 2U; ++i) {
+        out->floor[i] = 0.0f;
+        out->step[i]  = 0.0f;
+        if (out->floors_ready) {
+            out->floor[i] = sqrtf(s_ds.win.floor[i]) * s_inv_k[i];
+            if (s_ds.win.count >= s_ds.quality_taps) {
+                out->step[i] = sqrtf(math_window_mean_q(&s_ds.win, i, s_ds.quality_taps)) * s_inv_k[i];
+            }
+        }
+    }
+}
+
+void svc_displacement_noise_reset(void)
+{
+    math_noise_reset(&s_noise);
+}
+
 bool     svc_displacement_get_display_doubtful1(void) { return s_ds.doubtful[0]; }
 bool     svc_displacement_get_display_doubtful2(void) { return s_ds.doubtful[1]; }
 bool     svc_displacement_get_display_doubtful_diff(void) { return s_ds.doubtful[0] || s_ds.doubtful[1]; }
@@ -662,6 +711,7 @@ void svc_displacement_stop(void)
      * reading Measurements 0x0D right after a stop doesn't see a stale
      * ok=1 from before acquisition was halted. */
     s_disp_ok = false;
+    math_noise_reset(&s_noise);   /* no stale figures from before the stop */
     /* A stop mid-calibration leaves a stale, confusing in-progress state
      * (e.g. a step 1 average from before the stop, paired with a step 2
      * that never got to run) -- cancel rather than let a later
